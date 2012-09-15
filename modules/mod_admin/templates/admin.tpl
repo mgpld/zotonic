@@ -23,11 +23,13 @@
                 {# Latest modified texts #}
                 {% include "admin_widget_dashboard_latest.tpl" cat="text" headline=_"Latest modified texts" %}
 
-                {# Latest modified persons #}
-                {% include "admin_widget_dashboard_latest.tpl" cat="person" headline=_"Latest modified persons" %}
+                {# Latest modified evaluations #}
+                {% include "admin_widget_dashboard_latest.tpl" cat="evaluation" headline=_"Latest evaluations" %}
             </div>
 
             <div class="span6">
+                {# Latest modified persons #}
+                {% include "admin_widget_dashboard_latest.tpl" cat="person" headline=_"Latest modified persons" %}
 
                 {# Latest modified locations #}
                 {% if m.rsc['location'].id and m.acl.view['location'] %}
