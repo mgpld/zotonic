@@ -21,10 +21,7 @@
                                 {% if item.separator %}
                                 <li class="divider"></li>
                                 {% else %}
-                                <li><a href="{{ item.url }}">
-                                    {% if item.icon %}<i class="icon-{{ item.icon }}"></i>{% endif %}
-                                    {{ item.label|escape }}</a>
-                                </li>
+                                <li><a href="{{ item.url }}" title="{{ item.label }}"> {% if item.icon %}<i class="icon-{{ item.icon }}"></i>{% endif %} {{ item.label|escape }} ({{ item.label|striptags}})</a> </li>
                                 {% endif %}
                                 {% endfor %}
                             </ul>
