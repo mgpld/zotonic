@@ -61,8 +61,8 @@ upgrade() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    {A1,A2,A3} = erlang:now(),
-    random:seed(A1, A2, A3),
+    <<A1:32, B1:32, C1:32>> = crypto:rand_bytes(12),
+    random:seed({A1,B1,C1}),
 
     % Random id generation
     Ids     = {z_ids,
@@ -163,6 +163,7 @@ init([]) ->
             false -> Processes ++ IPv4Proc
         end,
 
+    init_stats(),
     init_ua_classifier(),
     init_webmachine(),
 
@@ -183,6 +184,11 @@ init([]) ->
           end),
     
     {ok, {{one_for_one, 1000, 10}, Processes1}}.
+
+%% @doc Initializes the stats collector. 
+%%
+init_stats() ->
+    z_stats:init().
 
 %% @doc Initializes the ua classifier. When it is enabled it is loaded and 
 %% tested if it works.
@@ -216,7 +222,7 @@ init_webmachine() ->
         
     LogDir = z_config:get_dirty(log_dir),
     
-    application:set_env(webzmachine, webmachine_logger_module, webmachine_logger),
+    application:set_env(webzmachine, webmachine_logger_module, z_stats),
     webmachine_sup:start_logger(LogDir),
     
     case z_config:get_dirty(enable_perf_logger) of
