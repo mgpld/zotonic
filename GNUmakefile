@@ -1,4 +1,4 @@
-ERL       ?= erl
+ERL       ?= /usr/local/bin/erl
 ERLC      ?= $(ERL)c
 APP       := zotonic
 PARSER     =src/erlydtl/erlydtl_parser
