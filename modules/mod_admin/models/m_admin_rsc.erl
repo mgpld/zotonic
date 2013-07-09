@@ -1,8 +1,8 @@
-%% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2013 Marc Worrell
-%% @doc Zotonic: admin blocks model and interface
+%% @author Arjan Scherpenisse <arjan@scherpenisse.net>
+%% @copyright 2013 Arjan Scherpenisse
+%% @doc Zotonic: administrative functions
 
-%% Copyright 2013 Marc Worrell
+%% Copyright 2013 Arjan Scherpenisse
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
--module(m_admin_blocks).
--author("Marc Worrell <marc@worrell.nl>").
+-module(m_admin_rsc).
+-author("Arjan Scherpenisse <arjan@scherpenisse.net>").
 
 -include_lib("include/zotonic.hrl").
 
@@ -30,15 +30,17 @@
 ]).
 
 %% @spec m_find_value(Key, Source, Context) -> term()
-m_find_value(list, #m{value=undefined} = M, _Context) ->
-    M#m{value=list};
-m_find_value(Id, #m{value=list}, Context) ->
-    lists:sort(z_notifier:foldr(#admin_edit_blocks{id=Id}, [], Context)).
+m_find_value(pivot_queue_count, #m{value=undefined}, Context) ->
+    pivot_queue_count(Context).
 
 %% @spec m_to_list(Source, Context) -> List
-m_to_list(_, Context) ->
+m_to_list(_, _Context) ->
     undefined.
 
 %% @spec m_value(Source, Context) -> term()
 m_value(#m{value=undefined}, _Context) ->
     undefined.
+
+
+pivot_queue_count(Context) ->
+    z_db:q1("SELECT COUNT(*) FROM rsc_pivot_queue", Context).
