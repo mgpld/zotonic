@@ -67,7 +67,7 @@ emit(Signal, Context) ->
               try
                   emit_signal(Signal, Slot, AsyncContext) 
               catch M:E ->
-                  ?ERROR("Error emitting signal %p to slot %p. %p:%p. Disconnecting...", [Signal, Slot, M, E]),
+                  lager:error("Error emitting signal %p to slot %p. %p:%p. Disconnecting...", [Signal, Slot, M, E]),
                   disconnect(Signal, Slot, AsyncContext)
               end
           end, Slots).
@@ -82,7 +82,7 @@ emit_script(Signal, Script, Context) ->
             try
                 emit_signal_script(Script, Slot) 
             catch M:E ->
-                ?ERROR("Error emitting signal %p to slot %p. %p:%p. Disconnecting...", [Signal, Slot, M, E]),
+                lager:error("Error emitting signal %p to slot %p. %p:%p. Disconnecting...", [Signal, Slot, M, E]),
                 disconnect(Signal, Slot, z_context:prune_for_async(Context))
             end
         end, Slots).
@@ -166,7 +166,12 @@ start_link(Args) when is_list(Args) ->
     end.
 
 %% Gen server stuff.
-init(_Args) ->
+init(Args) ->
+    {host, Host} = proplists:lookup(host, Args),
+    lager:md([
+        {site, Host},
+        {module, ?MODULE}
+      ]),
     {ok, #state{slots=[]}}.
 
 handle_call({'connect', Signal, Slot}, _From, State) ->

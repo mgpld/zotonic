@@ -1,10 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009-2010 Marc Worrell
-%% Date: 2009-04-24
-%%
+%% @copyright 2009-2015 Marc Worrell, Arjan Scherpenisse
 %% @doc Update routines for resources.  For use by the m_rsc module.
 
-%% Copyright 2009-2010 Marc Worrell, Arjan Scherpenisse
+%% Copyright 2009-2015 Marc Worrell, Arjan Scherpenisse
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -29,9 +27,13 @@
     update/3,
     update/4,
     duplicate/3,
+    merge_delete/3,
 
     flush/2,
     
+    normalize_props/3,
+    normalize_props/4,
+
     delete_nocheck/2,
     props_filter/3,
 
@@ -40,19 +42,29 @@
 
 -include_lib("zotonic.hrl").
 
+-record(rscupd, {
+    id=undefined,
+    is_escape_texts=true,
+    is_acl_check=true,
+    is_import=false,
+    is_no_touch=false,
+    expected=[]
+}).
+
 
 %% @doc Insert a new resource. Crashes when insertion is not allowed.
-%% @spec insert(Props, Context) -> {ok, Id} | {error, Reason}
+-spec insert(list(), #context{}) -> {ok, integer()}.
 insert(Props, Context) ->
-    insert(Props, true, Context).
+    insert(Props, [{escape_texts, true}], Context).
 
-insert(Props, EscapeTexts, Context) ->
+-spec insert(list(), list()|boolean(), #context{}) -> {ok, integer()}.
+insert(Props, Options, Context) ->
     PropsDefaults = props_defaults(Props, Context),
-    update(insert_rsc, PropsDefaults, EscapeTexts, Context).
+    update(insert_rsc, PropsDefaults, Options, Context).
 
 
 %% @doc Delete a resource
-%% @spec delete(Props, Context) -> ok | {error, Reason}
+-spec delete(integer(), #context{}) -> ok.
 delete(Id, Context) when is_integer(Id), Id /= 1 ->
     case z_acl:rsc_deletable(Id, Context) of
         true ->
@@ -68,30 +80,28 @@ delete(Id, Context) when is_integer(Id), Id /= 1 ->
 
 
 %% @doc Delete a resource, no check on rights etc is made. This is called by m_category:delete/3
-%% @spec delete_nocheck(Id, Context) -> ok
 %% @throws {error, Reason}
+-spec delete_nocheck(integer(), #context{}) -> ok.
 delete_nocheck(Id, Context) ->
+    delete_nocheck(Id, undefined, Context).
+
+delete_nocheck(Id, OptFollowUpId, Context) ->
     Referrers = m_edge:subjects(Id, Context),
     CatList = m_rsc:is_a(Id, Context),
     Props = m_rsc:get(Id, Context),
     
     F = fun(Ctx) ->
-        z_notifier:notify(#rsc_delete{id=Id}, Ctx),
-        m_rsc_gone:gone(Id, Ctx),
+        z_notifier:notify_sync(#rsc_delete{id=Id, is_a=CatList}, Ctx),
+        m_rsc_gone:gone(Id, OptFollowUpId, Ctx),
         z_db:delete(rsc, Id, Ctx)
     end,
-
     {ok, _RowsDeleted} = z_db:transaction(F, Context),
-    %% After inserting a category we need to renumber the categories
-    case lists:member(category, CatList) of
-        true ->  m_category:renumber(Context);
-        false -> nop
-    end,
     % Sync the caches
     [ z_depcache:flush(SubjectId, Context) || SubjectId <- Referrers ],
     flush(Id, CatList, Context),
     %% Notify all modules that the rsc has been deleted
-    z_notifier:notify(#rsc_update_done{
+    z_notifier:notify_sync(
+                    #rsc_update_done{
                         action=delete,
                         id=Id,
                         pre_is_a=CatList,
@@ -99,7 +109,91 @@ delete_nocheck(Id, Context) ->
                         pre_props=Props,
                         post_props=[]
                     }, Context),
+    z_edge_log_server:check(Context),
     ok.
+
+%% @doc Merge two resources, delete the losing resource.
+-spec merge_delete(integer(), integer(), #context{}) -> ok | {error, term()}.
+merge_delete(WinnerId, WinnerId, _Context) ->
+    ok;
+merge_delete(_WinnerId, 1, _Context) ->
+    throw({error, eacces});
+merge_delete(WinnerId, LoserId, Context) when is_integer(WinnerId), is_integer(LoserId) ->
+    case z_acl:rsc_deletable(LoserId, Context)
+        andalso z_acl:rsc_editable(WinnerId, Context)
+    of
+        true ->
+            case m_rsc:is_a(WinnerId, category, Context) of
+                true ->
+                    m_category:delete(LoserId, WinnerId, Context);
+                false ->
+                    merge_delete_nocheck(WinnerId, LoserId, Context)
+            end;
+        false ->
+            throw({error, eacces})
+    end.
+
+%% @doc Merge two resources, delete the 'loser'
+-spec merge_delete_nocheck(integer(), integer(), #context{}) -> ok.
+merge_delete_nocheck(WinnerId, LoserId, Context) ->
+    z_notifier:map(#rsc_merge{winner_id=WinnerId, looser_id=LoserId}, Context),
+    ok = m_edge:merge(WinnerId, LoserId, Context),
+    m_media:merge(WinnerId, LoserId, Context),
+    m_identity:merge(WinnerId, LoserId, Context),
+    move_creator_modifier_ids(WinnerId, LoserId, Context),
+    PropsLooser = m_rsc:get(LoserId, Context),
+    ok = delete_nocheck(LoserId, WinnerId, Context),
+    case merge_copy_props(WinnerId, PropsLooser, Context) of
+        [] -> 
+            ok;
+        UpdProps ->
+            {ok, _} = update(WinnerId, UpdProps, [{escape_texts, false}], Context)
+    end,
+    ok.
+
+move_creator_modifier_ids(WinnerId, LoserId, Context) ->
+    Ids = z_db:q("select id
+                  from rsc 
+                  where (creator_id = $1 or modifier_id = $1)
+                    and id <> $1", 
+                 [LoserId],
+                 Context),
+    z_db:q("update rsc set creator_id = $1 where creator_id = $2",
+           [WinnerId, LoserId],
+           Context,
+           1200000),
+    z_db:q("update rsc set modifier_id = $1 where modifier_id = $2",
+           [WinnerId, LoserId],
+           Context,
+           1200000),
+    lists:foreach(
+            fun(Id) ->
+                flush(Id, [], Context)
+            end,
+            Ids).
+
+merge_copy_props(WinnerId, Props, Context) ->
+    merge_copy_props(WinnerId, Props, [], Context).
+
+merge_copy_props(_WinnerId, [], Acc, _Context) ->
+    lists:reverse(Acc);
+merge_copy_props(WinnerId, [{P,_}|Ps], Acc, Context) 
+    when P =:= creator; P =:= creator_id; P =:= modifier; P =:= modifier_id;
+         P =:= created; P =:= modified; P =:= version;
+         P =:= id; P =:= is_published; P =:= is_protected; P =:= is_dependent;
+         P =:= is_authoritative; P =:= pivot_geocode; P =:= pivot_geocode_qhash;
+         P =:= category_id ->
+    merge_copy_props(WinnerId, Ps, Acc, Context);
+merge_copy_props(WinnerId, [{_,Empty}|Ps], Acc, Context)
+    when Empty =:= []; Empty =:= <<>>; Empty =:= undefined ->
+    merge_copy_props(WinnerId, Ps, Acc, Context);
+merge_copy_props(WinnerId, [{P,_} = PV|Ps], Acc, Context) ->
+    case m_rsc:p_no_acl(WinnerId, P, Context) of
+        Empty when Empty =:= []; Empty =:= <<>>; Empty =:= undefined ->
+            merge_copy_props(WinnerId, Ps, [PV|Acc], Context);
+        _Value ->
+            merge_copy_props(WinnerId, Ps, Acc, Context)
+    end.
 
 
 %% Flush all cached entries depending on this entry, one of its subjects or its categories.
@@ -114,15 +208,14 @@ flush(Id, CatList, Context) ->
 
 
 %% @doc Duplicate a resource, creating a new resource with the given title.
-%% @spec duplicate(int(), PropList, Context) -> {ok, int()}
 %% @throws {error, Reason}
-%% @todo Also duplicate the attached medium.
+-spec duplicate(integer(), list(), #context{}) -> {ok, integer()}.
 duplicate(Id, DupProps, Context) ->
     case z_acl:rsc_visible(Id, Context) of
         true ->
             Props = m_rsc:get_raw(Id, Context),
-            FilteredProps = props_filter_protected(Props),
-            SafeDupProps = z_html:escape_props(DupProps, Context),
+            FilteredProps = props_filter_protected(Props, #rscupd{id=insert_rsc, is_escape_texts=false}),
+            SafeDupProps = z_sanitize:escape_props(DupProps, Context),
             InsProps = lists:foldl(
                             fun({Key, Value}, Acc) ->
                                 z_utils:prop_replace(Key, Value, Acc)
@@ -134,8 +227,8 @@ duplicate(Id, DupProps, Context) ->
                                 {slug,undefined}
                             ]),
             {ok, NewId} = insert(InsProps, false, Context),
-            %% Duplicate all edges
             m_edge:duplicate(Id, NewId, Context),
+            m_media:duplicate(Id, NewId, Context),
             {ok, NewId};
         false ->
             throw({error, eacces})
@@ -145,258 +238,319 @@ duplicate(Id, DupProps, Context) ->
 %% @doc Update a resource
 %% @spec update(Id, Props, Context) -> {ok, Id}
 %% @throws {error, Reason}
+-spec update(integer()|insert_rsc, list(), #context{}) -> {ok, integer()} | {error, term()}.
 update(Id, Props, Context) ->
     update(Id, Props, [], Context).
 
-%% @doc Backward comp.
+-spec update(integer()|insert_rsc, list(), list()|boolean(), #context{}) -> {ok, integer()} | {error, term()}.
 update(Id, Props, false, Context) ->
     update(Id, Props, [{escape_texts, false}], Context);
 update(Id, Props, true, Context) ->
     update(Id, Props, [{escape_texts, true}], Context);
 
 %% @doc Resource updater function
-%% @spec update(Id, Props, Options, Context)
 %% [Options]: {escape_texts, true|false (default: true}, {acl_check: true|false (default: true)}
-update(Id, Props, Options, Context) when is_integer(Id) orelse Id == insert_rsc ->
-    EscapeTexts = proplists:get_value(escape_texts, Options, true),
-    AclCheck = proplists:get_value(acl_check, Options, true),
-    IsImport = proplists:is_defined(is_import, Options),
+%% {escape_texts, false} checks if the texts are escaped, and if not then it will escape. This prevents "double-escaping" of texts.
+update(Id, Props, Options, Context) when is_integer(Id) orelse Id =:= insert_rsc ->
+    RscUpd = #rscupd{
+        id = Id,
+        is_escape_texts = proplists:get_value(escape_texts, Options, true),
+        is_acl_check = proplists:get_value(acl_check, Options, true),
+        is_import = proplists:get_value(is_import, Options, false),
+        is_no_touch = proplists:get_value(no_touch, Options, false)
+                        andalso z_acl:is_admin(Context),
+        expected = proplists:get_value(expected, Options, [])
+    },
+    update_imported_check(RscUpd, Props, Context).
 
-    ensure_imported_id(IsImport, Id, Context),
+update_imported_check(#rscupd{is_import=true, id=Id} = RscUpd, Props, Context) when is_integer(Id) ->
+    case m_rsc:exists(Id, Context) of
+        false ->
+            {ok, CatId} = m_category:name_to_id(other, Context), 
+            1 = z_db:q("insert into rsc (id, creator_id, is_published, category_id)
+                        values ($1, $2, false, $3)", 
+                       [Id, z_acl:user(Context), CatId], 
+                       Context);
+        true -> 
+            ok
+    end,
+    update_editable_check(RscUpd, Props, Context);
+update_imported_check(RscUpd, Props, Context) ->
+    update_editable_check(RscUpd, Props, Context).
 
-    % IsTransMerge = proplists:is_defined(is_trans_merge, Options, false),
-    IsEditable = Id == insert_rsc orelse z_acl:rsc_editable(Id, Context) orelse not(AclCheck),
 
-    case IsEditable of
+update_editable_check(#rscupd{id=Id, is_acl_check=true} = RscUpd, Props, Context) when is_integer(Id) ->
+    case z_acl:rsc_editable(Id, Context) of
         true ->
-            DateProps = recombine_dates(Props),
-            TextProps = recombine_languages(DateProps, Context),
-            BlockProps = recombine_blocks(TextProps, Props),
-            AtomProps = [ {map_property_name(P), V} || {P, V} <- BlockProps ],
-            FilteredProps = props_filter(props_trim(AtomProps), [], Context),
-            EditableProps = props_filter_protected(FilteredProps),
-            AclCheckedProps = case z_acl:rsc_update_check(Id, EditableProps, Context) of
-                L when is_list(L) -> L;
-                {error, Reason} -> throw({error, Reason})
-            end,
-            AutogeneratedProps = props_autogenerate(Id, AclCheckedProps, Context),
-            SafeProps = case EscapeTexts of
-                true -> z_html:escape_props(AutogeneratedProps, Context);
-                false -> z_html:escape_props_check(AutogeneratedProps, Context)
-            end,
-            ok = preflight_check(Id, SafeProps, Context),
-
-            %% This function will be executed in a transaction
-            TransactionF = fun(Ctx) ->
-                {RscId, UpdateProps, BeforeProps, BeforeCatList, RenumberCats} = case Id of
-                    insert_rsc ->
-                        CategoryId = z_convert:to_integer(proplists:get_value(category_id, SafeProps)),
-                        CategoryName = m_category:id_to_name(CategoryId, Ctx),
-                        InsProps = [{category_id, CategoryId}, {version, 0}],
-                         % Allow the insertion props to be modified.
-                        InsPropsN = z_notifier:foldr(#rsc_insert{}, InsProps, Ctx),
-
-                        % Check if the user is allowed to create the resource
-                        case z_acl:is_allowed(insert, #acl_rsc{category=CategoryName}, Ctx) orelse not(AclCheck) of
-                            true ->
-                                InsertId = case proplists:get_value(creator_id, Props) of
-                                            self ->
-                                                {ok, InsId} = z_db:insert(rsc, [{creator_id, undefined} | InsPropsN], Ctx),
-                                                z_db:q("update rsc set creator_id = id where id = $1", [InsId], Ctx),
-                                                InsId;
-                                            CreatorId when is_integer(CreatorId) ->
-                                                true = z_acl:is_admin(Ctx),
-                                                {ok, InsId} = z_db:insert(rsc, [{creator_id, CreatorId} | InsPropsN], Ctx),
-                                                InsId;
-                                            undefined ->
-                                                {ok, InsId} = z_db:insert(rsc, [{creator_id, z_acl:user(Ctx)} | InsPropsN], Ctx),
-                                                InsId
-                                        end,
-
-                                % Insert a category record for categories. Categories are so low level that we want
-                                % to make sure that all categories always have a category record attached.
-                                InsertCatList = [ CategoryId | m_category:get_path(CategoryId, Ctx) ],
-                                IsACat = case lists:member(m_category:name_to_id_check(category, Ctx), InsertCatList) of
-                                    true ->
-                                        1 = z_db:q("insert into category (id, seq) values ($1, 1)", [InsertId], Ctx),
-                                        true;
-                                    false ->
-                                        false
-                                end,
-                                 % Place the inserted properties over the update properties, replacing duplicates.
-                                SafePropsN = lists:foldl(
-                                                        fun
-                                                            ({version, _}, Acc) -> Acc;
-                                                            ({P,V}, Acc) -> z_utils:prop_replace(P, V, Acc)
-                                                        end,
-                                                        SafeProps,
-                                                        InsPropsN),
-                                {InsertId, SafePropsN, InsPropsN, [], IsACat};
-                            false ->
-                                throw({error, eacces})
-                        end;
-                    _ ->
-                        SafeProps1 = case z_acl:is_admin(Context) of
-                            true ->
-                                case proplists:get_value(creator_id, Props) of
-                                    self ->
-                                        [{creator_id, Id} | SafeProps];
-                                    CreatorId when is_integer(CreatorId) ->
-                                        [{creator_id, CreatorId} | SafeProps];
-                                    undefined -> 
-                                        SafeProps
-                                end;
-                            false ->
-                                SafeProps
-                        end,
-                        {Id, SafeProps1, m_rsc:get(Id, Ctx), m_rsc:is_a(Id, Ctx), false}
-                end,
-
-                UpdateProps1 = [
-                    {version, z_db:q1("select version+1 from rsc where id = $1", [RscId], Ctx)},
-                    {modifier_id, z_acl:user(Ctx)}
-                    | UpdateProps
-                ],
-
-                % Optionally fetch the created date if this is an import of a resource
-                UpdateProps2 = case imported_prop(IsImport, created, AtomProps, undefined) of
-                                   undefined -> UpdateProps1;
-                                   CreatedDT -> [{created, CreatedDT}|UpdateProps1]
-                               end,
-                
-                UpdateProps3 = case IsImport of
-                                  false ->
-                                      [{modified, calendar:local_time()} | UpdateProps2 ];
-                                  true ->
-                                      case imported_prop(IsImport, modified, AtomProps, undefined) of
-                                          undefined -> UpdateProps2;
-                                          ModifiedDT -> [{modified, ModifiedDT}|UpdateProps2]
-                                      end
-                              end,
-
-                % Allow the update props to be modified.
-                {Changed, UpdatePropsN} = z_notifier:foldr(#rsc_update{
-                                                        action=case Id of insert_rsc -> insert; _ -> update end,
-                                                        id=RscId, 
-                                                        props=BeforeProps
-                                                    }, 
-                                                    {false, UpdateProps3},
-                                                    Ctx),
-                UpdatePropsN1 = case proplists:get_value(category_id, UpdatePropsN) of
-                    undefined ->
-                        UpdatePropsN;
-                    CatId ->
-                        CatNr = z_db:q1("select nr from category where id = $1", [CatId], Ctx),
-                        [ {pivot_category_nr, CatNr} | UpdatePropsN]
-                end,
-
-                RawProps = case Id of 
-                              insert_rsc -> [];
-                              _ -> m_rsc:get_raw(Id, Context)
-                           end,
-                case Id =:= insert_rsc orelse Changed orelse is_changed(RawProps, UpdatePropsN1) of
-                    true ->
-                        UpdatePropsPrePivoted = z_pivot_rsc:pivot_resource_update(RscId, UpdatePropsN1, RawProps, Context),
-                        {ok, _RowsModified} = z_db:update(rsc, RscId, UpdatePropsPrePivoted, Ctx),
-                        {ok, RscId, BeforeProps, UpdatePropsN, BeforeCatList, RenumberCats};
-                    false ->
-                        {ok, RscId, notchanged}
-                end
-            end,
-            % End of transaction function
-
-            case z_db:transaction(TransactionF, Context) of
-                {ok, NewId, notchanged} ->
-                    {ok, NewId};
-                {ok, NewId, OldProps, NewProps, OldCatList, RenumberCats} ->
-                    % Flush some low level caches
-                    case proplists:get_value(name, NewProps) of
-                        undefined -> nop;
-                        Name -> z_depcache:flush({rsc_name, z_convert:to_list(Name)}, Context)
-                    end,
-                    case proplists:get_value(uri, NewProps) of
-                        undefined -> nop;
-                        Uri -> z_depcache:flush({rsc_uri, z_convert:to_list(Uri)}, Context)
-                    end,
-
-                    % After inserting a category we need to renumber the categories
-                    case RenumberCats of
-                        true ->  m_category:renumber(Context);
-                        false -> nop
-                    end,
-
-                    % Flush all cached content that is depending on one of the updated categories
-                    z_depcache:flush(NewId, Context),
-                    NewCatList = m_rsc:is_a(NewId, Context),
-                    [ z_depcache:flush(Cat, Context) || Cat <- lists:usort(NewCatList ++ OldCatList) ],
-
-                     % Notify that a new resource has been inserted, or that an existing one is updated
-                    Note = #rsc_update_done{
-                        action= case Id of insert_rsc -> insert; _ -> update end,
-                        id=NewId,
-                        pre_is_a=OldCatList,
-                        post_is_a=NewCatList,
-                        pre_props=OldProps,
-                        post_props=NewProps
-                    },
-                    z_notifier:notify(Note, Context),
-
-                    % Return the updated or inserted id
-                    {ok, NewId};
-                {rollback, {_Why, _} = Er} ->
-                    throw(Er)
-            end;
+            update_normalize_props(RscUpd, Props, Context);
         false ->
             E = case m_rsc:p(Id, is_authoritative, Context) of
                 false -> {error, non_authoritative};
                 true -> {error, eacces}
             end,
             throw(E)
+    end;
+update_editable_check(RscUpd, Props, Context) ->
+    update_normalize_props(RscUpd, Props, Context).
+
+update_normalize_props(#rscupd{id=Id} = RscUpd, Props, Context) when is_list(Props) ->
+    AtomProps = normalize_props(Id, Props, Context),
+    update_transaction(RscUpd, fun(_, _, _) -> {ok, AtomProps} end, Context);
+update_normalize_props(RscUpd, Func, Context) when is_function(Func) ->
+    update_transaction(RscUpd, Func, Context).
+
+update_transaction(RscUpd, Func, Context) ->
+    Result = z_db:transaction(
+                    fun (Ctx) ->
+                        update_transaction_fun_props(RscUpd, Func, Ctx)
+                    end,
+                    Context),
+    update_result(Result, RscUpd, Context).
+
+update_result({ok, NewId, notchanged}, _RscUpd, _Context) ->
+    {ok, NewId};
+update_result({ok, NewId, OldProps, NewProps, OldCatList, IsCatInsert}, #rscupd{id=Id}, Context) ->
+    % Flush some low level caches
+    case proplists:get_value(name, NewProps) of
+        undefined -> nop;
+        Name -> z_depcache:flush({rsc_name, z_string:to_name(Name)}, Context)
+    end,
+    case proplists:get_value(uri, NewProps) of
+        undefined -> nop;
+        Uri -> z_depcache:flush({rsc_uri, z_convert:to_list(Uri)}, Context)
+    end,
+
+    % Flush category caches if a category is inserted.
+    case IsCatInsert of
+        true -> m_category:flush(Context);
+        false -> nop
+    end,
+
+    % Flush all cached content that is depending on one of the updated categories
+    z_depcache:flush(NewId, Context),
+    NewCatList = m_rsc:is_a(NewId, Context),
+    Cats = lists:usort(NewCatList ++ OldCatList),
+    [ z_depcache:flush(Cat, Context) || Cat <- Cats ],
+
+     % Notify that a new resource has been inserted, or that an existing one is updated
+    Note = #rsc_update_done{
+        action= case Id of insert_rsc -> insert; _ -> update end,
+        id=NewId,
+        pre_is_a=OldCatList,
+        post_is_a=NewCatList,
+        pre_props=OldProps,
+        post_props=NewProps
+    },
+    z_notifier:notify_sync(Note, Context),
+
+    % Return the updated or inserted id
+    {ok, NewId};
+update_result({rollback, {_Why, _} = Er}, _RscUpd, _Context) ->
+    throw(Er);
+update_result({error, _} = Error, _RscUpd, _Context) ->
+    throw(Error).
+
+
+%% @doc This is running inside the rsc update db transaction
+update_transaction_fun_props(#rscupd{id=Id} = RscUpd, Func, Context) ->
+    Raw = get_raw_lock(Id, Context),
+    case Func(Id, Raw, Context) of
+        {ok, UpdateProps} ->
+            EditableProps = props_filter_protected(
+                                props_filter(
+                                    props_trim(UpdateProps), [], Context),
+                                RscUpd),
+            AclCheckedProps = case z_acl:rsc_update_check(Id, EditableProps, Context) of
+                                 L when is_list(L) -> L;
+                                 {error, Reason} -> throw({error, Reason})
+                              end,
+            AutogeneratedProps = props_autogenerate(Id, AclCheckedProps, Context),
+            SafeProps = case RscUpd#rscupd.is_escape_texts of
+                            true -> z_sanitize:escape_props(AutogeneratedProps, Context);
+                            false -> z_sanitize:escape_props_check(AutogeneratedProps, Context)
+                        end,
+            ok = preflight_check(Id, SafeProps, Context),
+            throw_if_category_not_allowed(Id, SafeProps, RscUpd#rscupd.is_acl_check, Context),
+            update_transaction_fun_insert(RscUpd, SafeProps, Raw, UpdateProps, Context);
+        {error, _} = Error ->
+            {rollback, Error}
+    end.
+
+get_raw_lock(insert_rsc, _Context) -> [];
+get_raw_lock(Id, Context) -> m_rsc:get_raw_lock(Id, Context).
+
+update_transaction_fun_insert(#rscupd{id=insert_rsc} = RscUpd, Props, _Raw, UpdateProps, Context) ->
+     % Allow the initial insertion props to be modified.
+    CategoryId = z_convert:to_integer(proplists:get_value(category_id, Props)),
+    InsProps = z_notifier:foldr(#rsc_insert{}, [{category_id, CategoryId}, {version, 0}], Context),
+
+    % Check if the user is allowed to create the resource
+    InsertId = case proplists:get_value(creator_id, UpdateProps) of
+                    self ->
+                        {ok, InsId} = z_db:insert(rsc, [{creator_id, undefined} | InsProps], Context),
+                        1 = z_db:q("update rsc set creator_id = id where id = $1", [InsId], Context),
+                        InsId;
+                    CreatorId when is_integer(CreatorId) ->
+                        {ok, InsId} = z_db:insert(rsc, [{creator_id, CreatorId} | InsProps], Context),
+                        InsId;
+                    undefined ->
+                        {ok, InsId} = z_db:insert(rsc, [{creator_id, z_acl:user(Context)} | InsProps], Context),
+                        InsId
+                end,
+
+    % Insert a category record for categories. Categories are so low level that we want
+    % to make sure that all categories always have a category record attached.
+    IsA = m_category:is_a(CategoryId, Context),
+    IsCatInsert = case lists:member(category, IsA) of
+                      true ->
+                            m_hierarchy:append('$category', [InsertId], Context),
+                            true;
+                      false ->
+                            false
+                  end,
+     % Place the inserted properties over the update properties, replacing duplicates.
+    Props1 = lists:foldl(
+                    fun
+                        ({version, _}, Acc) -> Acc;
+                        ({creator_id, _}, Acc) -> Acc;
+                        ({P,_} = V, Acc) -> [ V | proplists:delete(P, Acc) ]
+                    end,
+                    Props,
+                    InsProps),
+    update_transaction_fun_db(RscUpd, InsertId, Props1, InsProps, [], IsCatInsert, Context);
+update_transaction_fun_insert(#rscupd{id=Id} = RscUpd, Props, Raw, UpdateProps, Context) ->
+    Props1 = proplists:delete(creator_id, Props),
+    Props2 = case z_acl:is_admin(Context) of
+                true ->
+                    case proplists:get_value(creator_id, UpdateProps) of
+                        self ->
+                            [{creator_id, Id} | Props1];
+                        CreatorId when is_integer(CreatorId) ->
+                            [{creator_id, CreatorId} | Props1 ];
+                        undefined -> 
+                            Props1
+                    end;
+                false ->
+                    Props1
+            end,
+    IsA = m_rsc:is_a(Id, Context),
+    update_transaction_fun_expected(RscUpd, Id, Props2, Raw, IsA, false, Context).
+
+update_transaction_fun_expected(#rscupd{expected=Expected} = RscUpd, Id, Props1, Raw, IsA, false, Context) ->
+    case check_expected(Raw, Expected, Context) of
+        ok ->
+            update_transaction_fun_db(RscUpd, Id, Props1, Raw, IsA, false, Context);
+        {error, _} = Error ->
+            Error
     end.
 
 
-    imported_prop(false, _, _, Default) ->
-        Default;
-    imported_prop(true, Prop, Props, Default) ->
-        proplists:get_value(Prop, Props, Default).
-        
+check_expected(_Raw, [], _Context) ->
+    ok;
+check_expected(Raw, [{Key,F}|Es], Context) when is_function(F) ->
+    case F(Key, Raw, Context) of
+        true -> check_expected(Raw, Es, Context);
+        false -> {error, {expected, Key, proplists:get_value(Key, Raw)}}
+    end;
+check_expected(Raw, [{Key,Value}|Es], Context) ->
+    case proplists:get_value(Key, Raw) of
+        Value -> check_expected(Raw, Es, Context);
+        Other -> {error, {expected, Key, Other}}
+    end.
+
+
+update_transaction_fun_db(RscUpd, Id, Props, Raw, IsABefore, IsCatInsert, Context) ->
+    {version, Version} = proplists:lookup(version, Raw),
+    UpdateProps = [ {version, Version+1} | proplists:delete(version, Props) ],
+    UpdateProps1 = set_if_normal_update(RscUpd, modified, erlang:universaltime(), UpdateProps),
+    UpdateProps2 = set_if_normal_update(RscUpd, modifier_id, z_acl:user(Context), UpdateProps1),
+    {IsChanged, UpdatePropsN} = z_notifier:foldr(#rsc_update{
+                                            action=case RscUpd#rscupd.id of 
+                                                        insert_rsc -> insert; 
+                                                        _ -> update
+                                                   end,
+                                            id=Id, 
+                                            props=Raw
+                                        }, 
+                                        {false, UpdateProps2},
+                                        Context),
+
+    % Pre-pivot of the category-id to the category sequence nr.
+    UpdatePropsN1 = case proplists:get_value(category_id, UpdatePropsN) of
+                        undefined ->
+                            UpdatePropsN;
+                        CatId ->
+                            CatNr = z_db:q1("select nr
+                                             from hierarchy 
+                                             where id = $1
+                                               and name = '$category'",
+                                            [CatId],
+                                            Context),
+                            [ {pivot_category_nr, CatNr} | UpdatePropsN]
+                    end,
+
+    case RscUpd#rscupd.id =:= insert_rsc orelse IsChanged orelse is_changed(Raw, UpdatePropsN1) of
+        true ->
+            UpdatePropsPrePivoted = z_pivot_rsc:pivot_resource_update(Id, UpdatePropsN1, Raw, Context),
+            {ok, 1} = z_db:update(rsc, Id, UpdatePropsPrePivoted, Context),
+            ok = update_page_path_log(Id, Raw, UpdatePropsN, Context),
+            {ok, Id, Raw, UpdatePropsN, IsABefore, IsCatInsert};
+        false ->
+            {ok, Id, notchanged}
+    end.
+
+%% @doc Recombine all properties from the ones that are posted by a form.
+normalize_props(Id, Props, Context) ->
+    normalize_props(Id, Props, [], Context).
+
+normalize_props(Id, Props, Options, Context) ->
+    DateProps = recombine_dates(Id, Props, Context),
+    TextProps = recombine_languages(DateProps, Context),
+    BlockProps = recombine_blocks(TextProps, Props, Context),
+    IsImport = proplists:get_value(is_import, Options, false),
+    [ {map_property_name(IsImport, P), V} || {P, V} <- BlockProps ].
+
+
+set_if_normal_update(#rscupd{} = RscUpd, K, V, Props) ->
+    set_if_normal_update_1(
+            is_normal_update(RscUpd),
+            K, V, Props).
+
+set_if_normal_update_1(false, _K, _V, Props) ->
+    Props;
+set_if_normal_update_1(true, K, V, Props) ->
+    [ {K,V} | proplists:delete(K, Props) ].
+
+is_normal_update(#rscupd{is_import=true}) -> false;
+is_normal_update(#rscupd{is_no_touch=true}) -> false;
+is_normal_update(#rscupd{}) -> true.
+
 
 %% @doc Check if the update will change the data in the database
 %% @spec is_changed(Current, Props) -> bool()
 is_changed(Current, Props) ->
     is_prop_changed(Props, Current).
 
-    is_prop_changed([], _Current) ->
-        false;
-    is_prop_changed([{version, _}|Rest], Current) ->
-        is_prop_changed(Rest, Current);
-    is_prop_changed([{modifier_id, _}|Rest], Current) ->
-        is_prop_changed(Rest, Current);
-    is_prop_changed([{modified, _}|Rest], Current) ->
-        is_prop_changed(Rest, Current);
-    is_prop_changed([{pivot_category_nr, _}|Rest], Current) ->
-        is_prop_changed(Rest, Current);
-    is_prop_changed([{Prop, Value}|Rest], Current) ->
-        case z_utils:are_equal(Value, proplists:get_value(Prop, Current)) of
-            true -> is_prop_changed(Rest, Current);
-            false -> true  % The property Prop has been changed.
-        end.
+is_prop_changed([], _Current) ->
+    false;
+is_prop_changed([{version, _}|Rest], Current) ->
+    is_prop_changed(Rest, Current);
+is_prop_changed([{modifier_id, _}|Rest], Current) ->
+    is_prop_changed(Rest, Current);
+is_prop_changed([{modified, _}|Rest], Current) ->
+    is_prop_changed(Rest, Current);
+is_prop_changed([{pivot_category_nr, _}|Rest], Current) ->
+    is_prop_changed(Rest, Current);
+is_prop_changed([{Prop, Value}|Rest], Current) ->
+    case is_equal(Value, proplists:get_value(Prop, Current)) of
+        true -> is_prop_changed(Rest, Current);
+        false -> true  % The property Prop has been changed.
+    end.
 
-
-ensure_imported_id(true, Id, Context) when is_integer(Id) ->
-    case m_rsc:exists(Id, Context) of
-        false ->
-            {ok, CatId} = m_category:name_to_id(other, Context), 
-            z_db:q("insert into rsc (id, creator_id, is_published, category_id)
-                    values ($1, $2, false, $3)", 
-                   [Id, z_acl:user(Context), CatId], 
-                   Context),
-            ok;
-        true -> 
-            ok
-    end;
-ensure_imported_id(_IsImport, _Id, _Context) ->
-    ok.
+is_equal(A, A) -> true;
+is_equal(_, undefined) -> false;
+is_equal(undefined, _) -> false;
+is_equal(A,B) -> z_utils:are_equal(A, B).
 
 
 %% @doc Check if all props are acceptable. Examples are unique name, uri etc.
@@ -407,24 +561,37 @@ preflight_check(_Id, [], _Context) ->
     ok;
 preflight_check(Id, [{name, Name}|T], Context) when Name =/= undefined ->
     case z_db:q1("select count(*) from rsc where name = $1 and id <> $2", [Name, Id], Context) of
-        0 ->  preflight_check(Id, T, Context);
-        _N -> throw({error, duplicate_name})
+        0 -> 
+            preflight_check(Id, T, Context);
+        _N ->
+            lager:warning("[~p] Trying to insert duplicate name ~p", 
+                          [z_context:site(Context), Name]), 
+            throw({error, duplicate_name})
     end;
 preflight_check(Id, [{page_path, Path}|T], Context) when Path =/= undefined ->
     case z_db:q1("select count(*) from rsc where page_path = $1 and id <> $2", [Path, Id], Context) of
-        0 ->  preflight_check(Id, T, Context);
-        _N -> throw({error, duplicate_page_path})
+        0 ->
+            preflight_check(Id, T, Context);
+        _N ->
+            lager:warning("[~p] Trying to insert duplicate page_path ~p", 
+                          [z_context:site(Context), Path]), 
+            throw({error, duplicate_page_path})
     end;
 preflight_check(Id, [{uri, Uri}|T], Context) when Uri =/= undefined ->
     case z_db:q1("select count(*) from rsc where uri = $1 and id <> $2", [Uri, Id], Context) of
-        0 ->  preflight_check(Id, T, Context);
-        _N -> throw({error, duplicate_uri})
+        0 ->
+            preflight_check(Id, T, Context);
+        _N ->
+            lager:warning("[~p] Trying to insert duplicate uri ~p", 
+                          [z_context:site(Context), Uri]), 
+            throw({error, duplicate_uri})
     end;
 preflight_check(Id, [{'query', Query}|T], Context) ->
     Valid = case m_rsc:is_a(Id, 'query', Context) of
                 true ->
                     try
-                        search_query:search(search_query:parse_query_text(Query), Context), true
+                        search_query:search(search_query:parse_query_text(z_html:unescape(Query)), Context), 
+                        true
                     catch
                         _: {error, {_, _}} ->
                             false
@@ -437,6 +604,34 @@ preflight_check(Id, [{'query', Query}|T], Context) ->
     end;
 preflight_check(Id, [_H|T], Context) ->
     preflight_check(Id, T, Context).
+
+
+throw_if_category_not_allowed(_Id, _SafeProps, false, _Context) ->
+    ok;
+throw_if_category_not_allowed(insert_rsc, SafeProps, _True, Context) ->
+    case proplists:get_value(category_id, SafeProps) of
+        undefined -> 
+            throw({error, nocategory});
+        CatId ->
+            throw_if_category_not_allowed_1(undefined, CatId, Context)
+    end;
+throw_if_category_not_allowed(Id, SafeProps, _True, Context) ->
+    case proplists:get_value(category_id, SafeProps) of
+        undefined ->
+            ok;
+        CatId ->
+            PrevCatId = z_db:q1("select category_id from rsc where id = $1", [Id], Context),
+            throw_if_category_not_allowed_1(PrevCatId, CatId, Context)
+    end.
+
+throw_if_category_not_allowed_1(CatId, CatId, _Context) ->
+    ok;
+throw_if_category_not_allowed_1(_PrevCatId, CatId, Context) ->
+    CategoryName = m_category:id_to_name(CatId, Context),
+    case z_acl:is_allowed(insert, #acl_rsc{category=CategoryName}, Context) of
+        true -> ok;
+        _False -> throw({error, eaccess})
+    end.
 
 
 %% @doc Remove whitespace around some predefined fields
@@ -456,20 +651,15 @@ props_filter([], Acc, _Context) ->
     Acc;
 
 props_filter([{uri, Uri}|T], Acc, Context) ->
-    case z_acl:is_allowed(use, mod_admin_config, Context) of
-        true ->
-            case Uri of
-                Empty when Empty == undefined; Empty == []; Empty == <<>> ->
-                    props_filter(T, [{uri, undefined} | Acc], Context);
-                _ ->
-                    props_filter(T, [{uri, z_html:sanitize_uri(Uri)} | Acc], Context)
-            end;
-        false ->
-            props_filter(T, Acc, Context)
+    case Uri of
+        Empty when Empty == undefined; Empty == []; Empty == <<>> ->
+            props_filter(T, [{uri, undefined} | Acc], Context);
+        _ ->
+            props_filter(T, [{uri, z_sanitize:uri(Uri)} | Acc], Context)
     end;
 
 props_filter([{name, Name}|T], Acc, Context) ->
-    case z_acl:is_allowed(use, mod_admin_config, Context) of
+    case z_acl:is_allowed(use, mod_admin, Context) of
         true ->
             case Name of
                 Empty when Empty == undefined; Empty == []; Empty == <<>> ->
@@ -488,10 +678,8 @@ props_filter([{page_path, Path}|T], Acc, Context) ->
                 Empty when Empty == undefined; Empty == []; Empty == <<>> ->
                     props_filter(T, [{page_path, undefined} | Acc], Context);
                 _ ->
-                    case [$/ | string:strip(z_utils:url_path_encode(Path), both, $/)] of
-                        [] -> props_filter(T, [{page_path, undefined} | Acc], Context);
-                        P  -> props_filter(T, [{page_path, P} | Acc], Context)
-                    end
+                    P = [ $/ | string:strip(z_utils:url_path_encode(Path), both, $/) ],
+                    props_filter(T, [{page_path, P} | Acc], Context)
             end;
         false ->
             props_filter(T, Acc, Context)
@@ -506,8 +694,13 @@ props_filter([{slug, Slug}|T], Acc, Context) ->
     props_filter(T, [{slug, to_slug(Slug, Context)} | Acc], Context);
 props_filter([{custom_slug, P}|T], Acc, Context) ->
     props_filter(T, [{custom_slug, z_convert:to_bool(P)} | Acc], Context);
-props_filter([{is_published, P}|T], Acc, Context) ->
-    props_filter(T, [{is_published, z_convert:to_bool(P)} | Acc], Context);
+
+props_filter([{B, P}|T], Acc, Context) 
+    when  B =:= is_published; B =:= is_featured; B=:= is_protected;
+          B =:= is_dependent; B =:= is_query_live; B =:= date_is_all_day;
+          B =:= is_website_redirect; B =:= is_page_path_multiple ->
+    props_filter(T, [{B, z_convert:to_bool(P)} | Acc], Context);
+
 props_filter([{is_authoritative, P}|T], Acc, Context) ->
     case z_acl:is_allowed(use, mod_admin_config, Context) of
         true ->
@@ -515,10 +708,22 @@ props_filter([{is_authoritative, P}|T], Acc, Context) ->
         false ->
             props_filter(T, Acc, Context)
     end;
-props_filter([{is_featured, P}|T], Acc, Context) ->
-    props_filter(T, [{is_featured, z_convert:to_bool(P)} | Acc], Context);
-props_filter([{is_query_live, P}|T], Acc, Context) ->
-    props_filter(T, [{is_query_live, z_convert:to_bool(P)} | Acc], Context);
+
+props_filter([{P, DT}|T], Acc, Context) 
+    when P =:= created; P =:= modified; 
+         P =:= date_start; P =:= date_end;
+         P =:= publication_start; P =:= publication_end  ->
+    props_filter(T, [{P,z_datetime:to_datetime(DT)}|Acc], Context);
+
+props_filter([{P, Id}|T], Acc, Context) 
+    when P =:= creator_id; P =:= modifier_id ->
+    case m_rsc:rid(Id, Context) of
+        undefined ->
+            props_filter(T, Acc, Context);
+        RId ->
+            props_filter(T, [{P,RId}|Acc], Context)
+    end;
+
 props_filter([{visible_for, Vis}|T], Acc, Context) ->
     VisibleFor = z_convert:to_integer(Vis),
     case VisibleFor of
@@ -530,14 +735,56 @@ props_filter([{visible_for, Vis}|T], Acc, Context) ->
 
 props_filter([{category, CatName}|T], Acc, Context) ->
     props_filter([{category_id, m_category:name_to_id_check(CatName, Context)} | T], Acc, Context);
-
-props_filter([{Location, P}|T], Acc, Context) when Location =:= location_lat; Location =:= location_lng ->
-    case catch z_convert:to_float(P) of
-        X when is_float(X) -> 
-            props_filter(T, [{Location, X} | Acc], Context);
-        _ ->
-            props_filter(T, [{Location, undefined} | Acc], Context)
+props_filter([{category_id, CatId}|T], Acc, Context) ->
+    CatId1 = m_rsc:rid(CatId, Context),
+    case m_rsc:is_a(CatId1, category, Context) of
+        true ->
+            props_filter(T, [{category_id, CatId1}|Acc], Context);
+        false ->
+            lager:error("[~p] Ignoring unknown category '~p' in update, using 'other' instead.",
+                        [z_context:site(Context), CatId]),
+            props_filter(T, [{category_id,m_rsc:rid(other, Context)}|Acc], Context)
     end;
+
+props_filter([{content_group, undefined}|T], Acc, Context) ->
+    props_filter(T, [{content_group_id, undefined}|Acc], Context);
+props_filter([{content_group, CgName}|T], Acc, Context) ->
+    case m_rsc:rid(CgName, Context) of
+        undefined ->
+            lager:error("[~p] Ignoring unknown content group '~p' in update.",
+                        [z_context:site(Context), CgName]),
+            props_filter(T, Acc, Context);
+        CgId ->
+            props_filter([{content_group_id, CgId}|T], Acc, Context)
+    end;
+props_filter([{content_group_id, undefined}|T], Acc, Context) ->
+    props_filter(T, [{content_group_id, undefined}|Acc], Context);
+props_filter([{content_group_id, CgId}|T], Acc, Context) ->
+    CgId1 = m_rsc:rid(CgId, Context),
+    case m_rsc:is_a(CgId1, content_group, Context) of
+        true ->
+            props_filter(T, [{content_group_id, CgId1}|Acc], Context);
+        false ->
+            lager:error("[~p] Ignoring unknown content group '~p' in update.",
+                        [z_context:site(Context), CgId]),
+            props_filter(T, Acc, Context)
+    end;
+
+props_filter([{Location, P}|T], Acc, Context) 
+    when Location =:= location_lat; Location =:= location_lng ->
+    X = try
+            z_convert:to_float(P)
+        catch
+            _:_ -> undefined
+        end,
+    props_filter(T, [{Location, X} | Acc], Context);
+
+props_filter([{pref_language, Lang}|T], Acc, Context) ->
+    Lang1 = case z_trans:to_language_atom(Lang) of
+                {ok, LangAtom} -> LangAtom;
+                {error, not_a_language} -> undefined
+            end,
+    props_filter(T, [{pref_language, Lang1} | Acc], Context);
 
 props_filter([{_Prop, _V}=H|T], Acc, Context) ->
     props_filter(T, [H|Acc], Context).
@@ -583,38 +830,46 @@ props_defaults(Props, Context) ->
     end.
 
 
-props_filter_protected(Props) ->
-    lists:filter(fun({K,_V}) -> not is_protected(K) end, Props).
+props_filter_protected(Props, RscUpd) ->
+    IsNormal = is_normal_update(RscUpd),
+    lists:filter(fun
+                    ({K, _}) -> not is_protected(K, IsNormal) 
+                 end,
+                 Props).
 
 
 to_slug(undefined, _Context) -> undefined;
 to_slug({trans, _} = Tr, Context) -> to_slug(z_trans:lookup_fallback(Tr, en, Context), Context);
-to_slug(B, _Context) when is_binary(B) -> z_string:to_slug(B); 
+to_slug(B, _Context) when is_binary(B) -> truncate_slug(z_string:to_slug(B)); 
 to_slug(X, Context) -> to_slug(z_convert:to_binary(X), Context).
 
+truncate_slug(<<Slug:78/binary, _/binary>>) -> Slug;
+truncate_slug(Slug) -> Slug.
+
 %% @doc Map property names to an atom, fold pivot and computed fields together for later filtering.
-map_property_name(P) when not is_list(P) -> map_property_name(z_convert:to_list(P));
-map_property_name("computed_"++_) -> computed_xxx;
-map_property_name("pivot_"++_) -> pivot_xxx;
-map_property_name(P) when is_list(P) -> erlang:list_to_existing_atom(P).
+map_property_name(IsImport, P) when not is_list(P) -> map_property_name(IsImport, z_convert:to_list(P));
+map_property_name(_IsImport, "computed_"++_) -> computed_xxx;
+map_property_name(_IsImport, "pivot_"++_) -> pivot_xxx;
+map_property_name(false, P) when is_list(P) -> erlang:list_to_existing_atom(P);
+map_property_name(true,  P) when is_list(P) -> erlang:list_to_atom(P).
 
 
 %% @doc Properties that can't be updated with m_rsc_update:update/3 or m_rsc_update:insert/2
-is_protected(id)            -> true;
-is_protected(created)       -> true;
-is_protected(creator_id)    -> true;
-is_protected(modified)      -> true;
-is_protected(modifier_id)   -> true;
-is_protected(props)         -> true;
-is_protected(version)       -> true;
-is_protected(page_url)      -> true;
-is_protected(medium)        -> true;
-is_protected(pivot_xxx)     -> true;
-is_protected(computed_xxx)  -> true;
-is_protected(_)             -> false.
+is_protected(id, _IsNormal)            -> true;
+is_protected(created, true)            -> true;
+is_protected(creator_id, true)         -> true;
+is_protected(modified, true)           -> true;
+is_protected(modifier_id, true)        -> true;
+is_protected(props, _IsNormal)         -> true;
+is_protected(version, _IsNormal)       -> true;
+is_protected(page_url, _IsNormal)      -> true;
+is_protected(medium, _IsNormal)        -> true;
+is_protected(pivot_xxx, _IsNormal)     -> true;
+is_protected(computed_xxx, _IsNormal)  -> true;
+is_protected(_, _IsNormal)             -> false.
 
 
-is_trimmable(_, V) when not is_binary(V) and not is_list(V) -> false;
+is_trimmable(_, V) when not is_binary(V), not is_list(V) -> false;
 is_trimmable(title, _)       -> true;
 is_trimmable(title_short, _) -> true;
 is_trimmable(summary, _)     -> true;
@@ -632,16 +887,59 @@ is_trimmable(rsc_id, _)      -> true;
 is_trimmable(_, _)           -> false.
 
 
-recombine_dates(Props) ->
-    Now = erlang:localtime(),
-    {Dates, Props1} = recombine_dates(Props, [], []),
+%% @doc Combine all textual date fields into real date. Convert them to UTC afterwards.
+recombine_dates(Id, Props, Context) ->
+    LocalNow = z_datetime:to_local(erlang:universaltime(), Context),
+    {Dates, Props1} = recombine_dates_1(Props, [], []),
     {Dates1, DateGroups} = group_dates(Dates),
     {DateGroups1, DatesNull} = collect_empty_date_groups(DateGroups, [], []),
     {Dates2, DatesNull1} = collect_empty_dates(Dates1, [], DatesNull),
-    Dates3 = [ {Name, date_from_default(Now, D)} || {Name, D} <- Dates2 ],
-    DateGroups2 = [ {Name, dategroup_fill_parts(date_from_default(Now, S), E)} || {Name, {S,E}} <- DateGroups1 ],
-    Dates4 = lists:foldl(fun({Name, {S, E}}, Acc) -> [{Name++"_start", S}, {Name++"_end", E} | Acc] end, Dates3, DateGroups2),
-    Dates4 ++ DatesNull1 ++ Props1.
+    Dates3 = [ {Name, date_from_default(LocalNow, D)} || {Name, D} <- Dates2 ],
+    DateGroups2 = [ {Name, dategroup_fill_parts(date_from_default(LocalNow, S), E)} || {Name, {S,E}} <- DateGroups1 ],
+    Dates4 = lists:foldl(
+                    fun({Name, {S, E}}, Acc) ->
+                        [
+                            {Name++"_start", S},
+                            {Name++"_end", E} 
+                            | Acc
+                        ] 
+                    end,
+                    Dates3,
+                    DateGroups2),
+    DatesUTC = maybe_dates_to_utc(Id, Dates4, Props, Context),
+    [
+        {tz, z_context:tz(Context)}
+        | DatesUTC ++ DatesNull1 ++ Props1
+    ].
+
+maybe_dates_to_utc(Id, Dates, Props, Context) ->
+    IsAllDay = is_all_day(Id, Props, Context),
+    [ maybe_to_utc(IsAllDay, NameDT,Context) || NameDT <- Dates ].
+
+maybe_to_utc(true, {"date_start", _Date} = D, _Context) ->
+    D;
+maybe_to_utc(true, {"date_end", _Date} = D, _Context) ->
+    D;
+maybe_to_utc(_IsAllDay, {Name, Date}, Context) ->
+    {Name, z_datetime:to_utc(Date, Context)}.
+
+is_all_day(Id, Props, Context) ->
+    case proplists:get_value(date_is_all_day, Props) of
+        undefined ->
+            case proplists:get_value("date_is_all_day", Props) of
+                undefined ->
+                    case is_integer(Id) of
+                        false ->
+                            false;
+                        true  ->
+                            z_convert:to_bool(m_rsc:p_no_acl(Id, date_is_all_day, Context))
+                    end;
+                IsAllDay ->
+                    z_convert:to_bool(IsAllDay)
+            end;
+        IsAllDay ->
+            z_convert:to_bool(IsAllDay)
+    end.
 
 
 collect_empty_date_groups([], Acc, Null) ->
@@ -667,14 +965,14 @@ collect_empty_dates([H|T], Acc, Null) ->
 
 
 
-recombine_dates([], Dates, Acc) ->
+recombine_dates_1([], Dates, Acc) ->
     {Dates, Acc};
-recombine_dates([{"dt:"++K,V}|T], Dates, Acc) ->
+recombine_dates_1([{"dt:"++K,V}|T], Dates, Acc) ->
     [Part, End, Name] = string:tokens(K, ":"),
     Dates1 = recombine_date(Part, End, Name, V, Dates),
-    recombine_dates(T, Dates1, Acc);
-recombine_dates([H|T], Dates, Acc) ->
-    recombine_dates(T, Dates, [H|Acc]).
+    recombine_dates_1(T, Dates1, Acc);
+recombine_dates_1([H|T], Dates, Acc) ->
+    recombine_dates_1(T, Dates, [H|Acc]).
 
     recombine_date(Part, End, Name, undefined, Dates) ->
         recombine_date(Part, End, Name, "", Dates);
@@ -744,7 +1042,7 @@ group_dates(Dates) ->
                         group_dates(T, Groups1, Acc);
 
                     false ->
-                        group_dates(T, Groups, [T|Acc])
+                        group_dates(T, Groups, [{Name,D}|Acc])
                 end
         end.
 
@@ -786,6 +1084,8 @@ date_from_default( _S, {{Ye,Me,De},{He,Ie,Se}} ) ->
 
 to_int("") ->
     undefined;
+to_int(<<>>) ->
+    undefined;
 to_int(A) ->
     try
         list_to_integer(A)
@@ -793,6 +1093,13 @@ to_int(A) ->
         _:_ -> undefined
     end.
 
+% to_datetime(undefined) ->
+%     erlang:universaltime();
+% to_datetime(B) ->
+%     case z_datetime:to_datetime(B) of
+%         undefined -> erlang:universaltime();
+%         DT -> DT
+%     end.
 
 %% @doc get all languages encoded in proplists' keys.
 %% e.g. m_rsc_update:props_languages([{"foo$en", x}, {"bar$nl", x}]) -> ["en", "nl"]
@@ -821,10 +1128,18 @@ recombine_languages(Props, Context) ->
             LangProps ++ [{language, [list_to_atom(Lang) || Lang <- L1]}|proplists:delete("language", OtherProps)]
     end.
 
+    %% @doc Fetch all the edited languages, from 'language' inputs or a merged 'language' property
     edited_languages(Props, PropLangs) ->
         case proplists:is_defined("language", Props) of
-            true -> proplists:get_all_values("language", Props);
-            false -> PropLangs
+            true ->
+                proplists:get_all_values("language", Props);
+            false ->
+                case proplists:get_value(language, Props) of
+                    L when is_list(L) ->
+                        [ z_convert:to_list(Lang) || Lang <- L ];
+                    undefined ->
+                        PropLangs
+                end
         end.
 
     comb_lang([], _L1, LAcc, OAcc) ->
@@ -853,12 +1168,21 @@ recombine_languages(Props, Context) ->
                 [{P, {trans, [{Lang1,z_convert:to_binary(V)}]}}|Acc]
         end.
 
+recombine_blocks(Props, OrgProps, Context) ->
+    Props1 = recombine_blocks_form(Props, OrgProps, Context),
+    recombine_blocks_import(Props1, OrgProps, Context).
 
-recombine_blocks(Props, OrgProps) ->
+recombine_blocks_form(Props, OrgProps, Context) ->
     {BPs, Ps} = lists:partition(fun({"block-"++ _, _}) -> true; (_) -> false end, Props),
     case BPs of
         [] ->
-            Props;
+            case proplists:get_value(blocks, Props) of
+                Blocks when is_list(Blocks) ->
+                    Blocks1 = [ {proplists:get_value(name, B),B} || B <- Blocks ],
+                    z_utils:prop_replace(blocks, normalize_blocks(Blocks1, Context), Props);
+                _ ->
+                    Props
+            end;
         _ ->
             Keys = block_ids(OrgProps, []),
             Dict = lists:foldr(
@@ -868,11 +1192,33 @@ recombine_blocks(Props, OrgProps) ->
                                     Ts = string:tokens(Name, "-"),
                                     BlockId = iolist_to_binary(tl(lists:reverse(Ts))),
                                     BlockField = lists:last(Ts),
-                                    dict:append(BlockId, opt_value_map(BlockField, Val), Acc)
+                                    dict:append(BlockId, {BlockField, Val}, Acc)
                             end,
                             dict:new(),
                             BPs),
-            [{blocks, [ dict:fetch(K, Dict) || K <- Keys ]} | Ps ]
+            Blocks = normalize_blocks([ {K, dict:fetch(K, Dict)} || K <- Keys ], Context),
+            [{blocks, Blocks++proplists:get_value(blocks, Ps, [])} | proplists:delete(blocks, Ps) ]
+    end.
+
+recombine_blocks_import(Props, _OrgProps, Context) ->
+    {BPs, Ps} = lists:partition(fun({"blocks."++ _, _}) -> true; (_) -> false end, Props),
+    case BPs of
+        [] ->
+            Props;
+        _ ->
+            {Dict,Keys} = lists:foldr(
+                            fun({"blocks."++Name, Val}, {Acc,KeyAcc}) ->
+                                [BlockId,BlockField] = string:tokens(Name, "."),
+                                KeyAcc1 = case lists:member(BlockId, KeyAcc) of
+                                            true -> KeyAcc;
+                                            false -> [ BlockId | KeyAcc ]
+                                          end,
+                                {dict:append(BlockId, {BlockField, Val}, Acc), KeyAcc1}
+                            end,
+                            {dict:new(),[]},
+                            BPs),
+            Blocks = normalize_blocks([ {K, dict:fetch(K, Dict)} || K <- Keys ], Context),
+            [{blocks, Blocks++proplists:get_value(blocks, Ps, [])} | proplists:delete(blocks, Ps) ]
     end.
 
 block_ids([], Acc) -> 
@@ -887,24 +1233,51 @@ block_ids([{"block-"++Name,_}|Rest], Acc) when Name =/= [] ->
 block_ids([_|Rest], Acc) ->
     block_ids(Rest, Acc).
 
-% Map some values to non-strings
-opt_value_map("rsc_id", V) -> {rsc_id, z_convert:to_integer(V)};
-opt_value_map("is_"++_ = K, V) -> {list_to_existing_atom(K), z_convert:to_bool(V)};
-opt_value_map(K, V) -> {list_to_existing_atom(K), V}.
 
+normalize_blocks(Blocks, Context) ->
+    Blocks1 = lists:map(
+                 fun({Name,B}) ->
+                    normalize_block(Name, B, Context)
+                 end,
+                 Blocks),
+    lists:filter(fun(B) ->
+                    case proplists:get_value(type, B) of
+                        <<>> -> false;
+                        undefined -> false;
+                        _ -> true
+                    end
+                 end,
+                 Blocks1).
 
+normalize_block(Name, B, Context) ->
+    Props = lists:map(fun
+                  ({rsc_id, V})         -> {rsc_id, m_rsc:rid(V, Context)};
+                  ({"rsc_id", V})       -> {rsc_id, m_rsc:rid(V, Context)};
+                  ({<<"rsc_id">>, V})   -> {rsc_id, m_rsc:rid(V, Context)};
+                  ({"is_" ++ _ = K, V}) -> {to_existing_atom(K), z_convert:to_bool(V)};
+                  ({<<"is_", _/binary>> = K, V}) -> {to_existing_atom(K), z_convert:to_bool(V)};
+                  ({K, V}) when is_list(K); is_binary(K) -> {to_existing_atom(K), V};
+                  (Pair) -> Pair
+              end,
+              B),
+    case proplists:is_defined(name, Props) of
+        true -> Props;
+        false -> [{name, Name} | Props]
+    end.
+
+to_existing_atom(K) when is_binary(K) ->
+    binary_to_existing_atom(K, utf8);
+to_existing_atom(K) when is_list(K) ->
+    list_to_existing_atom(K);
+to_existing_atom(K) when is_atom(K) ->
+    K.
 
 %% @doc Accept only configured languages
 filter_langs(L, Cfg) ->
-    filter_langs1(L, Cfg, []).
-    
-    filter_langs1([], _Cfg, Acc) ->
-        Acc;
-    filter_langs1([L|R], Cfg, Acc) ->
-        case lists:member(L, Cfg) of
-            true -> filter_langs1(R, Cfg, [L|Acc]);
-            false -> filter_langs1(R, Cfg, Acc)
-        end.
+    lists:filter(fun(LangS) ->
+                    lists:member(LangS, Cfg)
+                 end,
+                 L).
 
     
 
@@ -915,11 +1288,31 @@ config_langs(Context) ->
     end.
 
 
+update_page_path_log(RscId, OldProps, NewProps, Context) ->
+    Old = proplists:get_value(page_path, OldProps),
+    New = proplists:get_value(page_path, NewProps, not_updated),
+    case {Old, New} of
+        {_, not_updated} ->
+            ok;
+        {Old, Old} ->
+            %% not changed
+            ok;
+        {undefined, _} ->
+            %% no old page path
+            ok;
+        {Old, New} ->
+            %% update
+            z_db:q("DELETE FROM rsc_page_path_log WHERE page_path = $1 OR page_path = $2", [New, Old], Context),
+            z_db:q("INSERT INTO rsc_page_path_log(id, page_path) VALUES ($1, $2)", [RscId, Old], Context),
+            ok
+    end.
+
+
 test() ->
     [{"publication_start",{{2009,7,9},{0,0,0}}},
           {"publication_end",?ST_JUTTEMIS},
           {"plop","hello"}]
-     = recombine_dates([
+     = recombine_dates(insert_rsc, [
         {"dt:y:0:publication_start", "2009"},
         {"dt:m:0:publication_start", "7"},
         {"dt:d:0:publication_start", "9"},
@@ -927,6 +1320,7 @@ test() ->
         {"dt:m:1:publication_end", ""},
         {"dt:d:1:publication_end", ""},
         {"plop", "hello"}
-    ]),
+    ], z_context:new_tests()),
     ok.
+
 

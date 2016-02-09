@@ -1,10 +1,10 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009-2012 Marc Worrell
+%% @copyright 2009-2014 Marc Worrell
 %% @doc Session for zotonic, holds all information for the current session at an user agent.
 %%      An agent can have multiple pages open and an user_session can have multiple sessions.
 %%      The user agent session also starts and monitors the page sessions.
 
-%% Copyright 2009-2012 Marc Worrell
+%% Copyright 2009-2014 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,10 +18,25 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
+% Sessions have two timeouts:
+%
+% 1. Initial timeout after setting up the process till the first ping from the page (expire_1)
+% 2. Inactivity timeout after receiving some communication from the page (expire_n)
+%
+% This is to make a distinction between pages fetched by visitors (with executing callbacks etc)
+% and bots (without executing callbacks).
+%
+% Pages fetched by bots won't setup the web socket connection, or perform postbacks, so we can 
+% quickly stop the page and session-process.
+%
+% Real visitors will perform interaction with the page, for this we keep the session and 
+% page-process. Even during some inactivity.
 
 -module(z_session).
 -author("Marc Worrell <marc@worrell.nl>").
 -behaviour(gen_server).
+
+-compile([{parse_transform, lager_transform}]).
 
 -include_lib("zotonic.hrl").
 
@@ -30,25 +45,32 @@
 
 %% session exports
 -export([
-    start_link/2,
+    start_link/3,
     stop/1, 
     set/2,
     set/3,
     get/2, 
     get/3, 
     incr/3, 
+    session_id/1,
+    rename_session/2,
     persistent_id/1,
     set_persistent/3,
     get_persistent/2, 
     get_persistent/3, 
-    restart/1,
     keepalive/1, 
     keepalive/2, 
     ensure_page_session/1,
+    lookup_page_session/2,
     get_pages/1,
     get_attach_state/1,
     add_script/2,
     add_script/1,
+    transport/2,
+    receive_ack/2,
+    add_cookie/4,
+    get_cookies/1,
+    clear_cookies/1,
     check_expire/2,
     dump/1,
     spawn_link/4
@@ -62,11 +84,14 @@
             expire_n,
             pages=[],
             linked=[],
-            persist_id,
+            session_id = undefined,
+            persist_id = undefined,
             persist_is_saved = false,
             persist_is_dirty = false,
             props=[],
             props_persist=[],
+            cookies=[],
+            transport,
             context
             }).
 
@@ -82,8 +107,12 @@
 %%====================================================================
 
 
-start_link(PersistId, Context) ->
-    gen_server:start_link(?MODULE, {z_context:site(Context), PersistId}, []).
+start_link(<<>>, PersistId, Context) ->
+    start_link(undefined, PersistId, Context);
+start_link(SessionId, <<>>, Context) ->
+    start_link(SessionId, undefined, Context);
+start_link(SessionId, PersistId, Context) ->
+    gen_server:start_link(?MODULE, {z_context:site(Context), SessionId, PersistId}, []).
 
 stop(SessionPid) when is_pid(SessionPid) ->
     gen_server:cast(SessionPid, stop).
@@ -106,60 +135,101 @@ set(_K, _V, _) ->
     {error, no_session}.
 
 %% @doc Get a session value. Defaults to 'undefined'.
-get(Key, #context{session_pid=Pid}) ->
-    get(Key, Pid);
-get(Key, Pid) when is_pid(Pid) ->
-    get(Key, Pid, undefined);
-get(_, _) ->
-    undefined.
+get(Key, Context) ->
+    get(Key, Context, undefined).
 
 %% @doc Get a session value with a default.
 get(Key, #context{session_pid=Pid}, DefaultValue) ->
     get(Key, Pid, DefaultValue);
-get(Key, Pid, DefaultValue) ->
-    gen_server:call(Pid, {get, Key, DefaultValue}).
+get(Key, Pid, DefaultValue) when is_pid(Pid) ->
+    gen_server:call(Pid, {get, Key, DefaultValue});
+get(_, _, DefaultValue) ->
+    DefaultValue.
+
 
 incr(Key, Value, #context{session_pid=Pid}) ->
     incr(Key, Value, Pid);
 incr(Key, Value, Pid) ->
     gen_server:call(Pid, {incr, Key, Value}).
 
+% @doc Get the session_id of this session.
+session_id(#context{session_pid=Pid}) ->
+    session_id(Pid);
+session_id(Pid) ->
+    gen_server:call(Pid, session_id).
+
+% @doc Rename the session
+rename_session(NewSessionId, #context{session_pid=Pid}) ->
+    rename_session(NewSessionId, Pid);
+rename_session(NewSessionId, Pid) ->
+    gen_server:call(Pid, {rename_session, NewSessionId}).
 
 persistent_id(Context) ->
     gen_server:call(Context#context.session_pid, persistent_id).
 
+set_persistent(_Key, _Value, #context{session_pid=undefined} = Context) ->
+    Context;
 set_persistent(Key, Value, Context) ->
-    gen_server:cast(Context#context.session_pid, {set_persistent, Key, Value}).
+    case gen_server:call(Context#context.session_pid, {set_persistent, Key, Value}) of
+        {new_persist_id, NewPersistCookieId} ->
+            Options = [
+                 {max_age, ?PERSIST_COOKIE_MAX_AGE},
+                 {path, "/"},
+                 {http_only, true}],
+             z_context:set_cookie(?PERSIST_COOKIE, NewPersistCookieId, Options, Context);
+        ok -> 
+            Context
+    end.
 
 get_persistent(Key, Context) ->
    get_persistent(Key, Context, undefined).
 
+get_persistent(_Key, #context{session_pid=undefined}, DefaultValue) ->
+    DefaultValue;
 get_persistent(Key, Context, DefaultValue) ->
     gen_server:call(Context#context.session_pid, {get_persistent, Key, DefaultValue}).
 
 
-%% @doc Reset the session contents, keep the persistent data. Used in the case where an user restarts his browser.
-restart(Context=#context{}) ->
-    restart(Context#context.session_pid);
-restart(Pid) when is_pid(Pid) ->
-    gen_server:cast(Pid, restart).
-
-
 %% @spec add_script(Script::io_list(), PagePid::pid()) -> none()
 %% @doc Send a script to all session pages
-add_script(Script, #context{session_pid=Pid}) ->
-    add_script(Script, Pid);
-add_script(Script, Pid) ->
-    gen_server:cast(Pid, {add_script, Script}).
-
+add_script(Script, Context) ->
+    z_transport:session(javascript, Script, Context).
 
 %% @spec add_script(Context) -> Context1
 %% @doc Split the scripts from the context and add the scripts to the session pages.
 add_script(Context) ->
     {Scripts, CleanContext} = z_script:split(Context),
-    add_script(Scripts, CleanContext),
+    z_transport:session(javascript, Scripts, CleanContext),
     CleanContext.
 
+%% @doc Send a msg to all attached pages, queue if no pages
+transport([], _Context) ->
+    ok;
+transport(_Msg, undefined) ->
+    ok;
+transport(Msg, Pid) when is_pid(Pid) ->
+    gen_server:cast(Pid, {transport, Msg});
+transport(Msg, Context) ->
+    gen_server:cast(Context#context.session_pid, {transport, Msg}).
+
+%% @doc Ack a message, removes it from the retry queue
+receive_ack(Ack, Pid) when is_pid(Pid) ->
+    gen_server:cast(Pid, {receive_ack, Ack});
+receive_ack(Ack, Context) ->
+    gen_server:cast(Context#context.session_pid, {receive_ack, Ack}).
+
+
+%% @doc Store a cookie on the session. Useful for setting cookies from a websocket connection.
+add_cookie(Key, Value, Options, #context{session_pid=Pid}) ->
+    gen_server:cast(Pid, {add_cookie, Key, Value, Options}).
+
+%% @doc Get cookies stored on the session.
+get_cookies(#context{session_pid=Pid}) ->
+    gen_server:call(Pid, get_cookies).
+
+%% @doc Resets cookies temporarily stored on the session.
+clear_cookies(#context{session_pid=Pid}) ->
+    gen_server:cast(Pid, clear_cookies).
 
 %% @doc Reset the expire counter of the session, called from the page process when comet attaches
 keepalive(Pid) ->
@@ -172,15 +242,26 @@ keepalive(PageId, Pid) ->
     gen_server:cast(Pid, {keepalive, PageId}).
 
 
-%% @spec ensure_page_session(Context::#context{}) -> #context{}
 %% @doc Make sure that the request has a page session, when the page session was alive then
 %%      adjust the expiration of the page.  Returns a new context with the page id set.
+-spec ensure_page_session(#context{}) -> #context{}.
+ensure_page_session(#context{wm_reqdata=undefined} = Context) ->
+    Context;
+ensure_page_session(#context{session_pid=undefined} = Context) ->
+    lager:debug("[~p] ensure page session without a session_pid", [z_context:site(Context)]),
+    Context;
+ensure_page_session(#context{page_pid=undefined}=Context) ->
+    {ok, NewPageId, PagePid} = gen_server:call(Context#context.session_pid, start_page_session),
+    Context#context{page_id=NewPageId, page_pid=PagePid};
 ensure_page_session(Context) ->
-    Context1 = z_context:ensure_qs(Context),
-    PageId = z_context:get_q(?SESSION_PAGE_Q, Context1),
-    {ok, NewPageId, PagePid} = gen_server:call(Context1#context.session_pid, {ensure_page_session, PageId}),
-    Context1#context{page_id=NewPageId, page_pid=PagePid}.
+    Context.
 
+
+%% @doc Lookup a page session (if any)
+lookup_page_session(_PageId, #context{session_pid=undefined}) ->
+    {error, notfound};
+lookup_page_session(PageId, Context) when is_binary(PageId) ->
+    gen_server:call(Context#context.session_pid, {lookup_page_session, PageId}).
 
 %% @spec check_expire(Now::integer(), Pid::pid()) -> none()
 %% @doc Check session and page expiration, periodically called by the session manager
@@ -219,50 +300,53 @@ spawn_link(Module, Func, Args, Context) ->
 %% gen_server callbacks
 %%====================================================================
 
-init({Host, PersistId}) ->
-    {ok, new_session(Host, PersistId)}.
+init({Host, SessionId, PersistId}) ->
+    lager:md([
+        {site, Host},
+        {module, ?MODULE}
+      ]),
+    gproc:reg({p, l, {Host, user_session, undefined}}),
+    {ok, new_session(Host, SessionId, PersistId)}.
 
 handle_cast(stop, Session) ->
     {stop, normal, Session};
 
-%% @doc Reinitialize the complete session, cleanup the old pages, retain the persistent data.
-handle_cast(restart, Session) ->
-    {noreply, restart_session(Session)};
-
 %% @doc Reset the timeout counter for the session and, optionally, a specific page
 handle_cast(keepalive, Session) ->
-    Now      = z_utils:now(),
-    Session1 = Session#session{expire=Now + Session#session.expire_n},
+    Session1 = Session#session{
+                    expire=z_utils:now() + Session#session.expire_n
+                },
     {noreply, Session1};
 
 %% @doc Reset the timeout counter, propagate to the page process.
 handle_cast({keepalive, PageId}, Session) ->
-    Now      = z_utils:now(),
-    Session1 = Session#session{expire=Now + Session#session.expire_n},
+    Session1 = Session#session{
+                    expire=z_utils:now() + Session#session.expire_n
+                },
     case find_page(PageId, Session1) of
-        #page{page_pid=Pid} -> 
-            % Keep the page process alive
-            catch z_session_page:ping(Pid);
-        undefined -> 
-            ok
+        #page{page_pid=Pid} -> z_session_page:ping(Pid);
+        undefined -> ok
     end,
     {noreply, Session1};
 
 %% @doc Check session expiration, stop when passed expiration.
 handle_cast({check_expire, Now}, Session) ->
-    case length(Session#session.pages) of
-        0 ->
+    Session1 = Session#session{
+                    transport=z_transport_queue:periodic(Session#session.transport)
+                },
+    case Session1#session.pages of
+        [] ->
             if 
-                Session#session.expire < Now -> {stop, normal, Session};
-                true -> {noreply, Session}
+                Session1#session.expire < Now -> {stop, normal, Session1};
+                true -> {noreply, Session1}
             end;
         _ ->
             Expire   = Now + ?SESSION_PAGE_TIMEOUT,
-            Session1 = if 
-                            Expire > Session#session.expire -> Session#session{expire=Expire};
-                            true -> Session
+            Session2 = if 
+                            Expire > Session1#session.expire -> Session1#session{expire=Expire};
+                            true -> Session1
                        end,
-            {noreply, Session1}
+            {noreply, Session2}
     end;
 
 %% @doc Add a script to a specific page's script queue
@@ -276,36 +360,52 @@ handle_cast({send_script, Script, PageId}, Session) ->
     {noreply, Session};
 
 
-%% @doc Add a script to all page's script queues
-handle_cast({add_script, Script}, Session) ->
-    F = fun(P) ->
-            catch z_session_page:add_script(Script, P#page.page_pid)
-        end,
-    lists:foreach(F, Session#session.pages),
-    {noreply, Session};
+%% @doc Add a message to all page's transport queues
+handle_cast({transport, Msg}, #session{pages=[]} = Session) ->
+    {noreply, Session#session{transport=z_transport_queue:in(Msg, Session#session.transport)}};
+handle_cast({transport, Msg}, #session{pages=Pages} = Session) ->
+    lists:foreach(
+            fun (P) ->
+                z_session_page:transport(Msg, P#page.page_pid)
+            end,
+            Pages),
+    Transport1 = z_transport_queue:wait_ack(Msg, session, Session#session.transport), 
+    {noreply, Session#session{transport=Transport1}};
+
+%% @doc Receive a message ack
+handle_cast({receive_ack, Ack}, Session) ->
+    Transport1 = z_transport_queue:ack(Ack, Session#session.transport), 
+    {noreply, Session#session{transport=Transport1}};
+
+
+%% @doc Add a cookie to the session. Useful for setting cookies from a websocket connection.
+handle_cast({add_cookie, Key, Value, Options}, Session) ->
+    Cookies = [{Key, Value, Options} | Session#session.cookies],
+    {noreply, Session#session{cookies=Cookies}};
+
+%% @doc Reset the stored cookies.
+handle_cast(clear_cookies, Session) ->
+    {noreply, Session#session{cookies=[]}};
 
 %% @doc Set the session variable, replaces any old value
-handle_cast({set_persistent, Key, Value}, Session) ->
-    case proplists:get_value(Key, Session#session.props_persist) of
+handle_cast({set, language, Value}, Session) ->
+    case proplists:get_value(language, Session#session.props) of
         Value ->
             {noreply, Session};
-        _Other ->
-            % @todo Save the persistent state on tick, and not every time it is changed.
-            %       For now (and for testing) this is ok.
-            Session1 = Session#session{ 
-                            props_persist = z_utils:prop_replace(Key, Value, Session#session.props_persist),
-                            persist_is_dirty = true
-                    },
-            {noreply, save_persist(Session1)}
+        _ ->
+            Session1 = handle_set(language, Value, Session),
+            z_notifier:notify(#language{language=Value}, Session1#session.context),
+            {noreply, Session1}
     end;
 
-%% @doc Set the session variable, replaces any old value
 handle_cast({set, Key, Value}, Session) ->
-    {noreply, Session#session{ props = z_utils:prop_replace(Key, Value, Session#session.props) }};
+    Session1 = handle_set(Key, Value, Session),
+    Session2 = maybe_auth_change(Key, Value, Session1, Session),
+    {noreply, Session2};
 
 handle_cast({set, Props}, Session) ->
     Props1 = lists:foldl(fun({K,V}, Ps) ->
-                            z_utils:prop_replace(K, V, Ps)
+                            prop_replace(K, V, Ps, Session#session.context#context.host)
                          end,
                          Session#session.props,
                          Props),
@@ -333,8 +433,42 @@ handle_call(persistent_id, _From, Session) ->
     end,
     {reply, PersistedSession#session.persist_id, PersistedSession};
 
+%% @doc Get the session if of this session.
+handle_call(session_id, _From, Session) ->
+    {reply, Session#session.session_id, Session};
+
+
+%% @doc Rename the session
+handle_call({rename_session, NewSessionId}, _From, Session) ->
+    {reply, ok, Session#session{session_id=NewSessionId}};
+
+%% @doc Set a persistent variable, replaces any old value
+handle_call({set_persistent, Key, Value}, _From, #session{persist_id=undefined}=Session) ->
+    PersistId = new_id(),
+    Session1 = Session#session{
+        persist_id=PersistId, 
+        props_persist=[{Key, Value}], 
+        persist_is_dirty=true},
+    {reply, {new_persist_id, PersistId}, save_persist(Session1)};
+handle_call({set_persistent, Key, Value}, _From, Session) ->
+    case proplists:get_value(Key, Session#session.props_persist) of
+        Value ->
+            {reply, ok, Session};
+        _Other ->
+            % @todo Save the persistent state on tick, and not every time it is changed.
+            %       For now (and for testing) this is ok.
+            Session1 = Session#session{ 
+                            props_persist = z_utils:prop_replace(Key, Value, Session#session.props_persist),
+                            persist_is_dirty = true
+                    },
+            {reply, ok, save_persist(Session1)}
+    end;
+
 handle_call({get_persistent, Key, DefaultValue}, _From, Session) ->
     {reply, proplists:get_value(Key, Session#session.props_persist, DefaultValue), Session};
+
+handle_call(get_cookies, _From, Session) ->
+    {reply, Session#session.cookies, Session};
 
 handle_call({get, Key, DefaultValue}, _From, Session) ->
     {reply, proplists:get_value(Key, Session#session.props, DefaultValue), Session};
@@ -350,25 +484,22 @@ handle_call({spawn_link, Module, Func, Args}, _From, Session) ->
     Pid    = spawn_link(Module, Func, Args),
     Linked = [Pid | Session#session.linked],
     erlang:monitor(process, Pid),
+    exometer:update([zotonic, Session#session.context#context.host, session, page_processes], 1),
     {reply, Pid, Session#session{linked=Linked}};
 
-handle_call({ensure_page_session, CurrPageId}, _From, Session) ->
-    NewPageId = case CurrPageId of
-                    undefined -> z_ids:id();
-                    _ -> CurrPageId
-                end,
-    {NewPage, Session1} = case find_page(NewPageId, Session) of
-                            undefined -> 
-                                % Make a new page for this pid
-                                P     = page_start(NewPageId),
-                                Pages = [P|Session#session.pages], 
-                                {P, Session#session{pages=Pages}};
-                            #page{page_pid=Pid} = P -> 
-                                % Keep the page alive
-                                catch z_session_page:ping(Pid),
-                                {P, Session}
-                          end,
-    {reply, {ok, NewPageId, NewPage#page.page_pid}, Session1};
+handle_call(start_page_session, _From, Session) ->
+    {Page, Session1} = do_ensure_page_session_new(Session),
+    Session2 = transport_all(Session1),
+    {reply, {ok, Page#page.page_id, Page#page.page_pid}, Session2};
+
+handle_call({lookup_page_session, PageId}, _From, Session) ->
+    case find_page(PageId, Session) of
+        undefined ->
+            {reply, {error, notfound}, Session};
+        #page{page_pid=Pid} -> 
+            z_session_page:ping(Pid),
+            {reply, {ok, Pid}, Session}
+    end;
 
 handle_call(get_attach_state, _From, Session) ->
     {reply, [z_session_page:get_attach_state(Pid) ||  #page{page_pid=Pid} <- Session#session.pages], Session};
@@ -387,7 +518,15 @@ handle_info({'DOWN', _MonitorRef, process, Pid, _Info}, Session) ->
     FIsUp  = fun(Page) -> Page#page.page_pid /= Pid end,
     Pages  = lists:filter(FIsUp, Session#session.pages),
     Linked = lists:delete(Pid, Session#session.linked),
+    exometer:update([zotonic, Session#session.context#context.host, session, page_processes], -1),
     {noreply, Session#session{pages=Pages, linked=Linked}};
+
+%% @doc MQTT message, forward it to the page.
+%% TODO: Add all handling
+handle_info({route, Msg}, State) ->
+    lager:debug("Session route ~p", [Msg]),
+    {noreply, State};
+
 handle_info(_, Session) ->
     {noreply, Session}.
 
@@ -413,8 +552,55 @@ code_change(_OldVsn, Session, _Extra) ->
 %%====================================================================
 
 
+handle_set(Key, Value, Session) ->
+    Session#session{ props = prop_replace(Key, Value, Session#session.props, Session#session.context#context.host)}.
+
+
+maybe_auth_change(auth_user_id, UserId, Session, OldSession) ->
+    case proplists:get_value(auth_user_id, OldSession#session.props) of
+        UserId ->
+            Session;
+        none when UserId =:= undefined ->
+            Session;
+        undefined when UserId =:= none ->
+            Session;
+        _OldUserId ->
+            lists:foreach(fun(#page{page_pid=PagePid}) ->
+                              z_session_page:auth_change(PagePid)
+                           end,
+                           Session#session.pages),
+            Session#session{pages=[], transport=z_transport_queue:new()}
+    end;
+maybe_auth_change(_K, _V, Session, _OldSession) ->
+    Session.
+
+
+%% @doc Try to transport all queued messages to the connected pages
+transport_all(#session{pages=[]} = Session) ->
+    Session;
+transport_all(#session{transport=Transport, pages=Pages} = Session) ->
+    case z_transport_queue:is_empty(Transport) of
+        true ->
+            Session;
+        false ->
+            {Ms,Transport1} = z_transport_queue:out_all(Transport),
+            lists:foreach(
+                fun(#page{page_pid=PagePid}) ->
+                    z_session_page:transport(Ms, PagePid)
+                end,
+                Pages),
+            Transport2 = lists:foldl(
+                            fun(Msg, TQAcc) ->
+                                z_transport_queue:wait_ack(Msg, session, TQAcc)
+                            end,
+                            Transport1,
+                            Ms),
+            Session#session{transport=Transport2}  
+    end. 
+
+
 %% @doc Initialize a new session record
-new_session(Host, PersistId) ->
+new_session(Host, SessionId, PersistId) ->
     Context = z_context:new(Host),
     Expire1 = z_convert:to_integer(m_config:get_value(site, session_expire_1, ?SESSION_EXPIRE_1, Context)),
     ExpireN = z_convert:to_integer(m_config:get_value(site, session_expire_n, ?SESSION_EXPIRE_N, Context)),
@@ -422,19 +608,11 @@ new_session(Host, PersistId) ->
             expire=z_utils:now() + Expire1,
             expire_1 = Expire1,
             expire_n = ExpireN,
+            session_id = SessionId,
             persist_id = PersistId,
+            transport=z_transport_queue:new(),
             context=Context
             }).
-
-
-% @todo: perform unlinks?
-restart_session(Session) ->
-    [ z_session_page:stop(Pid) || Pid <- Session#session.pages ],
-    Session#session{
-            expire=z_utils:now() + Session#session.expire_1,
-            pages=[],
-            props=[]
-         }.
 
 
 %% @doc Load the persistent data from the database, used on session start.
@@ -459,11 +637,47 @@ save_persist(Session) ->
     Session.
 
 
+%% @doc Replace properties, special handling for tracking sessions belonging to an user_id
+prop_replace(auth_user_id, NewUserId, Props, Site) when is_list(Props) ->
+    case lists:keyfind(auth_user_id, 1, Props) of
+        {auth_user_id, NewUserId} -> 
+            Props;
+        {auth_user_id, PrefUserId} ->
+            gproc:unreg({p, l, {Site, user_session, PrefUserId}}), 
+            gproc:reg({p, l, {Site, user_session, NewUserId}}),
+            z_utils:prop_replace(auth_user_id, NewUserId, Props);
+        false ->
+            gproc:unreg({p, l, {Site, user_session, undefined}}), 
+            gproc:reg({p, l, {Site, user_session, NewUserId}}),
+            [{auth_user_id, NewUserId} | Props]
+    end;
+prop_replace(Key, Value, Props, _Site) when is_list(Props) ->
+    z_utils:prop_replace(Key, Value, Props).
+
+% @doc Create a new page session
+do_ensure_page_session_new(Session) ->
+    case page_start(Session#session.context) of
+        {error, already_started} ->
+            do_ensure_page_session_new(Session);
+        {ok, P} ->
+            {P, Session#session{pages=[P|Session#session.pages]}}
+    end.
+
 %% @doc Return a new page record, monitor the started page process because we want to know about normal exits
-page_start(PageId) ->
-    {ok,PagePid} = z_session_page:start_link([{session_pid, self()}]),
-    erlang:monitor(process, PagePid),
-    #page{page_pid=PagePid, page_id=PageId }.
+page_start(Context) ->
+    PageId = new_id(),
+    case z_session_page:start_link(self(), PageId, Context) of
+        {ok,PagePid} ->
+            erlang:monitor(process, PagePid),
+            exometer:update([zotonic, Context#context.host, session, page_processes], 1),
+            {ok, #page{page_pid=PagePid, page_id=PageId}};
+        {error, {already_started, _PagePid}} ->
+            lager:error(z_context:lager_md(Context),
+                        "Page-session process already running ~p",
+                        [PageId]),
+            {error, already_started}
+    end. 
+
 
 %% @doc Find the page record in the list of known pages
 find_page(undefined, _Session) ->
@@ -474,3 +688,5 @@ find_page(PageId, Session) ->
         false -> undefined
     end.
 
+new_id() ->
+    z_convert:to_binary(z_ids:id()).

@@ -37,6 +37,7 @@
     detach_all/2,
     get_observers/2,
     notify/2, 
+    notify_sync/2, 
     notify1/2, 
     first/2, 
     map/2, 
@@ -53,8 +54,10 @@
 
 -define(TIMER_INTERVAL, [ {1, tick_1s}, 
                           {60, tick_1m}, 
+                          {600, tick_10m}, 
                           {3600, tick_1h},
                           {7200, tick_2h},
+                          {21600, tick_6h},
                           {43200, tick_12h},
                           {86400, tick_24h} ]).
 
@@ -126,7 +129,7 @@ observe(Event, Observer, Priority, Host) when is_atom(Host) ->
 
 %% @doc Detach all observers and delete the event
 detach_all(Event, #context{notifier=Notifier}) ->
-    gen_server:cast(Notifier, {'detach_all', Event}).
+    gen_server:call(Notifier, {'detach_all', Event}).
 
 %% @doc Unsubscribe from an event. Observer is a {M,F} or pid()
 detach(Event, Observer, #context{notifier=Notifier}) ->
@@ -154,23 +157,34 @@ get_observers(Event, #context{host=Host}) ->
 
 %% @doc Cast the event to all observers. The prototype of the observer is: f(Msg, Context) -> void
 notify(Msg, Context) ->
-    Observers = get_observers(Msg, Context),
-    AsyncContext = z_context:prune_for_async(Context),
-    F = fun() ->
-        lists:foreach(fun(Obs) -> notify_observer(Msg, Obs, false, AsyncContext) end, Observers)
-    end,
-    spawn(F),
-    ok.
+    case get_observers(Msg, Context) of
+        [] -> ok;
+        Observers ->
+            AsyncContext = z_context:prune_for_async(Context),
+            F = fun() ->
+                    lists:foreach(fun(Obs) -> notify_observer(Msg, Obs, false, AsyncContext) end, Observers)
+            end,
+            spawn(F),
+            ok
+    end.
+
+%% @doc Cast the event to all observers. The prototype of the observer is: f(Msg, Context) -> void
+notify_sync(Msg, Context) ->
+    case get_observers(Msg, Context) of
+        [] -> 
+            ok;
+        Observers ->
+            lists:foreach(fun(Obs) -> notify_observer(Msg, Obs, false, Context) end, Observers)
+    end.
 
 %% @doc Cast the event to the first observer. The prototype of the observer is: f(Msg, Context) -> void
 notify1(Msg, Context) ->
-    Observers = get_observers(Msg, Context),
-    AsyncContext = z_context:prune_for_async(Context),
-    case Observers of
+    case get_observers(Msg, Context) of
+        [] -> ok;
         [Obs|_] -> 
+            AsyncContext = z_context:prune_for_async(Context),
             F = fun() -> notify_observer(Msg, Obs, false, AsyncContext) end,
-            spawn(F);
-        [] -> ok
+            spawn(F)
     end.
 
 
@@ -231,6 +245,10 @@ foldr(Msg, Acc0, Context) ->
 %% @doc Initiates the server, creates a new observer list
 init(Args) ->
     {host, Host} = proplists:lookup(host, Args),
+    lager:md([
+        {site, Host},
+        {module, ?MODULE}
+      ]),
     Timers = [ timer:send_interval(Time * 1000, {tick, Msg}) || {Time, Msg} <- ?TIMER_INTERVAL ],
     State = #state{observers=undefined, timers=Timers, host=Host},
     {ok, State}.
@@ -268,6 +286,13 @@ handle_call({'detach', Event, Observer}, _From, State) ->
     end,
     {reply, ok, State};
 
+%% @doc Detach all observer from an event
+handle_call({'detach_all', Event}, _From, State) ->
+    Event1 = case is_tuple(Event) of true -> element(1,Event); false -> Event end,
+    ets:delete(State#state.observers, Event1),  
+    {reply, ok, State};
+
+
 %% @doc Trap unknown calls
 handle_call(Message, _From, State) ->
     {stop, {unknown_call, Message}, State}.
@@ -275,12 +300,6 @@ handle_call(Message, _From, State) ->
 %% @spec handle_cast(Msg, State) -> {noreply, State} |
 %%                                  {noreply, State, Timeout} |
 %%                                  {stop, Reason, State}
-%% @doc Detach all observer from an event
-handle_cast({'detach_all', Event}, State) ->
-    Event1 = case is_tuple(Event) of true -> element(1,Event); false -> Event end,
-    ets:delete(State#state.observers, Event1),  
-    {noreply, State};
-
 %% @doc Trap unknown casts
 handle_cast(Message, State) ->
     {stop, {unknown_cast, Message}, State}.
@@ -352,16 +371,17 @@ notify_observer(Msg, {_Prio, Pid}, IsCall, Context) when is_pid(Pid) ->
             false ->
                 gen_server:cast(Pid, {Msg, Context})
         end
-    catch M:E ->
+    catch EM:E ->
         case z_utils:is_process_alive(Pid) of
             false ->
-                ?ERROR("Error notifying ~p with event ~p. Detaching pid.", [Pid, Msg]),
+                lager:error("~p: Error notifying ~p with event ~p. Error ~p:~p. Detaching pid. (~p)", 
+                            [z_context:site(Context), Pid, Msg, EM, E, erlang:get_stacktrace()]),
                 detach(msg_event(Msg), Pid, Context);
             true ->
                 % Assume transient error
                 nop
         end,
-        {error, {notify_observer, Pid, Msg, M, E}}
+        {error, {notify_observer, Pid, Msg, EM, E}}
     end;
 notify_observer(Msg, {_Prio, {M,F}}, _IsCall, Context) ->
     M:F(Msg, Context);
@@ -371,7 +391,8 @@ notify_observer(Msg, {_Prio, {M,F,[Pid]}}, _IsCall, Context) when is_pid(Pid) ->
     catch EM:E ->
         case z_utils:is_process_alive(Pid) of
             false ->
-                ?ERROR("Error notifying ~p with event ~p. Detaching pid.", [{M,F,Pid}, Msg]),
+                lager:error("~p: Error notifying ~p with event ~p. Error ~p:~p. Detaching pid. (~p)", 
+                            [z_context:site(Context), {M,F,Pid}, Msg, EM, E, erlang:get_stacktrace()]),
                 detach(msg_event(Msg), {M,F,[Pid]}, Context);
             true ->
                 % Assume transient error
@@ -390,10 +411,18 @@ notify_observer_fold(Msg, {_Prio, Fun}, Acc, Context) when is_function(Fun) ->
 notify_observer_fold(Msg, {_Prio, Pid}, Acc, Context) when is_pid(Pid) ->
     try
         gen_server:call(Pid, {Msg, Acc, Context}, ?TIMEOUT)
-    catch M:E ->
-        ?ERROR("Error folding ~p with event ~p. Detaching pid.", [Pid, Msg]),
-        detach(msg_event(Msg), Pid, Context),
-        {error, {notify_observer_fold, Pid, Msg, M, E}}
+    catch EM:E ->
+        case z_utils:is_process_alive(Pid) of
+            false ->
+                lager:error("~p: Error folding ~p with event ~p. Error ~p:~p. Detaching pid. (~p)", 
+                            [z_context:site(Context), Pid, Msg, EM, E, erlang:get_stacktrace()]),
+                detach(msg_event(Msg), Pid, Context);
+            true ->
+                % Assume transient error
+                lager:error("~p: Error folding ~p with event ~p. Error ~p:~p (~p)", 
+                            [z_context:site(Context), Pid, Msg, EM, E, erlang:get_stacktrace()])
+        end,
+        Acc
     end;
 notify_observer_fold(Msg, {_Prio, {M,F}}, Acc, Context) ->
     M:F(Msg, Acc, Context);
@@ -401,9 +430,17 @@ notify_observer_fold(Msg, {_Prio, {M,F,[Pid]}}, Acc, Context) when is_pid(Pid) -
     try
         M:F(Pid, Msg, Acc, Context)
     catch EM:E ->
-        ?ERROR("Error folding ~p with event ~p. Detaching pid.", [{M,F,Pid}, Msg]),
-        detach(msg_event(Msg), {M,F,[Pid]}, Context),
-        {error, {notify_observer, Pid, Msg, EM, E}}
+        case z_utils:is_process_alive(Pid) of
+            false ->
+                lager:error("~p: Error folding ~p with event ~p. Error ~p:~p. Detaching pid. (~p)", 
+                            [z_context:site(Context), {M,F,Pid}, Msg, EM, E, erlang:get_stacktrace()]),
+                detach(msg_event(Msg), {M,F,[Pid]}, Context);
+            true ->
+                % Assume transient error
+                lager:error("~p: Error folding ~p with event ~p. Error ~p:~p (~p)", 
+                            [z_context:site(Context), {M,F,Pid}, Msg, EM, E, erlang:get_stacktrace()])
+        end,
+        Acc
     end;
 notify_observer_fold(Msg, {_Prio, {M,F,Args}}, Acc, Context) ->
     erlang:apply(M, F, Args++[Msg, Acc, Context]).

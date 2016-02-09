@@ -68,19 +68,30 @@ scan(Context) ->
 %%                     {stop, Reason}
 %% @doc Initiates the server.  Options are: dropbox_dir, processing_dir, unhandled_dir, interval, max_age and min_age
 init(SiteProps) ->
-    Host     = proplists:get_value(host, SiteProps),
-    Context  = z_context:new(Host),
+    Host = proplists:get_value(host, SiteProps),
+    lager:md([
+        {site, Host},
+        {module, ?MODULE}
+      ]),
+    Context = z_context:new(Host),
 	DefaultDropBoxDir = z_path:files_subdir_ensure("dropbox", Context),
 	DefaultProcessingDir = z_path:files_subdir_ensure("processing", Context),
 	DefaultUnhandledDir = z_path:files_subdir_ensure("unhandled", Context),
     DropBox  = string:strip(proplists:get_value(dropbox_dir,            SiteProps, DefaultDropBoxDir),    right, $/), 
     ProcDir  = string:strip(proplists:get_value(dropbox_processing_dir, SiteProps, DefaultProcessingDir), right, $/), 
     UnDir    = string:strip(proplists:get_value(dropbox_unhandled_dir,  SiteProps, DefaultUnhandledDir),  right, $/), 
+    State    = #state{
+                    dropbox_dir=DropBox, 
+                    processing_dir=ProcDir, 
+                    unhandled_dir=UnDir, 
+                    min_age = proplists:get_value(dropbox_min_age, SiteProps, 10), 
+                    max_age = proplists:get_value(dropbox_max_age, SiteProps, 3600), 
+                    host=Host, 
+                    context=Context
+                },
     Interval = proplists:get_value(dropbox_interval, SiteProps, 10000),
-    MinAge   = proplists:get_value(dropbox_min_age, SiteProps, 10),
-    MaxAge   = proplists:get_value(dropbox_max_age, SiteProps, 3600),
-    State    = #state{dropbox_dir=DropBox, processing_dir=ProcDir, unhandled_dir=UnDir, min_age=MinAge, max_age=MaxAge, host=Host, context=Context},
     timer:apply_interval(Interval, ?MODULE, scan, [Context]),
+    gen_server:cast(self(), cleanup),
     {ok, State}.
 
 
@@ -103,7 +114,15 @@ handle_cast(scan, State) ->
     do_scan(State),
     z_utils:flush_message({'$gen_cast', scan}),
     {noreply, State};
-    
+
+% Move all files in the processing directory to the unhandled directory
+handle_cast(cleanup, #state{processing_dir=ProcDir, unhandled_dir=UnDir} = State) ->
+    lists:foreach(fun(F) -> 
+                       move_file(ProcDir, F, true, UnDir)
+                  end,
+                  scan_directory(ProcDir)),
+    {noreply, State};
+
 %% @doc Trap unknown casts
 handle_cast(Message, State) ->
     {stop, {unknown_cast, Message}, State}.
@@ -153,10 +172,12 @@ do_scan(State) ->
     SafeDropFiles = lists:foldl(fun(F, Acc)-> min_age_check(F, MinAge, Acc) end,
                                 [],
                                 AllDropFiles), 
-    Moved      = lists:map(fun(F) -> move_file(DropDir, F, false, ProcDir) end, SafeDropFiles),
+    Moved      = lists:map(fun(F) -> {F,move_file(DropDir, F, false, ProcDir)} end, SafeDropFiles),
     ToProcess1 = lists:foldl(   fun
-                                    ({ok, File}, Acc) -> [File|Acc];
-                                    ({error, _Reason}, Acc) -> Acc
+                                    ({_, {ok, File}}, Acc) -> [File|Acc];
+                                    ({F, {error, Reason}}, Acc) ->
+                                        lager:warning("z_dropbox: Failed to move file: ~p to ~p: ~p", [F, ProcDir, Reason]),
+                                        Acc
                                 end,
                                 ToProcess,
                                 Moved),

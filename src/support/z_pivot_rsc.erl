@@ -1,8 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009-2013 Marc Worrell
+%% @copyright 2009-2015 Marc Worrell
 %% @doc Pivoting server for the rsc table. Takes care of full text indices. Polls the pivot queue for any changed resources.
 
-%% Copyright 2009-2013 Marc Worrell
+%% Copyright 2009-2015 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@
 -export([
     poll/1,
     pivot/2,
+    pivot_delay/1,
     pivot_resource_update/4,
     queue_all/1,
     insert_queue/2,
@@ -38,11 +39,19 @@
     insert_task/3,
     insert_task/4,
     insert_task/5,
-    
     insert_task_after/6,
+    get_task/1,
+    get_task/2,
+    get_task/3,
+    get_task/4,
+    delete_task/3,
+    delete_task/4,
     
     pivot_resource/2,
+    stemmer_language/1,
+    cleanup_tsv_text/1,
     pg_lang/1,
+    pg_lang_extra/1,
     get_pivot_data/2,
 
     define_custom_pivot/3,
@@ -52,16 +61,17 @@
 -include("zotonic.hrl").
 
 % Interval (in seconds) to check if there are any items to be pivoted.
--define(PIVOT_POLL_INTERVAL, 10).
+-define(PIVOT_POLL_INTERVAL_FAST, 2).
+-define(PIVOT_POLL_INTERVAL_SLOW, 20).
 
 % Number of queued ids taken from the queue at one go
--define(POLL_BATCH, 500).
+-define(POLL_BATCH, 50).
 
 %% Minimum day, inserted for date start search ranges
 -define(EPOCH_START, {{-4000,1,1},{0,0,0}}).
 
 
--record(state, {context, timer}).
+-record(state, {site, is_pivot_delay = false}).
 
 
 %% @doc Poll the pivot queue for the database in the context
@@ -71,9 +81,14 @@ poll(Context) ->
 
 
 %% @doc An immediate pivot request for a resource
-%% @spec pivot(Id, Context) -> void()
+-spec pivot(integer(), #context{}) -> ok.
 pivot(Id, Context) ->
     gen_server:cast(Context#context.pivot_server, {pivot, Id}).
+
+%% @doc Delay the next pivot, useful when performing big updates
+-spec pivot_delay(#context{}) -> ok.
+pivot_delay(Context) ->
+    gen_server:cast(Context#context.pivot_server, pivot_delay).
 
 
 %% @doc Return a modified property list with fields that need immediate pivoting on an update.
@@ -130,57 +145,108 @@ insert_queue(Id, Context) ->
                  set serial = serial + 1
                  where rsc_id = $1", [Id], Context) of
         1 -> ok;
-        0 -> z_db:q("insert into rsc_pivot_queue (rsc_id, due, is_update) values ($1, now(), true)", [Id], Context)
+        0 -> z_db:q("insert into rsc_pivot_queue (rsc_id, due, is_update) values ($1, current_timestamp, true)", [Id], Context)
     end.
     
 
 %% @doc Insert a slow running pivot task. For example syncing category numbers after an category update.
 insert_task(Module, Function, Context) ->
-    insert_task(Module, Function, z_ids:id(), [], Context).
+    insert_task(Module, Function, undefined, [], Context).
 
 %% @doc Insert a slow running pivot task. Use the UniqueKey to prevent double queued tasks.
 insert_task(Module, Function, UniqueKey, Context) ->
     insert_task(Module, Function, UniqueKey, [], Context).
     
 %% @doc Insert a slow running pivot task with unique key and arguments.
+insert_task(Module, Function, undefined, Args, Context) ->
+    insert_task(Module, Function, z_ids:id(), Args, Context);
 insert_task(Module, Function, UniqueKey, Args, Context) ->
     insert_task_after(undefined, Module, Function, UniqueKey, Args, Context).
 
 %% @doc Insert a slow running pivot task with unique key and arguments that should start after Seconds seconds.
-insert_task_after(Seconds, Module, Function, UniqueKey, Args, Context) ->
-    z_db:transaction(fun(Ctx) -> insert_transaction(Seconds, Module, Function, UniqueKey, Args, Ctx) end, Context).
+insert_task_after(SecondsOrDate, Module, Function, UniqueKey, Args, Context) ->
+    z_db:transaction(fun(Ctx) -> insert_transaction(SecondsOrDate, Module, Function, UniqueKey, Args, Ctx) end, Context).
 
-    insert_transaction(Seconds, Module, Function, UniqueKey, Args, Context) ->
-        Due = case Seconds of 
-                undefined -> undefined; 
-                _ -> calendar:gregorian_seconds_to_datetime(
-                        calendar:datetime_to_gregorian_seconds(calendar:local_time()) + Seconds)
-              end,
+    insert_transaction(SecondsOrDate, Module, Function, UniqueKey, Args, Context) ->
+        Due = to_utc_date(SecondsOrDate),
+        UniqueKeyBin = z_convert:to_binary(UniqueKey), 
         Fields = [
             {module, Module},
             {function, Function},
-            {key, UniqueKey},
+            {key, UniqueKeyBin},
             {args, Args},
             {due, Due}
         ],
         case z_db:q1("select id 
                       from pivot_task_queue 
                       where module = $1 and function = $2 and key = $3", 
-                    [Module, Function, UniqueKey], Context) of
+                     [Module, Function, UniqueKeyBin], 
+                     Context) 
+        of
             undefined -> 
                 z_db:insert(pivot_task_queue, Fields, Context);
             Id when is_integer(Id) -> 
                 case Due of
-                    undefined -> 
-                        nop;
-                    _ ->
-                        z_db:q("update pivot_task_queue 
-                                set due = $1 
-                                where id = $2", 
-                               [Due, Id], Context)
+                    undefined -> nop;
+                    _ -> z_db:update(pivot_task_queue, Id, Fields, Context)
                 end,
                 {ok, Id}
         end.
+
+
+get_task(Context) ->
+    z_db:assoc("
+            select *
+            from pivot_task_queue",
+            Context).
+
+get_task(Module, Context) ->
+    z_db:assoc("
+            select *
+            from pivot_task_queue
+            where module = $1", 
+            [Module], 
+            Context).
+
+get_task(Module, Function, Context) ->
+    z_db:assoc("
+            select *
+            from pivot_task_queue
+            where module = $1 and function = $2", 
+            [Module, Function], 
+            Context).
+
+get_task(Module, Function, UniqueKey, Context) ->
+    UniqueKeyBin = z_convert:to_binary(UniqueKey), 
+    z_db:assoc_row("
+            select *
+            from pivot_task_queue
+            where module = $1 and function = $2 and key = $3", 
+            [Module, Function, UniqueKeyBin], 
+            Context).
+
+to_utc_date(undefined) ->
+    undefined;
+to_utc_date(N) when is_integer(N) ->
+    calendar:gregorian_seconds_to_datetime(
+        calendar:datetime_to_gregorian_seconds(calendar:universal_time()) + N);
+to_utc_date({Y,M,D} = YMD) when is_integer(Y), is_integer(M), is_integer(D) ->
+    {YMD,{0,0,0}};
+to_utc_date({{Y,M,D},{H,I,S}} = Date) when is_integer(Y), is_integer(M), is_integer(D), is_integer(H), is_integer(I), is_integer(S) ->
+    Date.
+
+
+delete_task(Module, Function, Context) ->
+    z_db:q("delete from pivot_task_queue where module = $1 and function = $2", 
+           [Module, Function], 
+           Context).
+
+delete_task(Module, Function, UniqueKey, Context) ->
+    UniqueKeyBin = z_convert:to_binary(UniqueKey), 
+    z_db:q("delete from pivot_task_queue where module = $1 and function = $2 and key = $3",
+           [Module, Function, UniqueKeyBin], 
+           Context).
+
 
 %%====================================================================
 %% API
@@ -190,7 +256,7 @@ insert_task_after(Seconds, Module, Function, UniqueKey, Args, Context) ->
 start_link(SiteProps) ->
     {host, Host} = proplists:lookup(host, SiteProps),
     Name = z_utils:name_for_host(?MODULE, Host),
-    gen_server:start_link({local, Name}, ?MODULE, SiteProps, []).
+    gen_server:start_link({local, Name}, ?MODULE, Host, []).
 
 
 %%====================================================================
@@ -202,10 +268,13 @@ start_link(SiteProps) ->
 %%                     ignore               |
 %%                     {stop, Reason}
 %% @doc Initiates the server.
-init(SiteProps) ->
-    Context = z_context:new(proplists:get_value(host, SiteProps)),
-    Timer = timer:apply_interval(?PIVOT_POLL_INTERVAL * 1000, ?MODULE, poll, [Context]),
-    {ok, #state{timer=Timer, context=Context}}.
+init(Host) ->
+    lager:md([
+        {site, Host},
+        {module, ?MODULE}
+      ]),
+    timer:send_after(?PIVOT_POLL_INTERVAL_SLOW*1000, poll),
+    {ok, #state{site=Host, is_pivot_delay=false}}.
 
 
 %% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -224,29 +293,37 @@ handle_call(Message, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @doc Poll the queue for the default host
 handle_cast(poll, State) ->
-    flush(),
-	Context1 = z_trans_server:set_context_table(State#state.context),
-    do_poll(Context1),
-    {noreply, State#state{context=Context1}};
+    do_poll(z_context:new(State#state.site)),
+    {noreply, State};
 
 
 %% @doc Poll the queue for a particular database
 handle_cast({pivot, Id}, State) ->
-	Context1 = z_trans_server:set_context_table(State#state.context),
-    do_pivot(Id, Context1),
-    {noreply, State#state{context=Context1}};
+    do_pivot(Id, z_context:new(State#state.site)),
+    {noreply, State};
 
+%% @doc Delay the next pivot, useful when performing big updates
+handle_cast(pivot_delay, State) ->
+    {noreply, State#state{is_pivot_delay=true}};
 
 %% @doc Trap unknown casts
 handle_cast(Message, State) ->
     {stop, {unknown_cast, Message}, State}.
 
-
-
 %% @spec handle_info(Info, State) -> {noreply, State} |
 %%                                       {noreply, State, Timeout} |
 %%                                       {stop, Reason, State}
 %% @doc Handling all non call/cast messages
+handle_info(poll, #state{is_pivot_delay=true} = State) ->
+    timer:send_after(?PIVOT_POLL_INTERVAL_SLOW*1000, poll),
+    {noreply, State#state{is_pivot_delay=false}};
+handle_info(poll, State) ->
+    case do_poll(z_context:new(State#state.site)) of
+        true ->  timer:send_after(?PIVOT_POLL_INTERVAL_FAST*1000, poll);
+        false -> timer:send_after(?PIVOT_POLL_INTERVAL_SLOW*1000, poll)
+    end,
+    {noreply, State};
+
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -255,13 +332,11 @@ handle_info(_Info, State) ->
 %% terminate. It should be the opposite of Module:init/1 and do any necessary
 %% cleaning up. When it returns, the gen_server terminates with Reason.
 %% The return value is ignored.
-terminate(_Reason, State) ->
-    timer:cancel(State#state.timer),
+terminate(_Reason, _State) ->
     ok.
 
 %% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
 %% @doc Convert process state when code is changed
-
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
@@ -272,16 +347,36 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Poll a database for any queued updates.
 do_poll(Context) ->
-    % Perform some queued tasks
+    DidTask = do_poll_task(Context),
+    do_poll_queue(Context) or DidTask.
+
+do_poll_task(Context) ->
     case poll_task(Context) of
         {TaskId, Module, Function, _Key, Args} ->
             try
                 case erlang:apply(Module, Function, z_convert:to_list(Args) ++ [Context]) of
-                    {delay, Seconds} ->
-                        Due = calendar:gregorian_seconds_to_datetime(
-                                calendar:datetime_to_gregorian_seconds(calendar:local_time()) + Seconds
-                              ),
+                    {delay, Delay} ->
+                        Due = if
+                                is_integer(Delay) ->
+                                    calendar:gregorian_seconds_to_datetime(
+                                        calendar:datetime_to_gregorian_seconds(calendar:universal_time()) + Delay);
+                                is_tuple(Delay) ->
+                                    Delay
+                              end,
                         z_db:q("update pivot_task_queue set due = $1 where id = $2", [Due, TaskId], Context);
+                    {delay, Delay, NewArgs} ->
+                        Due = if
+                                is_integer(Delay) ->
+                                    calendar:gregorian_seconds_to_datetime(
+                                        calendar:datetime_to_gregorian_seconds(calendar:universal_time()) + Delay);
+                                is_tuple(Delay) ->
+                                    Delay
+                              end,
+                        Fields = [
+                            {due, Due},
+                            {args, NewArgs}
+                        ],
+                        z_db:update(pivot_task_queue, TaskId, Fields, Context);
                     _OK ->
                         z_db:q("delete from pivot_task_queue where id = $1", [TaskId], Context)
                 end
@@ -295,49 +390,62 @@ do_poll(Context) ->
                     ?zWarning(io_lib:format("Task failed(~p:~p): ~p:~p(~p) ~p~n", 
                                 [Error, Reason, Module, Function, Args, erlang:get_stacktrace()]), 
                                 Context)
-            end;
+            end,
+            true;
         empty ->
-            nop
-    end,
-    % Pivot some resources
+            false
+    end.
+
+do_poll_queue(Context) ->
     case fetch_queue(Context) of
-        [] -> ok;
+        [] ->
+            false;
         Qs ->
             F = fun(Ctx) ->
                         [ {Id, catch pivot_resource(Id, Ctx)} || {Id,_Serial} <- Qs]
                 end,
             case z_db:transaction(F, Context) of
-                {rollback, PivotError} -> ?ERROR("Pivot error: ~p: ~p~n", [PivotError, Qs]);
+                {rollback, PivotError} -> 
+                    lager:error("[~p] Pivot error: ~p: ~p~n", 
+                                [z_context:site(Context), PivotError, Qs]);
                 L when is_list(L) -> 
+                    lists:map(fun({Id, _Serial}) ->
+                                    IsA = m_rsc:is_a(Id, Context),
+                                    z_notifier:notify(#rsc_pivot_done{id=Id, is_a=IsA}, Context),
+                                    % Flush the resource, as some synthesized attributes might depend on the pivoted fields.
+                                    % @todo Only do this if some fields are changed
+                                    m_rsc_update:flush(Id, Context)
+                              end, Qs),
                     lists:map(fun({_Id, ok}) -> ok; 
                                  ({Id,Error}) -> log_error(Id, Error, Context) end, 
                               L),
                     delete_queue(Qs, Context)
-            end
+            end,
+            true
     end.
 
-    log_error(Id, Error, Context) ->
-        ?zWarning(io_lib:format("Pivot error ~p: ~p", [Id, Error]), Context).
+log_error(Id, Error, Context) ->
+    ?zWarning(io_lib:format("Pivot error ~p: ~p", [Id, Error]), Context).
 
-    %% @doc Fetch the next task uit de task queue, if any.
-    poll_task(Context) ->
-        case z_db:q_row("select id, module, function, key, props 
-                         from pivot_task_queue 
-                         where due is null
-                            or due < now()
-                         order by id asc 
-                         limit 1", Context) 
-        of
-            {Id,Module,Function,Key,Props} ->
-                Args = case Props of
-                    [{args,Args0}] -> Args0;
-                    _ -> []
-                end,
-                %% @todo We delete the task right now, this needs to be changed to a deletion after the task has been running.
-                {Id, z_convert:to_atom(Module), z_convert:to_atom(Function), Key, Args};
-            undefined ->
-                empty
-        end.
+%% @doc Fetch the next task uit de task queue, if any.
+poll_task(Context) ->
+    case z_db:q_row("select id, module, function, key, props 
+                     from pivot_task_queue 
+                     where due is null
+                        or due < current_timestamp
+                     order by due asc 
+                     limit 1", Context) 
+    of
+        {Id,Module,Function,Key,Props} ->
+            Args = case Props of
+                [{args,Args0}] -> Args0;
+                _ -> []
+            end,
+            %% @todo We delete the task right now, this needs to be changed to a deletion after the task has been running.
+            {Id, z_convert:to_atom(Module), z_convert:to_atom(Function), Key, Args};
+        undefined ->
+            empty
+    end.
     
 
 %% @doc Pivot a specific id, delete its queue record if present
@@ -351,7 +459,7 @@ do_pivot(Id, Context) ->
 %% pivot request might come in while we are pivoting.
 %% @spec fetch_queue(Context) -> [{Id,Serial}]
 fetch_queue(Context) ->
-    z_db:q("select rsc_id, serial from rsc_pivot_queue where due < now() - '10 second'::interval order by is_update, due limit $1", [?POLL_BATCH], Context).
+    z_db:q("select rsc_id, serial from rsc_pivot_queue where due < current_timestamp - '10 second'::interval order by is_update, due limit $1", [?POLL_BATCH], Context).
 
 %% @doc Fetch the serial of id's queue record
 fetch_queue_id(Id, Context) ->
@@ -379,10 +487,11 @@ pivot_resource(Id, Context) ->
     R = get_pivot_rsc(Id, Context),
     {ObjIds, CatIds, [TA,TB,TC,TD]} = get_pivot_data(Id, R, Context),
 
-    {SqlA, ArgsA} = to_tsv(TA, $A, []),
-    {SqlB, ArgsB} = to_tsv(TB, $B, ArgsA),
-    {SqlC, ArgsC} = to_tsv(TC, $C, ArgsB),
-    {SqlD, ArgsD} = to_tsv(TD, $D, ArgsC),
+    StemmerLanguage = stemmer_language(Context),
+    {SqlA, ArgsA} = to_tsv(TA, $A, [], StemmerLanguage),
+    {SqlB, ArgsB} = to_tsv(TB, $B, ArgsA, StemmerLanguage),
+    {SqlC, ArgsC} = to_tsv(TC, $C, ArgsB, StemmerLanguage),
+    {SqlD, ArgsD} = to_tsv(TD, $D, ArgsC, StemmerLanguage),
 
     TsvObj = [ [" zpo",integer_to_list(OId)] || OId <- ObjIds ],
     TsvCat = [ [" zpc",integer_to_list(CId)] || CId <- CatIds ],
@@ -409,7 +518,9 @@ pivot_resource(Id, Context) ->
         {pivot_date_end, proplists:get_value(pivot_date_end, PropsPrePivoted)},
         {pivot_date_start_month_day, proplists:get_value(pivot_date_start_month_day, PropsPrePivoted)},
         {pivot_date_end_month_day, proplists:get_value(pivot_date_end_month_day, PropsPrePivoted)},
-        {pivot_title, proplists:get_value(pivot_title, PropsPrePivoted)}
+        {pivot_title, proplists:get_value(pivot_title, PropsPrePivoted)},
+        {pivot_location_lat, get_float(location_lat, R)},
+        {pivot_location_lng, get_float(location_lng, R)}
     ],
     
     KVsFolded = z_notifier:foldr(#pivot_fields{id=Id, rsc=R}, KVs, Context),
@@ -438,56 +549,69 @@ pivot_resource(Id, Context) ->
                                       {"update rsc set ",[]},
                                       KVsChanged),
 
-            1 = z_db:q1(iolist_to_binary([Sql, " where id = $", integer_to_list(length(Args)+1)]),
-                        lists:reverse([Id|Args]),
-                        Context)
+            z_db:q1(iolist_to_binary([Sql, " where id = $", integer_to_list(length(Args)+1)]),
+                    lists:reverse([Id|Args]),
+                    Context)
     end,
     
     CustomPivots = z_notifier:map(#custom_pivot{id=Id}, Context),
-    [ ok = update_custom_pivot(Id, Res, Context) || Res <- CustomPivots ],
-
-    IsA = m_rsc:is_a(Id, Context),
-    z_notifier:notify(#rsc_pivot_done{id=Id, is_a=IsA}, Context),
-
-    % Flush the resource, as some synthesized attributes might depend on the pivoted fields.
-    % @todo Make this a callback, which should check on the KVsChanged
-    m_rsc_update:flush(Id, Context),
+    lists:foreach(
+            fun
+                (undefined) -> ok;
+                (none) -> ok;
+                ({error, _} = Error) ->
+                    lager:error("[~p] Error return from custom pivot of ~p, error: ~p",
+                                [z_context:site(Context), Id, Error]);
+                (Res) ->
+                    update_custom_pivot(Id, Res, Context)
+            end,
+            CustomPivots),
     ok.
 
 
-    %% Make the setweight(to_tsvector()) parts of the update statement
-    to_tsv([], _Level, Args) ->
-        {"tsvector('')", Args};
-    to_tsv(List, Level, Args) -> 
-        {Sql1, Args1} = lists:foldl(
-            fun ({Lang,Text}, {Sql, As}) -> 
-                N   = length(As) + 1,
-                As1 = As ++ [Text],
-                {[["setweight(to_tsvector('pg_catalog.",pg_lang(Lang),"', $",integer_to_list(N),"), '",Level,"')"] | Sql], As1}
-            end,
-            {[], Args},
-            List),
-    
-        {z_utils:combine(" || ", Sql1), Args1}.
-            
+%% Make the setweight(to_tsvector()) parts of the update statement
+to_tsv([], _Level, Args, _StemmingLanguage) ->
+    {"tsvector('')", Args};
+to_tsv(List, Level, Args, StemmingLanguage) -> 
+    {Sql1, Args1} = lists:foldl(
+        fun ({_Lang,Text}, {Sql, As}) -> 
+            N   = length(As) + 1,
+            As1 = As ++ [cleanup_tsv_text(z_html:unescape(z_html:strip(Text)))],
+            {[["setweight(to_tsvector('pg_catalog.",StemmingLanguage,"', $",integer_to_list(N),"), '",Level,"')"] | Sql], As1}
+        end,
+        {[], Args},
+        List),
+    {z_utils:combine(" || ", Sql1), Args1}.
 
-    %      new.tsv := 
-    %        setweight(to_tsvector('pg_catalog.dutch', coalesce(new.title_nl,'')), 'A') || 
-    %        setweight(to_tsvector('pg_catalog.dutch', coalesce(new.desc_nl,'')),  'D') ||
-    %        setweight(to_tsvector('pg_catalog.english', coalesce(new.title_en,'')), 'A') || 
-    %        setweight(to_tsvector('pg_catalog.english', coalesce(new.desc_en,'')),  'D'); 
+cleanup_tsv_text(Text) when is_binary(Text) ->
+    lists:foldl(
+        fun (R, Acc) ->
+            binary:replace(Acc, R, <<" ">>, [global])
+        end,
+        Text,
+        [<<"-">>, <<"/">>]).   
 
+get_float(K, Ps) ->
+    case proplists:get_value(K, Ps) of
+        undefined -> undefined;
+        L when is_list(L); is_binary(L) -> z_convert:to_float(iolist_to_binary(L));
+        F when is_float(F) -> F;
+        N when is_integer(N) -> N * 1.0
+    end.
 
 truncate(undefined, _Len) -> undefined;
-truncate(S, Len) -> iolist_to_binary(z_string:to_lower(truncate(S, Len, Len))).
+truncate(S, Len) -> iolist_to_binary(
+                        z_string:trim(
+                            z_string:to_lower(
+                                truncate_1(S, Len, Len)))).
     
-    truncate(_S, 0, _Bytes) ->
-        "";
-    truncate(S, Utf8Len, Bytes) ->
-        case z_string:truncate(S, Utf8Len, "") of
-            T when length(T) > Bytes -> truncate(T, Utf8Len-1, Bytes);
-            L -> L
-        end.
+truncate_1(_S, 0, _Bytes) ->
+    "";
+truncate_1(S, Utf8Len, Bytes) ->
+    case z_string:truncate(S, Utf8Len, "") of
+        T when length(T) > Bytes -> truncate_1(T, Utf8Len-1, Bytes);
+        L -> L
+    end.
     
 
 %% @doc Fetch the date range from the record
@@ -562,10 +686,17 @@ split_lang([Text|Rest], Dict, Context) ->
 
 %% @doc Fetch the title of all things related to the resource
 related(Id, Context) ->
-    Ids = lists:usort(m_edge:objects(Id, Context)),
+    Edges = lists:filter(
+                    fun({Predicate, _Edges}) ->
+                        not z_convert:to_bool(m_rsc:p_no_acl(m_rsc:rid(Predicate, Context), is_object_noindex, Context))
+                    end,
+                    m_edge:get_edges(Id, Context)),
+    Ids = lists:usort(
+                lists:flatten(
+                    [ [ proplists:get_value(object_id, E) || E <- Es ] || {_Pred, Es} <- Edges])),
     Ids1 = z_notifier:foldr(#pivot_related{id=Id}, Ids, Context),
     IdsTexts = z_notifier:foldr(#pivot_related_text_ids{id=Id}, Ids, Context),
-    Texts = [ m_rsc:p(R, title, Context) || R <- IdsTexts ],
+    Texts = [ m_rsc:p_no_acl(R, title, Context) || R <- IdsTexts ],
     {Ids1, Texts}.
     
 
@@ -677,12 +808,78 @@ is_lang_neutral(_, _) -> false.
 %% postgresql. This language list is the intersection of the default
 %% catalogs of postgres with the languages supported by
 %% mod_translation.
+pg_lang(dk) -> "danish";
 pg_lang(nl) -> "dutch";
-pg_lang(de) -> "german";
+pg_lang(en) -> "english";
+pg_lang(fi) -> "finnish";
 pg_lang(fr) -> "french";
+pg_lang(de) -> "german";
+pg_lang(hu) -> "hungarian";
+pg_lang(it) -> "italian";
+pg_lang(no) -> "norwegian";
+pg_lang(ro) -> "romanian";
+pg_lang(ru) -> "russian";
 pg_lang(es) -> "spanish";
+pg_lang(se) -> "swedish";
 pg_lang(tr) -> "turkish";
+pg_lang(<<"dk">>) -> "danish";
+pg_lang(<<"nl">>) -> "dutch";
+pg_lang(<<"en">>) -> "english";
+pg_lang(<<"fi">>) -> "finnish";
+pg_lang(<<"fr">>) -> "french";
+pg_lang(<<"de">>) -> "german";
+pg_lang(<<"hu">>) -> "hungarian";
+pg_lang(<<"it">>) -> "italian";
+pg_lang(<<"no">>) -> "norwegian";
+pg_lang(<<"ro">>) -> "romanian";
+pg_lang(<<"ru">>) -> "russian";
+pg_lang(<<"es">>) -> "spanish";
+pg_lang(<<"se">>) -> "swedish";
+pg_lang(<<"tr">>) -> "turkish";
 pg_lang(_) -> "english".
+
+%% Map extra languages, these are from the i18n.language_stemmer configuration and not
+%% per default installed in PostgreSQL
+pg_lang_extra(Iso) ->
+    case iso639:lc2lang(z_convert:to_list(Iso)) of
+        <<"">> ->
+            pg_lang(Iso);
+        Lang ->
+            lists:takewhile(fun
+                                (C) when C >= $a, C =< $z -> true;
+                                (_) -> false
+                            end,
+                            z_convert:to_list(z_string:to_lower(Lang)))
+    end.
+
+% Default stemmers in a Ubuntu psql install:
+%
+%  pg_catalog | danish_stem     | snowball stemmer for danish language
+%  pg_catalog | dutch_stem      | snowball stemmer for dutch language
+%  pg_catalog | english_stem    | snowball stemmer for english language
+%  pg_catalog | finnish_stem    | snowball stemmer for finnish language
+%  pg_catalog | french_stem     | snowball stemmer for french language
+%  pg_catalog | german_stem     | snowball stemmer for german language
+%  pg_catalog | hungarian_stem  | snowball stemmer for hungarian language
+%  pg_catalog | italian_stem    | snowball stemmer for italian language
+%  pg_catalog | norwegian_stem  | snowball stemmer for norwegian language
+%  pg_catalog | portuguese_stem | snowball stemmer for portuguese language
+%  pg_catalog | romanian_stem   | snowball stemmer for romanian language
+%  pg_catalog | russian_stem    | snowball stemmer for russian language
+%  pg_catalog | simple          | simple dictionary: just lower case and check for stopword
+%  pg_catalog | spanish_stem    | snowball stemmer for spanish language
+%  pg_catalog | swedish_stem    | snowball stemmer for swedish language
+%  pg_catalog | turkish_stem    | snowball stemmer for turkish language
+
+%% @doc Return the language used for stemming the full text index.
+%%      We use a single stemming to prevent having seperate indexes per language.
+-spec stemmer_language(#context{}) -> string().
+stemmer_language(Context) ->
+    StemmingLanguage = m_config:get_value(i18n, language_stemmer, Context),
+    case z_utils:is_empty(StemmingLanguage) of
+        true -> pg_lang(z_trans:default_language(Context));
+        false -> pg_lang_extra(StemmingLanguage)
+    end.
 
 
 %% @spec define_custom_pivot(Module, columns(), Context) -> ok
@@ -695,27 +892,41 @@ define_custom_pivot(Module, Columns, Context) ->
         true ->
             ok;
         false ->
-            Fields = custom_columns(Columns),
-            Sql = "CREATE TABLE " ++ TableName ++ "(" ++
-                "id int NOT NULL," ++ Fields ++ " primary key(id))",
-            z_db:q(lists:flatten(Sql), Context),
-            z_db:q("ALTER TABLE " ++ TableName ++ " ADD CONSTRAINT fk_" ++ TableName ++ "_id FOREIGN KEY (id) REFERENCES rsc(id) ON UPDATE CASCADE ON DELETE CASCADE", Context),
-            
-            Indexable = lists:filter(fun({_,_}) -> true;
-                                        ({_,_,Opts}) -> not lists:member(noindex, Opts)
-                                     end,
-                                     Columns),
-            Idx = [ 
-                    begin
-                        K = element(1,Col),
-                        "CREATE INDEX " ++ z_convert:to_list(K) ++ "_key ON " 
-                        ++ TableName ++ "(" ++ z_convert:to_list(K) ++ ")"
-                    end
-                    || Col <- Indexable
-                ],
-            [z_db:q(Sql1, Context) || Sql1 <- Idx]
-    end,
-    ok.
+            ok = z_db:transaction(
+                    fun(Ctx) ->
+                        Fields = custom_columns(Columns),
+                        Sql = "CREATE TABLE " ++ TableName ++ "(" ++
+                              "id int NOT NULL," ++ Fields ++ " primary key(id))",
+
+                        [] = z_db:q(lists:flatten(Sql), Ctx),
+
+                        [] = z_db:q("ALTER TABLE " ++ TableName ++ 
+                                    " ADD CONSTRAINT fk_" ++ TableName ++ "_id " ++
+                                    " FOREIGN KEY (id) REFERENCES rsc(id) ON UPDATE CASCADE ON DELETE CASCADE", Ctx),
+                        
+                        Indexable = lists:filter(fun({_,_}) -> true;
+                                                    ({_,_,Opts}) -> not lists:member(noindex, Opts)
+                                                 end,
+                                                 Columns),
+                        Idx = [ 
+                                begin
+                                    K = element(1,Col),
+                                    "CREATE INDEX " ++ z_convert:to_list(K) ++ "_key ON " 
+                                    ++ TableName ++ "(" ++ z_convert:to_list(K) ++ ")"
+                                end
+                                || Col <- Indexable
+                            ],
+                        lists:foreach(
+                            fun(Sql1) ->
+                                [] = z_db:q(Sql1, Ctx)
+                            end,
+                            Idx),
+                        ok
+                    end,
+                    Context),
+            z_db:flush(Context),
+            ok
+    end.
 
 
 custom_columns(Cols) ->
@@ -729,9 +940,6 @@ custom_columns([{Name, Spec, _Opts}|Rest], Acc) ->
     custom_columns(Rest, [ [z_convert:to_list(Name), " ", Spec, ","] |  Acc]).
 
 
-
-update_custom_pivot(_Id, none, _Context) ->
-    ok;
 update_custom_pivot(Id, {Module, Columns}, Context) ->
     TableName = "pivot_" ++ z_convert:to_list(Module),
     case z_db:select(TableName, Id, Context) of
@@ -739,8 +947,7 @@ update_custom_pivot(Id, {Module, Columns}, Context) ->
             {ok, _} = z_db:insert(TableName, [{id, Id}|Columns], Context);
         {ok, _}  ->
             {ok, _} = z_db:update(TableName, Id, Columns, Context)
-    end,
-    ok.
+    end.
 
 
 %% @doc Lookup a custom pivot; give back the Id based on a column. Will always return the first Id found.
@@ -754,11 +961,3 @@ lookup_custom_pivot(Module, Column, Value, Context) ->
         [{Id}|_] -> Id
     end.
 
-
-%% @doc Flush all 'poll' messages in the message queue.  This is needed when waking up after sleep.
-flush() ->
-    receive
-        {'$gen_cast', poll} -> flush()
-    after 
-        0 -> ok
-    end.

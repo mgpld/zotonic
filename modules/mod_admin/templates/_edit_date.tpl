@@ -1,10 +1,20 @@
-<input type="text" style="width:80px" name="dt:ymd:{{ is_end }}:{{ name }}" value="{{ date|date:'Y-m-d' }}" class="do_datepicker" />
-<input type="text" style="width:40px" name="dt:hi:{{ is_end }}:{{ name }}" value="{{ date|date:'H:i' }}" />
-
-{# 
-<input type="text" style="width:32px" name="dt:y:{{ is_end }}:{{ name }}" value="{{ date|date:'Y' }}" />
-<input type="text" style="width:20px" name="dt:m:{{ is_end }}:{{ name }}" value="{{ date|date:'m' }}" />
-<input type="text" style="width:20px" name="dt:d:{{ is_end }}:{{ name }}" value="{{ date|date:'d' }}" /> &ndash;
-<input type="text" style="width:20px" name="dt:h:{{ is_end }}:{{ name }}" value="{{ date|date:'H' }}" /> :
-<input type="text" style="width:20px" name="dt:i:{{ is_end }}:{{ name }}" value="{{ date|date:'i' }}" />
-#}
+{% if is_editable %}
+    <input
+        type="text"
+        name="dt:ymd:{{ is_end }}:{{ name }}"
+        value="{{ date|date:'Y-m-d':date_is_all_day }}"
+        class="do_datepicker {{ class }} {{ date_class }} form-control"
+    />
+    <input  
+        type="text" 
+        name="dt:hi:{{ is_end }}:{{ name }}"
+        value="{% if not date_is_all_day %}{{ date|date:'H:i' }}{% endif %}" 
+        {% if date_is_all_day %}
+            style="display: none;"
+        {% endif %}
+        data-timepicker="timeFormat:'H:i',step:15,scrollDefaultTime:{% if is_end %}'18:00'{%else%}'08:30'{% endif %}"
+        class="input-mini do_timepicker {{ class }} {{ time_class }} form-control"
+    />
+{% else %}
+    <span class="date">{{ date|date:'Y-m-d':date_is_all_day }} {% if not date_is_all_day %}{{ date|date:'H:i' }}{% endif %}</span>
+{% endif %}

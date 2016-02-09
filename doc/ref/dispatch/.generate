@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 all=${0%/*}/meta-all-dispatch.csv
-rm $all
+rm -f $all
 
 # /path/to/zotonic/modules/<mod>/dispatch/*
 for d in `find $ZOTONIC_SRC/modules -name dispatch -type d | sort`
@@ -27,7 +27,7 @@ EOF
         fi
 
         cat <<EOF - $meta >> $all
-.. _all-dispatch-$mod:
+.. _all-$base:
 :ref:\`$mod\` (:ref:\`$dispatch <dispatch-$base>\`)
 EOF
 

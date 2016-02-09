@@ -1,18 +1,39 @@
 language: erlang
 otp_release:
-  - R15B01
-  - R14B04
-  - R14B03
-script: make all edocs
-before_install: git submodule update --init --recursive
-env:
-  - DB=postgres
+  - 18.0
+  - 17.4
+  - R16B
+
+addons:
+  apt:
+    packages:
+      - python-sphinx
+      - enchant
+
+install: make all edocs
+script:
+  - make all edocs
+  - make test
+  - make -C doc/ stubs
+  - make -C doc/ SPHINXOPTS='-nW' html
+sudo: false
 branches:
   only:
     - master
+    - release-0.13.x
+    - release-0.12.x
+    - release-0.11.x
 notifications:
   email:
-    recipients:
-      - zotonic-commits@googlegroups.com
+    # recipients:
+    #   - zotonic-commits@googlegroups.com
     on_success: change #[always|never|change] # default: change
     on_failure: always #[always|never|change] # default: always
+  irc:
+    channels:
+      - "chat.freenode.net#zotonic"
+    on_success: change #[always|never|change] # default: change
+    on_failure: always #[always|never|change] # default: always
+    template:
+      - "New commit on %{repository_name}/%{branch} by %{author}:  %{message} (%{commit}) "
+      - "Build details: %{build_url}"

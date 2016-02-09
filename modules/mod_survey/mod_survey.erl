@@ -21,8 +21,8 @@
 
 -mod_title("Survey").
 -mod_description("Create and publish questionnaires.").
--mod_prio(800).
--mod_schema(2).
+-mod_prio(400).
+-mod_schema(3).
 -mod_depends([admin]).
 -mod_provides([survey, poll]).
 
@@ -31,8 +31,13 @@
     manage_schema/2,
     event/2,
     observe_admin_edit_blocks/3,
+    observe_admin_rscform/3,
     observe_survey_is_submit/2,
 
+    get_page/3,
+
+    do_submit/4,
+    collect_answers/3,
     render_next_page/6,
     go_button_target/4,
     module_name/1
@@ -79,8 +84,7 @@ event(#postback{message={survey_remove_result, [{id, SurveyId}, {persistent_id, 
 
 event(#postback{message={admin_show_emails, [{id, SurveyId}]}}, Context) ->
     case m_survey:survey_results(SurveyId, Context) of
-        [Headers0|Data] ->
-            Headers = lists:map(fun(X) -> list_to_atom(binary_to_list(X)) end, Headers0),
+        [Headers|Data] ->
             All = [lists:zip(Headers, Row) || Row <- Data],
             z_render:dialog(?__("E-mail addresses", Context),
                             "_dialog_survey_email_addresses.tpl",
@@ -121,6 +125,13 @@ observe_admin_edit_blocks(#admin_edit_blocks{id=Id}, Menu, Context) ->
             Menu
     end.
 
+%% @doc Redo the page jumps into correct page break blocks
+observe_admin_rscform(#admin_rscform{is_a=IsA}, Post, _Context) ->
+    case lists:member(survey, IsA) of
+        true -> survey_admin:admin_rscform(Post);
+        false -> Post
+    end.
+
 
 %% @doc Check if the given block is a survey question with submit button
 observe_survey_is_submit(#survey_is_submit{block=Q}, _Context) ->
@@ -128,6 +139,15 @@ observe_survey_is_submit(#survey_is_submit{block=Q}, _Context) ->
         <<"survey_button">> -> true;
         <<"survey_", _/binary>> -> proplists:get_value(input_type, Q) =:= <<"submit">>;
         _ -> undefined
+    end.
+
+
+get_page(Id, Nr, #context{} = Context) when is_integer(Nr) ->
+    case m_rsc:p(Id, blocks, Context) of
+        Qs when is_list(Qs) ->
+            go_page(Nr, Qs, [], exact, Context);
+        _ -> 
+            []
     end.
 
 
@@ -198,12 +218,11 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
                 submit ->
                     case z_session:get(mod_survey_editing, Context) of
                         {U, P} -> 
-                            admin_edit_survey_result(Id, U, P, Questions, Answers2, Context);
+                            admin_edit_survey_result(z_convert:to_integer(Id), U, P, Questions, Answers2, Context);
                         _ ->
                             %% That was the last page. Show a thank you and save the result.
                             case do_submit(Id, Questions, Answers2, Context) of
                                 ok ->
-                                    mail_result(Id, Answers2, Context),
                                     case z_convert:to_bool(m_rsc:p(Id, survey_show_results, Context)) of
                                         true ->
                                             #render{template="_survey_results.tpl", vars=[{id,Id}, {inline, true}, {history,History}, {q, As}]};
@@ -211,7 +230,6 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
                                             #render{template="_survey_end.tpl", vars=[{id,Id}, {history,History}, {q, As}]}
                                     end;
                                 {ok, ContextOrRender} ->
-                                    mail_result(Id, Answers2, Context),
                                     ContextOrRender;
                                 {error, _Reason} ->
                                     #render{template="_survey_error.tpl", vars=[{id,Id}, {history,History}, {q, As}]}
@@ -315,7 +333,7 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
     eval_page_jumps({[], _Nr}, _Answers, _Context) ->
         submit;
     eval_page_jumps({[Q|L],Nr} = QsNr, Answers, Context) ->
-        case is_page_end(Q) or is_button(Q) of
+        case is_page_end(Q) of
             true ->
                 case test(Q, Answers, Context) of
                     ok -> 
@@ -327,7 +345,8 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
                             stop -> stop;
                             submit -> submit;
                             {[], _Nr} -> {error, {not_found, Name}};
-                            NextQsNr -> eval_page_jumps(NextQsNr, Answers, Context)
+                            NextQsNr -> 
+                                eval_page_jumps(NextQsNr, Answers, Context)
                         end;
                     {error, Reason} ->
                         {error, Reason}
@@ -381,48 +400,48 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
         end.
 
 
-    %% @doc Fetch the Nth page. Multiple page breaks in a row count as a single page break.
-    %%      Returns the position at the page breaks before the page, so that eventual jump
-    %%      expressions can be evaluated.
-    fetch_page(Nr, []) ->
-        {[], Nr};
-    fetch_page(Nr, L) ->
-        fetch_page(1, Nr, L).
+%% @doc Fetch the Nth page. Multiple page breaks in a row count as a single page break.
+%%      Returns the position at the page breaks before the page, so that eventual jump
+%%      expressions can be evaluated.
+fetch_page(Nr, []) ->
+    {[], Nr};
+fetch_page(Nr, L) ->
+    fetch_page(1, Nr, L).
 
-    fetch_page(_, Nr, []) ->
-        {[], Nr};
-    fetch_page(N, Nr, L) when N >= Nr ->
-        {L, N};
-    fetch_page(N, Nr, L) when N == Nr - 1 ->
-        L1 = lists:dropwhile(fun(B) -> not is_page_end(B) end, L),
-        {L1, Nr};
-    fetch_page(N, Nr, [B|Bs]) when N < Nr ->
-        case is_page_end(B) of
-            true ->
-                L1 = lists:dropwhile(fun is_page_end/1, Bs),
-                fetch_page(N+1, Nr, L1);
-            false ->
-                fetch_page(N, Nr, Bs)
-        end;
-    fetch_page(N, Nr, [_|Bs]) ->
-        fetch_page(N, Nr, Bs).
+fetch_page(_, Nr, []) ->
+    {[], Nr};
+fetch_page(N, Nr, L) when N >= Nr ->
+    {L, N};
+fetch_page(N, Nr, L) when N == Nr - 1 ->
+    L1 = lists:dropwhile(fun(B) -> not is_page_end(B) end, L),
+    {L1, Nr};
+fetch_page(N, Nr, [B|Bs]) when N < Nr ->
+    case is_page_end(B) of
+        true ->
+            L1 = lists:dropwhile(fun is_page_end/1, Bs),
+            fetch_page(N+1, Nr, L1);
+        false ->
+            fetch_page(N, Nr, Bs)
+    end;
+fetch_page(N, Nr, [_|Bs]) ->
+    fetch_page(N, Nr, Bs).
 
 
-    takepage(L) ->
-        takepage(L, []).
+takepage(L) ->
+    takepage(L, []).
 
-        takepage([], Acc) ->
-            lists:reverse(Acc);
-        takepage([Q|L], Acc) ->
-            case proplists:get_value(type, Q) of
-                <<"survey_page_break">> -> lists:reverse(Acc);
-                <<"survey_stop">> -> lists:reverse([Q|Acc]);
-                _ ->
-                    case proplists:get_value(name, Q) of
-                        <<"survey_feedback">> ->  takepage(L, Acc);
-                        _ -> takepage(L, [Q|Acc])
-                    end
-            end.
+    takepage([], Acc) ->
+        lists:reverse(Acc);
+    takepage([Q|L], Acc) ->
+        case proplists:get_value(type, Q) of
+            <<"survey_page_break">> -> lists:reverse(Acc);
+            <<"survey_stop">> -> lists:reverse([Q|Acc]);
+            _ ->
+                case proplists:get_value(name, Q) of
+                    <<"survey_feedback">> ->  takepage(L, Acc);
+                    _ -> takepage(L, [Q|Acc])
+                end
+        end.
 
 is_page_end(Block) ->
     case proplists:get_value(type, Block) of
@@ -430,9 +449,6 @@ is_page_end(Block) ->
         <<"survey_stop">> -> true;
         _ -> false
     end.
-
-is_button(Block) ->
-    proplists:get_value(type, Block) =:= <<"survey_button">>.
 
 
 %% @doc Collect all answers per question, save to the database.
@@ -445,29 +461,77 @@ do_submit(SurveyId, Questions, Answers, Context) ->
     of
         undefined ->
             m_survey:insert_survey_submission(SurveyId, FoundAnswers, Context),
+            maybe_mail(SurveyId, Answers, Context),
             ok;
         ok ->
+            maybe_mail(SurveyId, Answers, Context),
             ok;
         {ok, _Context1} = Handled ->
+            maybe_mail(SurveyId, Answers, Context),
             Handled;
         {error, _Reason} = Error ->
             Error
     end.
 
+maybe_mail(SurveyId, Answers, Context) ->
+    case probably_email(SurveyId, Context) of
+        true ->
+            PrepAnswers = survey_answer_prep:readable(SurveyId, Answers, Context),
+            mail_respondent(SurveyId, Answers, PrepAnswers, Context),
+            mail_result(SurveyId, PrepAnswers, Context);
+        false ->
+            nop
+    end.
+
+probably_email(SurveyId, Context) ->
+    not z_utils:is_empty(m_rsc:p_no_acl(SurveyId, survey_email, Context))
+    orelse z_convert:to_bool(m_rsc:p_no_acl(SurveyId, survey_email_respondent, Context)).
 
 %% @doc mail the survey result to an e-mail address
-mail_result(SurveyId, Answers, Context) ->
+mail_result(SurveyId, PrepAnswers, Context) ->
     case m_rsc:p_no_acl(SurveyId, survey_email, Context) of
         undefined ->
             skip;
         Email ->
             Vars = [
+                {is_result_email, true},
                 {id, SurveyId},
-                {answers, Answers}
+                {answers, PrepAnswers}
             ],
             z_email:send_render(Email, "email_survey_result.tpl", Vars, Context),
             ok
     end.
+
+mail_respondent(SurveyId, Answers, PrepAnswers, Context) ->
+    case z_convert:to_bool(m_rsc:p_no_acl(SurveyId, survey_email_respondent, Context)) of
+        true ->
+            case find_email_respondent(Answers, Context) of
+                <<>> ->
+                    skip;
+                undefined ->
+                    skip;
+                Email ->
+                    Vars = [
+                        {id, SurveyId},
+                        {answers, PrepAnswers}
+                    ],
+                    z_email:send_render(Email, "email_survey_result.tpl", Vars, Context),
+                    ok
+            end;
+        false ->
+            skip
+    end.
+
+find_email_respondent([], Context) ->
+    m_rsc:p_no_acl(z_acl:user(Context), email, Context);
+find_email_respondent([{<<"email">>, Ans}|As], Context) ->
+    Ans1 = z_string:trim(Ans),
+    case z_utils:is_empty(Ans1) of
+        true -> find_email_respondent(As, Context);
+        false -> Ans1
+    end;
+find_email_respondent([_Ans|As], Context) ->
+    find_email_respondent(As, Context).
 
 
 %% @doc Collect all answers, report any missing answers.

@@ -31,7 +31,7 @@
 
 to_block(Q) ->
     [
-        {type, survey_matching},
+        {type, survey_likert},
         {is_required, Q#survey_question.is_required},
         {name, z_convert:to_binary(Q#survey_question.name)},
         {prompt, z_convert:to_binary(Q#survey_question.question)}
@@ -44,18 +44,28 @@ answer(Block, Answers, _Context) ->
         undefined -> {error, missing}
     end.
 
-
 prep_chart(_Block, [], _Context) ->
     undefined;
 prep_chart(Block, [{_, Vals}], Context) ->
-    Labels = [<<"1">>,<<"2">>,<<"3">>,<<"4">>,<<"5">>],
-    LabelsDisplay = [<<"Strongly agree">>,<<"Agree">>,<<"Neutral">>,<<"Disagree">>,<<"Strongly disagree">>],
+    Labels = [
+        <<"5">>,<<"4">>,<<"3">>,<<"2">>,<<"1">>
+    ],
+    LabelsDisplay0 = [
+        <<"Strongly agree">>,
+        <<"Agree">>,
+        <<"Neutral">>,
+        <<"Disagree">>,
+        <<"Strongly disagree">>
+    ],
+    LabelsDisplay = [
+        z_trans:trans(Lb, Context) || Lb <- LabelsDisplay0
+    ],
 
     Values = [ proplists:get_value(C, Vals, 0) || C <- Labels ],
     Sum = case lists:sum(Values) of 0 -> 1; N -> N end,
     Perc = [ round(V*100/Sum) || V <- Values ],
     [
-        {question, z_html:escape(proplists:get_value(prompt, Block), Context)},
+        {question, proplists:get_value(prompt, Block)},
         {values, lists:zip(LabelsDisplay, Values)},
         {type, "pie"},
         {data, [{L,P} || {L,P} <- lists:zip(LabelsDisplay, Perc), P /= 0]}
@@ -66,7 +76,7 @@ prep_answer_header(Block, _Context) ->
 
 prep_answer(_Q, [], _Context) ->
     <<>>;
-prep_answer(_Q, [{_Name, {Value, _Text}}], _Context) ->
+prep_answer(_Q, [{_Name, {Value, _Text}}|_], _Context) ->
     Value.
 
 prep_block(B, _Context) ->

@@ -15,27 +15,28 @@
 
             <div class="modal-footer">
                 {% button
-                class="btn btn-primary"
-                text=_"Add a new media item" 
-                action={dialog_media_upload subject_id=id stay
-                action={postback 
-                postback={zmedia_choose} 
-                delegate="action_admin_zmedia_choose"}
-	        action={postback
-	        postback={reload_media rsc_id=id div_id=media_div_id}
- 	        delegate="controller_admin_edit"}
-                }
+                    class="btn btn-primary"
+                    text=_"Add a new media item" 
+                    action={dialog_media_upload subject_id=id stay
+                    action={postback 
+                        postback={zmedia_choose} 
+                        delegate="action_admin_zmedia_choose"}
+                        action={postback
+                            postback={reload_media rsc_id=id div_id=media_div_id}
+                            delegate="controller_admin_edit"
+                        }
+                    }
                 %}
             </div>
 
         </div>
 
         <div class="tab-pane" id="{{ #tab }}-search">
-	    <div class="control-group">
+	    <div class="form-group">
 
                 <label for="{{#input}}" class="control-label">{_ Use the autocompleter to search the media in this site. _}</label>
-                <div class="controls">
-                    <input id="{{#input}}" class="autocompleter span8 do_autofocus" type="text" value="" />
+                <div>
+                    <input id="{{#input}}" class="autocompleter do_autofocus col-lg-8 col-md-8 form-control" type="text" value="" />
                     <ul id="{{#suggestions}}" class="suggestions-list"></ul>
                 </div>
             </div>

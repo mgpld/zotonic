@@ -1,6 +1,5 @@
 %% @author Arjan Scherpenisse <arjan@scherpenisse.net>
 %% @copyright 2010 Arjan Scherpenisse
-%% Date: 2010-06-01
 %% @doc Simple database logging.
 
 %% Copyright 2010 Arjan Scherpenisse
@@ -21,7 +20,7 @@
 -author("Arjan Scherpenisse <arjan@scherpenisse.net>").
 -behaviour(gen_server).
 
--mod_title("Message logging").
+-mod_title("Logging to the database").
 -mod_description("Logs debug/info/warning messages into the site's database.").
 -mod_prio(1000).
 
@@ -30,28 +29,29 @@
 -export([start_link/1]).
 -export([
     observe_search_query/2, 
-    pid_observe_log/3,
+    pid_observe_zlog/3,
     observe_admin_menu/3
 ]).
 
 -include("zotonic.hrl").
--include("zotonic_log.hrl").
 -include_lib("modules/mod_admin/include/admin_menu.hrl").
 
--record(state, {context, admin_log_pages=[]}).
+-record(state, {host, admin_log_pages=[]}).
 
 %% interface functions
 
 observe_search_query({search_query, Req, OffsetLimit}, Context) ->
     search(Req, OffsetLimit, Context).
 
-pid_observe_log(Pid, {log, #log_message{}=Msg}, Context) ->
+pid_observe_zlog(Pid, #zlog{props=#log_message{}=Msg}, Context) ->
     case Msg#log_message.user_id of
         undefined -> gen_server:cast(Pid, {log, Msg#log_message{user_id=z_acl:user(Context)}});
         _UserId -> gen_server:cast(Pid, {log, Msg})
     end;
-pid_observe_log(Pid, {log, _} = LogMsg, _Context) ->
-    gen_server:cast(Pid, LogMsg).
+pid_observe_zlog(Pid, #zlog{props=#log_email{}=Msg}, _Context) ->
+    gen_server:cast(Pid, {log, Msg});
+pid_observe_zlog(_Pid, #zlog{}, _Context) ->
+    undefined.
 
 
 
@@ -76,7 +76,12 @@ init(Args) ->
     {context, Context} = proplists:lookup(context, Args),
     Context1 = z_acl:sudo(z_context:new(Context)),
     install_check(Context1),
-    {ok, #state{context=Context1}}.
+    Host = z_context:site(Context1),
+    lager:md([
+            {site, Host},
+            {module, ?MODULE}
+        ]),
+    {ok, #state{host=Host}}.
 
 
 %% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -151,29 +156,30 @@ search(_, _, _) ->
 
 %% @doc Insert a simple log entry. Send an update to all UA's displaying the log.
 handle_simple_log(#log_message{user_id=UserId, type=Type, message=Msg, props=Props}, State) ->
+    Context = z_acl:sudo(z_context:new(State#state.host)),
     {ok, Id} = z_db:insert(log, [
                     {user_id, UserId},
                     {type, Type},
                     {message, Msg}
-                ] ++ Props, State#state.context),
-    mod_signal:emit({log_message, [{log_id, Id}, {user_id, UserId}, {type, Type}, {message, Msg}, {props, Props}]}, State#state.context).
-
+                ] ++ Props, Context),
+    mod_signal:emit({log_message, [{log_id, Id}, {user_id, UserId}, {type, Type}, {message, Msg}, {props, Props}]}, Context).
 
 % All non #log_message{} logs are sent to their own log table. If the severity of the log entry is high enough then
 % it is also sent to the main log.  
 handle_other_log(Record, State) ->
+    Context = z_acl:sudo(z_context:new(State#state.host)),
     LogType = element(1, Record),
     Fields = record_to_proplist(Record),
-    case z_db:table_exists(LogType, State#state.context) of
+    case z_db:table_exists(LogType, Context) of
         true ->
-            {ok, Id} = z_db:insert(LogType, Fields, State#state.context),
+            {ok, Id} = z_db:insert(LogType, Fields, Context),
             Log = record_to_log_message(Record, Fields, LogType, Id),
             case proplists:get_value(severity, Fields) of
                 ?LOG_FATAL -> handle_simple_log(Log#log_message{type=fatal}, State);
                 ?LOG_ERROR -> handle_simple_log(Log#log_message{type=error}, State);
                 _Other -> nop
             end,
-            mod_signal:emit({LogType, [{log_id, Id}|Fields]}, State#state.context);
+            mod_signal:emit({LogType, [{log_id, Id}|Fields]}, Context);
         false ->
             Log = #log_message{
                 message=z_convert:to_binary(proplists:get_value(message, Fields, LogType)),
@@ -182,10 +188,8 @@ handle_other_log(Record, State) ->
             handle_simple_log(Log, State)
     end.
 
-
 record_to_proplist(#log_email{} = Rec) ->
     lists:zip(record_info(fields, log_email), tl(tuple_to_list(Rec))).
-
 
 record_to_log_message(#log_email{} = R, _Fields, LogType, Id) ->
     #log_message{
@@ -202,13 +206,12 @@ record_to_log_message(_, Fields, LogType, Id) ->
         props=[ {log_type, LogType}, {log_id, Id} | Fields ]
     }.
 
-
-    to_list({error, timeout}) ->
-        "timeout";
-    to_list(R) when is_tuple(R) ->
-        io_lib:format("~p", [R]);
-    to_list(V) ->
-        z_convert:to_list(V).
+to_list({error, timeout}) ->
+    "timeout";
+to_list(R) when is_tuple(R) ->
+    io_lib:format("~p", [R]);
+to_list(V) ->
+    z_convert:to_list(V).
 
 opt_user(undefined) -> [];
 opt_user(Id) -> [" (", integer_to_list(Id), ")"].

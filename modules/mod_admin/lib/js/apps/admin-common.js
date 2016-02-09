@@ -1,8 +1,8 @@
 /* Admin Common js
 ----------------------------------------------------------
 
-@package:	Zotonic 2009
-@Author:	Tim Benniks <tim@timbenniks.nl>
+@package:   Zotonic 2009
+@Author:    Tim Benniks <tim@timbenniks.nl>
 
 Copyright 2009 Tim Benniks
 Copyright 2012 Arjan Scherpenisse
@@ -25,18 +25,59 @@ limitations under the License.
 {
     $.widget("ui.adminLinkedTable",
     {
+        // make row cells clickable
+        // by adding class 'clickable'
+        // except for rows and cells that have the class 'not-clickable'
         _init: function() {
             var self = this;
             (self.element.find("tr").each(function() {
-                var href = $(this).attr("data-href");
-                if (!href) return;
-                $(this).find("td").each(function() {
-                    $(this)
-                        .addClass("view-link")
-                        .contents()
-                        .wrapAll($("<a>")
-                                 .addClass("view-link")
-                                 .attr("href", href));
+                var $row,
+                    href,
+                    event,
+                    $cell;
+                $row = $(this);
+                href = $row.attr("data-href");
+                event = $row.attr("data-event");
+                if (!href && !event) {
+                    return;
+                }
+                if ($row.hasClass("not-clickable")) {
+                    return;
+                }
+                $("td, th", $row).each(function() {
+                    $cell = $(this);
+                    if (!$cell.hasClass("not-clickable")) {
+                        $cell.addClass("clickable");
+                        $cell.on("click", function() {
+                            if (event) {
+                                z_event(event);
+                            } else {
+                                document.location = href;
+                            }
+                        });
+                    }
+                });
+            }));
+            (self.element.find("td").each(function() {
+                var $cell,
+                    href,
+                    event;
+                $cell = $(this);
+                href = $cell.attr("data-href");
+                event = $cell.attr("data-event");
+                if (!href && !event) {
+                    return;
+                }
+                if ($cell.hasClass("not-clickable")) {
+                    return;
+                }
+                $cell.addClass("clickable");
+                $cell.on("click", function() {
+                    if (event) {
+                        z_event(event);
+                    } else {
+                        document.location = href;
+                    }
                 });
             }));
         }
@@ -69,58 +110,46 @@ limitations under the License.
 
 })(jQuery);
 
-
-window.zAdminConnectDone = function(v) {
-	if (v.is_new) {
-		var target_id = "links-"+v.subject_id+"-"+v.predicate;
-		var $elt = $("#"+target_id);
-		$elt.mask("", 10);
-		z_notify("update", {
-			z_delegate: "mod_admin",
-			z_target_id: target_id,
-			z_trigger_id: target_id,
-			id: v.subject_id,
-			predicate: v.predicate,
-			template: $elt.data("reload-template")
-		});
-	}
-};
+/*
+After a page connection is done. Calls a named wire (that must exist).
+See: _admin_edit_content_page_connections_list.tpl
+*/
 
 window.zAdminLinkDone = function(v) {
-	window.z_zlink(v.url_language, v.title_language);
-	window.zAdminConnectDone(v);
+    window.z_zlink(v.url_language, v.title_language);
 };
 
 window.zAdminMediaDone = function(v) {
-	window.z_choose_zmedia(v.object_id);
-	window.zAdminConnectDone(v);
+    window.z_choose_zmedia(v.object_id);
 };
 
 window.zEditLanguage = function() {
-	return $('.language-tabs li.active').attr('lang');
+    return $('.language-tabs li.active').attr('lang');
 };
 
 function z_admin_ensure_block_names() {
     var names = [];
-    $('.blocks input.block-name').each(function() { 
-    	var name = $(this).val();
-    	if (name != '') {
-    		names.push(name);
-    	}
+    $('input.block-name').each(function() {
+        var name = $(this).val();
+        if (name !== '') {
+            names.push(name);
+        }
     });
 
-    $('.blocks input.block-name').each(function() { 
-    	var name = $(this).val();
-    	if (name == '')
-    	{
-    		var $block = $(this).closest(".block");
-    		name = $("input.block-type", $block).val().split("_")[0];
-    		var ct = 1;
-		    while (names.indexOf(name+ct) != -1) {
-		        ct++;
-		    }
-		    $("input.block-name", $block).val(name+ct);
-	        names.push(name+ct);
-    	}
+    $('input.block-name').each(function() {
+        var name = $(this).val();
+        if (name === '')
+        {
+            var $type = $("input.block-type", $(this).closest(".block"));
+            if ($type.length > 0) {
+                name = $type.val().split("_").pop();
+                var ct = 1;
+                while (names.indexOf(name+ct) != -1) {
+                    ct++;
+                }
+                $(this).val(name+ct);
+                names.push(name+ct);
+            }
+        }
     });
-};
+}

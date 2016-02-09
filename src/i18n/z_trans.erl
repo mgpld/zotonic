@@ -40,11 +40,12 @@
 
 
 %% @doc Fetch all translations for the given string.
-%% @spec translations(From, Context) -> #trans{} | binary()
+-spec translations({trans, list()} | binary() | string(), #context{}) -> {trans, list()} | binary().
 translations({trans, Tr0} = Trans0, Context) ->
     {en, From} = proplists:lookup(en, Tr0),
     case translations(From, Context) of
-        {trans, Tr1} -> merge_trs(Tr0, Tr1);
+        {trans, Tr1} ->
+            {trans, merge_trs(Tr0, lists:reverse(Tr1))};
         _ -> Trans0
     end;
 translations(From, Context) when is_binary(From) ->
@@ -57,13 +58,13 @@ translations(From, Context) when is_binary(From) ->
 translations(From, Context) ->
     translations(z_convert:to_binary(From), Context).
 
-    merge_trs([], Acc) ->
-        Acc;
-    merge_trs([{Lang,_} = LT|Rest], Acc) ->
-        case proplists:is_defined(Lang, Acc) of
-            true -> merge_trs(Rest, Acc);
-            false -> merge_trs(Rest, [LT|Acc])
-        end.
+merge_trs([], Acc) ->
+    lists:reverse(Acc);
+merge_trs([{Lang,_} = LT|Rest], Acc) ->
+    case proplists:is_defined(Lang, Acc) of
+        true -> merge_trs(Rest, Acc);
+        false -> merge_trs(Rest, [LT|Acc])
+    end.
 
 %% @doc Prepare a translations table based on all .po files in the active modules.
 parse_translations(Context) ->
@@ -91,27 +92,23 @@ parse_translations(Context) ->
         Dict;
     add_labels(Lang, [{header,_}|Rest],Dict) ->
         add_labels(Lang, Rest,Dict);
-    add_labels(Lang, [{Label,Trans}|Rest], Dict) ->
-        LabelB = list_to_binary(Label),
-        case dict:find(LabelB, Dict) of
+    add_labels(Lang, [{Label,Trans}|Rest], Dict) when is_binary(Trans), is_binary(Label) ->
+        case dict:find(Label, Dict) of
             {ok, Ts} ->
                 case proplists:get_value(Lang, Ts) of
-                    undefined -> add_labels(Lang, Rest, dict:store(LabelB, [{Lang,list_to_binary(Trans)}|Ts], Dict));
+                    undefined -> add_labels(Lang, Rest, dict:store(Label, [{Lang,Trans}|Ts], Dict));
                     _PrevTrans -> add_labels(Lang, Rest, Dict)
                 end;
             error -> 
-                add_labels(Lang, Rest, dict:store(LabelB,[{Lang,to_binary(Trans)}],Dict))
+                add_labels(Lang, Rest, dict:store(Label,[{Lang,Trans}],Dict))
         end.
         
-        to_binary(header) -> "";
-        to_binary(L) -> list_to_binary(L).
-            
-
-
 %% @doc Strict translation lookup of a language version
+-spec lookup({trans, list()}|binary()|string(), #context{}) -> binary() | string() | undefined.
 lookup(Trans, Context) ->
     lookup(Trans, z_context:language(Context), Context).
     
+-spec lookup({trans, list()}|binary()|string(), atom(), #context{}) -> binary() | string() | undefined.
 lookup({trans, Tr}, Lang, _Context) ->
     proplists:get_value(Lang, Tr);
 lookup(Text, Lang, Context) ->
@@ -122,19 +119,31 @@ lookup(Text, Lang, Context) ->
 
 %% @doc Non strict translation lookup of a language version.
 %%      In order check: requested language, default configured language, english, any
+-spec lookup_fallback({trans, list()}|binary()|string(), #context{}) -> binary() | string() | undefined.
+lookup_fallback(Trans, undefined) ->
+    lookup_fallback(Trans, en, undefined);
 lookup_fallback(Trans, Context) ->
     lookup_fallback(Trans, z_context:language(Context), Context).
 
 lookup_fallback({trans, Tr}, Lang, Context) ->
     case proplists:get_value(Lang, Tr) of
         undefined ->
-            case default_language(Context) of
-                undefined -> take_english_or_first(Tr);
-                CfgLang ->
-                    case proplists:get_value(z_convert:to_atom(CfgLang), Tr) of
+            FallbackLang = case Context of
+                undefined -> en;
+                _ -> z_context:fallback_language(Context)
+            end,
+            case proplists:get_value(FallbackLang, Tr) of
+                undefined -> 
+                    case default_language(Context) of
                         undefined -> take_english_or_first(Tr);
-                        Text -> Text
-                    end
+                        CfgLang ->
+                            case proplists:get_value(z_convert:to_atom(CfgLang), Tr) of
+                                undefined -> take_english_or_first(Tr);
+                                Text -> Text
+                            end
+                    end;
+                Text ->
+                    Text
             end;
         Text -> 
             Text
@@ -153,10 +162,11 @@ lookup_fallback(Text, _Lang, _Context) ->
                 EnglishText
         end.
 
-
+-spec lookup_fallback_language([atom()], #context{}) -> atom().
 lookup_fallback_language(Langs, Context) ->
     lookup_fallback_language(Langs, z_context:language(Context), Context).
 
+-spec lookup_fallback_language([atom()], atom(), #context{}) -> atom().
 lookup_fallback_language([], Lang, _Context) ->
     Lang;
 lookup_fallback_language(Langs, Lang, Context) ->
@@ -196,15 +206,13 @@ lookup_fallback_language(Langs, Lang, Context) ->
 
 
 %% @doc translate a string or trans record into another language
-%% @spec trans(From, Language) -> String
-%%   From = #trans{} | String
-%%   Language = atom()
+-spec trans({trans, list()} | binary() | string(), #context{} | atom()) -> binary() | string() | undefined.
 trans({trans, Tr}, Lang) when is_atom(Lang) ->
     proplists:get_value(Lang, Tr);
 trans(Text, Lang) when is_atom(Lang) ->
     Text;
 trans(Text, Context) ->
-    trans(Text, Context#context.language, Context).
+    trans(Text, z_context:language(Context), Context).
 
 trans({trans, Tr0}, Language, Context) ->
     case proplists:lookup(en, Tr0) of
@@ -231,14 +239,15 @@ trans(Text, Language, Context) ->
 
 %% @doc Return the configured default language for this server
 -spec default_language(#context{}) -> atom().
+default_language(undefined) -> en;
 default_language(Context) ->
     z_convert:to_atom(m_config:get_value(i18n, language, en, Context)).
 
 
 %% @doc check if the two letter code is a valid language
--spec is_language(Language :: term()) -> boolean().
-is_language(<<A,B>>) -> iso639:lc2lang([A,B]) /= "";
-is_language([_,_] = IsoCode) -> iso639:lc2lang(IsoCode) /= "";
+-spec is_language(Language :: string() | binary()) -> boolean().
+is_language(<<A,B>>) -> iso639:lc2lang([A,B]) /= <<>>;
+is_language([_,_] = IsoCode) -> iso639:lc2lang(IsoCode) /= <<>>;
 is_language(_) -> false.
 
 %% @doc Translate a language-code to an atom.
@@ -257,8 +266,6 @@ to_language_atom(_) ->
 
 
 %% @doc Return a descriptive (english) string for the language
-%% @spec lc2descr(Language) -> Descr
-%%  Language = atom()
-%%  Descr = list()
+-spec lc2descr(atom()) -> binary().
 lc2descr(Language) ->
     iso639:lc2lang(atom_to_list(Language)).

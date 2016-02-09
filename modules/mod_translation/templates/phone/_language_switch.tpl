@@ -7,19 +7,19 @@
             {{ list[z_language].language|default:z_language }}
             <b class="caret"></b>
         </a>
-        <ul class="dropdown-menu">
-        {% for code,lang in list %}
-		{% if all or lang.is_enabled %}
-            <li>
-                <a id="{{ #lang.code }}" href="{% url language_select code=code p=m.req.raw_path %}">{% if code == z_language %}<i class="icon-ok"></i> {% endif %}{{ lang.language }}</a>
-            </li>
-        {% endif %}
-        {% endfor %}
+        <ul class="dropdown-menu admin-dropdown-menu-has-icons">
+            {% for code,lang in list %}
+                {% if all or lang.is_enabled %}
+                    <li>
+                        <a id="{{ #lang.code }}" href="{% url language_select code=code p=m.req.raw_path %}">{% if code == z_language %}<i class="glyphicon glyphicon-ok"></i> {% endif %}{{ lang.language }}</a>
+                    </li>
+                {% endif %}
+            {% endfor %}
         </ul>
     </li>
 {% else %}
     {# Simple select list #}
-	<select id="{{ #lang }}">
+	<select class="form-control" id="{{ #lang }}">
 	{% for code,lang in list %}
 		{% if all or lang.is_enabled %}
 			<option {% if z_language == code %}selected="selected"{% endif %} value="{{ code }}">{{ lang.language }}</option>

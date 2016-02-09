@@ -4,26 +4,30 @@
 </p>
 
 {% wire id=#form type="submit" postback={duplicate_page id=id} delegate=delegate %}
-<form id="{{ #form }}" method="POST" action="postback" class="form-horizontal">
+<form id="{{ #form }}" method="POST" action="postback" class="form form-horizontal">
 
-    <div class="control-group">
-	<label class="control-label" for="new_rsc_title">Page title</label>
-        <div class="controls">
-	    <input class="do_autofocus" type="text" id="new_rsc_title" name="new_rsc_title" value="{{ m.rsc[id].title }}" />
-	    {% validate id="new_rsc_title" type={presence} %}
+    <div class="form-group row">
+	    <label class="control-label col-md-3" for="new_rsc_title">{_ Page title _}</label>
+        <div class="col-md-9">
+	        <input class="do_autofocus form-control" type="text" id="new_rsc_title" name="new_rsc_title" value="{{ m.rsc[id].title }}" />
+	        {% validate id="new_rsc_title" type={presence} %}
         </div>
     </div>
 
-    <div class="control-group">
-        <label for="{{ #published }}" class="control-label">{_ Published _}</label>
-        <div class="controls">
-	    <input type="checkbox" id="{{ #published }}" name="is_published" value="1" />
-	</div>
-    </div>
-
+    <div class="form-group row">
+        <label for="{{ #published }}" class="control-label col-md-3">{_ Published _}</label>
+        <div class="col-md-9">
+            <div class="checkbox">
+                <label>
+                    <input type="checkbox" id="{{ #published }}" name="is_published" value="1" />
+                </label>
+            </div>
+        </div>
+    </div>    
+    
     <div class="modal-footer">
-	{% button class="btn" action={dialog_close} text=_"Cancel" tag="a" %}
-	<button class="btn btn-primary" type="submit">{_ Duplicate page _}</button>
+	    {% button class="btn btn-default" action={dialog_close} text=_"Cancel" %}
+	    {% button class="btn btn-primary" type="submit" text=_"Duplicate page" %}
     </div>
 
 </form>

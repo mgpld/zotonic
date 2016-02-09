@@ -7,21 +7,22 @@
 {% block bodyclass %}noframe{% endblock %}
 
 {% block navigation %}
-<div class="navbar navbar-fixed-top">
-    <div class="navbar-inner">
-        <div class="container-fluid">
-            <a class="brand" href="http://{{ m.site.hostname }}" title="{_ visit site _}"><img alt="zotonic logo" src="/lib/images/admin_zotonic.png" width="106" height="20"></a>
-        </div>
+<div class="navbar navbar-branded navbar-fixed-top">
+    <div class="navbar-header">
+        <a class="navbar-brand" href="http://{{ m.site.hostname }}" title="{_ visit site _}"><span class="zotonic-logo"><em>Zotonic</em></span></a>
     </div>
 </div>
 {% endblock %}
 
 {% block content %}
 <div class="widget admin-logon">
-    <h3 class="widget-header">{_ Log on to _} {{ m.config.site.title.value|default:"Zotonic" }}</h3>
-    <div id="logon_box" class="widget-content">
-        <div id="logon_error" class="alert alert-block alert-error"></div>
-        {% include "_logon_form.tpl" page=page|default:"/admin" hide_title %}
+    <div class="widget-header">{_ Log on to _} {{ m.config.site.title.value|default:"Zotonic" }}</div>
+    <div class="widget-content">
+        {% include
+            "_logon_modal.tpl"
+            page=page|default:"/admin"
+            logon_context="admin_logon"
+        %}
     </div>
 </div>
 </div>

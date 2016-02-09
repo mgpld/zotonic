@@ -54,7 +54,7 @@ prep_chart(Block, [{_, Vals}], Context) ->
     Sum = case lists:sum(Values) of 0 -> 1; N -> N end,
     Perc = [ round(V*100/Sum) || V <- Values ],
     [
-        {question, z_html:escape(proplists:get_value(prompt, Block), Context)},
+        {question, proplists:get_value(prompt, Block)},
         {values, lists:zip(Titles, Values)},
         {type, "pie"},
         {data, [{L,P} || {L,P} <- lists:zip(Titles, Perc), P /= 0]}
@@ -75,9 +75,9 @@ prep_answer_header(Q, Context) ->
 
 prep_answer(Q, [], _Context) ->
     prep(Q, []);
-prep_answer(Q, [{_Name, {undefined, Text}}], _Context) ->
+prep_answer(Q, [{_Name, {undefined, Text}}|_], _Context) ->
     prep(Q, binary:split(Text, <<$#>>, [global]));
-prep_answer(Q, [{_Name, {Value, _Text}}], _Context) ->
+prep_answer(Q, [{_Name, {Value, _Text}}|_], _Context) ->
     prep(Q, [Value]).
 
     prep(Q, Vs) ->

@@ -20,13 +20,13 @@
 -include("zotonic_release.hrl").
 -include("zotonic_notifications.hrl").
 -include("zotonic_events.hrl").
--include("zotonic_stats.hrl").
+-include("zotonic_log.hrl").
 -include_lib("webzmachine/include/wm_reqdata.hrl").
 
 %% @doc The request context, session information and other
 -record(context, {
         %% The host
-        host=default,
+        host=default :: atom(),
 
         %% Webmachine request data (only set when this context is used because of a request)
         wm_reqdata=undefined :: #wm_reqdata{} | undefined,
@@ -36,6 +36,7 @@
         
         %% The page and session processes associated with the current request
         session_pid=undefined :: pid() | undefined,  % one session per browser (also manages the persistent data)
+        session_id=undefined :: string() | undefined,
         page_pid=undefined :: pid() | undefined,     % multiple pages per session, used for pushing information to the browser
         page_id=undefined :: string() | undefined,
 
@@ -53,12 +54,19 @@
         pivot_server,
         module_indexer,
         translation_table,
-        
+
         %% The database connection used for (nested) transactions, see z_db
         dbc=undefined :: pid() | undefined,
 
+        %% The pid of the database pool of this site and the db driver in use (usually z_db_pgsql)
+        db=undefined :: {pid(), atom()} | undefined,
+
         %% The language selected, used by z_trans and others
-        language=en :: atom(),
+        %% The first language in the list is the selected language, the tail are the fallback languages
+        language=[en] :: [atom()],
+
+        %% The timezone for this request
+        tz= <<"UTC">> :: string()|binary(),
         
         %% The current logged on person, derived from the session and visitor
         acl=undefined,      %% opaque placeholder managed by the z_acl module
@@ -94,6 +102,34 @@
 -record(multipart_form, {name, data, filename, tmpfile, content_type, content_length, file, files=[], args=[]}).
 -record(upload, {filename, tmpfile, data, mime}).
 
+%% Record used for transporting data between the user-agent and the server.
+-record(z_msg_v1, {
+        qos = 0 :: 0 | 1 | 2,
+        dup = false :: boolean(),
+        msg_id :: binary(),
+        timestamp :: pos_integer(),
+        content_type = ubf :: text | javascript | json | form | ubf | atom() | binary(),
+        delegate = postback :: postback | mqtt | atom() | binary(),
+        push_queue = page :: page | session | user,
+
+        % Set by transports from user-agent to server
+        ua_class=undefined :: ua_classifier:device_type() | undefined,
+        session_id :: binary(),
+        page_id :: binary(),
+
+        % Payload data
+        data :: any()
+    }).
+
+-record(z_msg_ack, {
+        qos = 1 :: 1 | 2,
+        msg_id :: binary(),
+        push_queue = page :: page | session | user,
+        session_id :: binary(),
+        page_id :: binary(),
+        result :: any()
+    }).
+
 %% Model value interface for templates
 -record(m, {model, value}).
 
@@ -106,7 +142,8 @@
 %% Used for search results
 -record(search_result, {result=[], page=1, pagelen, total, all, pages, next, prev}).
 -record(m_search_result, {search_name, search_props, result, page, pagelen, total, pages, next, prev}).
--record(search_sql, {select, from, where="", order="", group_by="", limit, tables=[], args=[], cats=[], cats_exclude=[], run_func, extra=[], assoc=false}).
+-record(search_sql, {select, from, where="", order="", group_by="", limit, tables=[], args=[], 
+                     cats=[], cats_exclude=[], cats_exact=[], run_func, extra=[], assoc=false}).
 
 %% For z_supervisor, process definitions.
 -record(child_spec, {name, mfa, status, pid, crashes=5, period=60, 
@@ -129,7 +166,7 @@
 -define(MEDIACLASS_INDEX, 'zotonic$mediaclass_index').
 
 %% For the z_db definitions
--record(column_def, {name, type, length, is_nullable=true, default, primary_key}).
+-record(column_def, {name, type, length, is_nullable=true, default, primary_key, unique=false}).
 
 %% For the datamodel: default resources to create.
 -record(datamodel, {categories=[], predicates=[], resources=[], media=[], edges=[]}).
@@ -167,10 +204,10 @@
 -record(dragdrop, {tag, delegate, id}).
 
 %% @doc Template definition for z_render:update/insert (and others)
--record(render, {template, vars=[]}).
+-record(render, {template, is_all=false, vars=[]}).
 
 %% @doc Data import definition. See also mod_import_csv.
--record(import_data_def, {colsep=$\t, skip_first_row=true, record, importdef}).
+-record(import_data_def, {colsep=$\t, skip_first_row=true, columns=[], importdef}).
 
 %% @doc Check if an assumption is true
 -define(ASSERT(A,E), z_utils:assert(A,E)).
@@ -178,14 +215,11 @@
 %% @doc Call the translate function, 2nd parameter is context
 -define(__(T,Context), z_trans:trans(T,Context)).
 
-%% The name of the session request parameter
--define(SESSION_PAGE_Q, "z_pageid").
-
 %% The name of the session user agent class parameter
 -define(SESSION_UA_CLASS_Q, "z_ua").
 
 %% Number of seconds between two comet polls before the page expires
--define(SESSION_PAGE_TIMEOUT, 20).
+-define(SESSION_PAGE_TIMEOUT, 30).
 
 %% Number of seconds between session expiration checks
 -define(SESSION_CHECK_EXPIRE, 10).
@@ -195,6 +229,12 @@
 %% Subsequent messages must be received before SESSION_EXPIRE_N
 -define(SESSION_EXPIRE_1,   40).
 -define(SESSION_EXPIRE_N, 3600).
+
+%% The name of the persistent data cookie
+-define(PERSIST_COOKIE, "z_pid").
+
+%% Max age of the person cookie, 10 years or so.
+-define(PERSIST_COOKIE_MAX_AGE, 3600*24*3650).
 
 %% Millisecs of no activity before the visitor process is stopped (if there are no attached sessions).
 -define(VISITOR_TIMEOUT, 60 * 1000).
@@ -212,19 +252,7 @@
 %% Notifier defines
 -define(NOTIFIER_DEFAULT_PRIORITY, 500).
 
-%% Below is copied (and adapted) from Nitrogen, which is copyright 2008-2009 Rusty Klophaus
-
-%%% LOGGING %%%
--define(DEBUG(Msg), z:debug_msg(?MODULE, ?LINE, Msg)).
--define(PRINT(Var), error_logger:info_msg("DEBUG: ~p:~p - ~p: ~p~n", [?MODULE, ?LINE, ??Var, Var])).
--define(LOG(Msg, Args), error_logger:info_msg(Msg, Args)).
--define(ERROR(Msg, Args), error_logger:error_msg("~p:~p "++Msg, [?MODULE, ?LINE|Args])).
-
--define(zDebug(Msg, Context), z:debug(Msg, [{module, ?MODULE}, {line, ?LINE}], Context)).
--define(zInfo(Msg, Context), z:info(Msg, [{module, ?MODULE}, {line, ?LINE}], Context)).
--define(zWarning(Msg, Context), z:warning(Msg, [{module, ?MODULE}, {line, ?LINE}], Context)).
-
--define(zDebug(Msg, Args, Context), z:debug(Msg, Args, [{module, ?MODULE}, {line, ?LINE}], Context)).
--define(zInfo(Msg, Args, Context), z:info(Msg, Args, [{module, ?MODULE}, {line, ?LINE}], Context)).
--define(zWarning(Msg, Args, Context), z:warning(Msg, Args, [{module, ?MODULE}, {line, ?LINE}], Context)).
+%% Wrapper macro to put Erlang terms in a bytea database column. 
+%% Extraction is automatic, based on a magic marker prefixed to the serialized term.
+-define(DB_PROPS(N), {term, N}).
 

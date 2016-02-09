@@ -4,11 +4,10 @@
     {enabled, true},
 
     % Hostname on which this site runs
-    {hostname, "%%SITE%%:8000"},
+    {hostname, "%%SITEHOSTNAME%%:8000"},
 
     % Aliases which should redirect to the primary hostname
-    %{hostalias, "www.example.com"},
-    %{hostalias, "example.com"},
+    %{hostalias, ["www.example.com", "example.com"]},
 
     % PostgreSQL database connection
     {dbhost, "%%DBHOST%%"},
@@ -44,9 +43,12 @@
    mod_seo_google,
    mod_seo_sitemap,
 
-   mod_authentication,
    mod_acl_adminonly,
+   mod_authentication,
+   mod_editor_tinymce,
 
+   mod_mqtt,
+   
    mod_admin,
    mod_admin_category,
    mod_admin_config,
@@ -55,7 +57,6 @@
    mod_admin_predicate,
 
    mod_l10n,
-   mod_geomap,
 
    mod_comment,
    mod_artwork,

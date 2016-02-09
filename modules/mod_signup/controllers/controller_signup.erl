@@ -31,6 +31,7 @@ init(DispatchArgs) -> {ok, DispatchArgs}.
 
 service_available(ReqData, DispatchArgs) when is_list(DispatchArgs) ->
     Context  = z_context:new(ReqData, ?MODULE),
+    z_context:lager_md(Context),
     Context1 = z_context:set(DispatchArgs, Context),
     ?WM_REPLY(true, Context1).
 
@@ -44,6 +45,7 @@ content_types_provided(ReqData, Context) ->
 provide_content(ReqData, Context) ->
     Context1 = ?WM_REQ(ReqData, Context),
     Context2 = z_context:ensure_all(Context1),
+    z_context:lager_md(Context2),
     Vars = case z_context:get_q("xs", Context2) of
                 undefined ->
                     [];
@@ -181,9 +183,7 @@ handle_confirm(UserId, SignupProps, RequestConfirm, Context) ->
                 ok ->
                     % Show feedback that we sent a confirmation message
                     Context1 = show_errors([], Context),
-                    z_render:wire([ {hide, [{target, "signup_area"}]},
-                                    {show, [{target, "signup_verify"}]},
-                                    {redirect, [{location, "#signup_verify"}]}], Context1)
+                    z_render:update("signup_logon_box", z_template:render("_signup_stage.tpl", [], Context1), Context1)
             end
     end.
 
@@ -200,5 +200,5 @@ ensure_published(UserId, Context) ->
 
 show_errors(Errors, Context) ->
     Errors1 = [ z_convert:to_list(E) || E <- Errors ],
-    z_render:wire({set_class, [{target,"signup_form"}, {class,Errors1}]}, Context).
+    z_render:wire({add_class, [{target, "signup_logon_box"}, {class, Errors1}]}, Context).
 

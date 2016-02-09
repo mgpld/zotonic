@@ -24,34 +24,41 @@
          get_host/1
         ]).
 
+-export([
+      parse_file/1
+    ]).
+
 -include_lib("zotonic.hrl").
--include_lib("zotonic_log.hrl").
 
 %% @doc Handle a received e-mail
 received(Recipients, From, Peer, Reference, {Type, Subtype}, Headers, Params, Body, Data) ->
     ParsedEmail = parse_email({Type, Subtype}, Headers, Params, Body),
     ParsedEmail1 = generate_text(generate_html(ParsedEmail)),
     ParsedEmail2 = ParsedEmail1#email{
-                     subject=proplists:get_value(<<"Subject">>, Headers),
+                     subject=sanitize_utf8(proplists:get_value(<<"Subject">>, Headers)),
                      to=Recipients,
-                     from=From
+                     from=sanitize_utf8(From),
+                     html=sanitize_utf8(ParsedEmail1#email.html),
+                     text=sanitize_utf8(ParsedEmail1#email.text)
                     },
     [
      case get_host(Recipient) of
          {ok, LocalPart, LocalTags, Domain, Host} ->
              Context = z_context:new(Host),
-             z_notifier:notify({log, #log_email{
-                                  severity = ?LOG_INFO,
-                                  mailer_status = received,
-                                  mailer_host = z_convert:ip_to_list(Peer),
-                                  message_nr = Reference,
-                                  envelop_to = Recipient,
-                                  envelop_from = From,
-                                  props = [
-                                           {headers, Headers}
-                                          ]
-                                 }},
-                               Context),
+             z_notifier:notify(#zlog{
+                                  props=#log_email{
+                                      severity = ?LOG_INFO,
+                                      mailer_status = received,
+                                      mailer_host = z_convert:ip_to_list(Peer),
+                                      message_nr = Reference,
+                                      envelop_to = Recipient,
+                                      envelop_from = From,
+                                      props = [
+                                               {headers, Headers}
+                                              ]
+                                  }
+                              },
+                              Context),
              Email = #email_received{
                          localpart=LocalPart,
                          localtags=LocalTags,
@@ -70,8 +77,8 @@ received(Recipients, From, Peer, Reference, {Type, Subtype}, Headers, Params, Bo
                       },
              z_notifier:first(Email1, Context);
          undefined ->
-             error_logger:info_msg("SMTP Dropping message, unknown host for recipient: ~p", [Recipient]),
-             skip
+             lager:info("SMTP Dropping message, unknown host for recipient: ~p", [Recipient]),
+             {error, unknown_host}
      end
      || Recipient <- Recipients
     ].
@@ -89,13 +96,24 @@ get_host(Recipient) ->
 lowercase_headers(Hs) ->
     [ {z_string:to_lower(H), V} || {H,V} <- Hs ].
 
+sanitize_utf8(undefined) ->
+    undefined;
+sanitize_utf8(S) ->
+    z_string:sanitize_utf8(S).
+
+%% @doc Parse a file using the html/text parse routines. This is used for testing
+parse_file(Filename) ->
+    {ok, Data} = file:read_file(Filename),
+    {Type, Subtype, Headers, Params, Body} = mimemail:decode(Data),
+    parse_email({Type,Subtype}, Headers, Params, Body).
+
 
 %% @doc Parse an #email_received to a sanitized #email try to make
 %% sense of all parts.
 %%
 %% All bodies are converted from the charset in the headers to UTF-8.
 %% This might not be correct for HTML bodies, where we have to check
-%% the content-type in the header (but then not in all cases...)
+%% the content-type in the html head (but then not in all cases...)
 parse_email({<<"text">>, <<"plain">>}, _Headers, Params, Body) ->
     case opt_attachment({<<"text">>, <<"plain">>}, Params, Body) of
         #email{} = E -> E;
@@ -108,7 +126,8 @@ parse_email({<<"text">>, <<"html">>}, _Headers, Params, Body) ->
         undefined -> #email{html=z_html:sanitize(Body)}
     end;
 
-parse_email({<<"multipart">>, <<"alternative">>}, Headers, _Params, Body) ->
+parse_email({<<"multipart">>, Mergeable}, Headers, _Params, Body)
+  when Mergeable =:= <<"alternative">>; Mergeable =:= <<"related">> ->
     Parts = [
              parse_email({PartType, PartSubType}, PartHs, PartPs, PartBody)
              || {PartType, PartSubType, PartHs, PartPs, PartBody} <- Body
@@ -117,25 +136,8 @@ parse_email({<<"multipart">>, <<"alternative">>}, Headers, _Params, Body) ->
                 #email{subject=proplists:get_value(<<"Subject">>, Headers)}, 
                 Parts);
 
-parse_email({<<"multipart">>, <<"related">>}, Headers, _Params, Body) ->
-    Parts = [
-             parse_email({PartType, PartSubType}, PartHs, PartPs, PartBody)
-             || {PartType, PartSubType, PartHs, PartPs, PartBody} <- Body
-            ],
-    lists:foldr(fun(A,B) -> merge_email(A,B) end, 
-                #email{subject=proplists:get_value(<<"Subject">>, Headers)}, 
-                Parts);
-
-parse_email({<<"multipart">>, <<"mixed">>}, Headers, _Params, Body) ->
-    Parts = [
-             parse_email({PartType, PartSubType}, PartHs, PartPs, PartBody)
-             || {PartType, PartSubType, PartHs, PartPs, PartBody} <- Body
-            ],
-    lists:foldr(fun(A,B) -> append_email(A,B) end, 
-                #email{subject=proplists:get_value(<<"Subject">>, Headers)}, 
-                Parts);
-
-parse_email({<<"multipart">>, <<"digest">>}, Headers, _Params, Body) ->
+parse_email({<<"multipart">>, Appendable}, Headers, _Params, Body)
+  when Appendable =:= <<"mixed">>; Appendable =:= <<"digest">>; Appendable =:= <<"signed">> ->
     Parts = [
              parse_email({PartType, PartSubType}, PartHs, PartPs, PartBody)
              || {PartType, PartSubType, PartHs, PartPs, PartBody} <- Body

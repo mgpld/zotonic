@@ -68,11 +68,12 @@ render_action(_TriggerId, TargetId, Args, Context) ->
 
 map_speed_default(Speed) ->
     case map_speed(Speed) of
-        [] -> "500";
+        [] -> "350";
         S -> S
     end.
 
 map_speed(N) when is_integer(N) -> integer_to_list(N);
+map_speed(<<"normal">>) -> [];
 map_speed("normal") -> [];
 map_speed(undefined) -> [];
 map_speed(<<>>) -> [];

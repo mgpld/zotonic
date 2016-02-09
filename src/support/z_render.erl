@@ -117,18 +117,23 @@ render(<<>>, Context) ->
     Context;
 render([], Context) -> 
     Context;
-render({script}, Context) -> 
+render({script, _Args} = Script, Context) -> 
     %% Renders the script tag - might not be correct as it adds everything collected in Context and not what was collected
     %% in the added iolist().  So maybe we should just ignore the {script} tag here.
     %% When the script tag should be rendered then it is better to call z_context:output/2 instead of z_render:render/2.
-    {Html,Context1} = z_context:output([{script}], Context),
+    {Html,Context1} = z_context:output([Script], Context),
     Context1#context{render=[Context1#context.render, Html]};
 render(#context{} = C, Context) ->
     C1 = render(C#context.render, Context),
-    C2 = z_context:merge_scripts(C, C1),
-    C2;
-render(B, Context) when is_integer(B) orelse is_binary(B) -> 
+    z_context:merge_scripts(C, C1);
+render({javascript, Script}, Context) ->
+    z_script:add_content_script(Script, Context);
+render(B, Context) when is_binary(B) -> 
     Context#context{render=[Context#context.render, B]};
+render(N, Context) when is_integer(N), N >= 0, N =< 255 -> 
+    Context#context{render=[Context#context.render, N]};
+render(N, Context) when is_integer(N) -> 
+    Context#context{render=[Context#context.render, z_convert:to_binary(N)]};
 render(A, Context) when is_atom(A) -> 
     Context#context{render=[Context#context.render, atom_to_list(A)]};
 render(List=[H|_], Context) when is_integer(H) orelse is_binary(H) ->
@@ -142,7 +147,9 @@ render(List=[H|_], Context) when is_integer(H) orelse is_binary(H) ->
 render({trans, _} = Tr, Context) ->
     render(z_trans:lookup_fallback(Tr, Context), Context);
 render({{_,_,_},{_,_,_}} = D, Context) ->
-    render(filter_date:date(D, "Y-m-d H:i:s", Context), Context);
+    render(filter_stringify:stringify(D, Context), Context);
+render(F, Context) when is_float(F) ->
+    render(filter_stringify:stringify(F, Context), Context);
 render(T, Context) when is_tuple(T) ->
     render(iolist_to_binary(io_lib:format("~p", [T])), Context);
 render([H|T], Context) ->
@@ -178,7 +185,7 @@ render_actions(TriggerId, TargetId, {Action, Args}, Context) ->
                 {ok, #module_index{erlang_module=ActionModule}} ->
                     ActionModule:render_action(Trigger, Target, Args, Context);
                 {error, enoent} ->
-                    ?LOG("No action enabled for \"~p\"", [Action]),
+                    lager:info("No action enabled for \"~p\"", [Action]),
                     {[], Context}
             end;
         false -> 
@@ -216,8 +223,10 @@ render_validator(TriggerId, TargetId, Args, Context) ->
                     VMod = case proplists:get_value(delegate, VArgs) of
                                 undefined -> 
                                     case z_module_indexer:find(validator, VType, Context) of
-                                        {ok, #module_index{erlang_module=Mod}} -> {ok, Mod};
-                                        {error, enoent} -> ?LOG("No validator found for \"~p\"", [VType])
+                                        {ok, #module_index{erlang_module=Mod}} ->
+                                            {ok, Mod};
+                                        {error, enoent} ->
+                                            lager:info("No validator found for \"~p\"", [VType])
                                     end;
                                 Delegate  -> 
                                     {ok, Delegate}
@@ -296,11 +305,9 @@ appear_after(TargetId, Html, Context) ->
 %% @doc Set the contents of an iframe to the generated html.
 update_iframe(IFrameId, Html, Context) ->
     {Html1, Context1} = render_html(Html, Context),
-    Document = [<<"window.frames['">>, IFrameId, <<"'].document">>],
-    Update = [ 
-        Document, <<".open();">>,
-        Document, <<".write('">>, z_utils:js_escape(Html1), <<"');">>,
-        Document, <<".close();">>
+    Update = [
+        <<"z_update_iframe('">>,IFrameId,
+        <<"','">>, z_utils:js_escape(Html1), <<"');">>
     ],
     Context1#context{updates=[{Update}|Context1#context.updates]}.
 
@@ -416,9 +423,8 @@ update_js_selector_first(CssSelector, Html, Function, AfterEffects) ->
       AfterEffects, 
       $;].
 
-    render_html(#render{template=Template, vars=Vars}, Context) ->
-        {Html, Context1} = z_template:render_to_iolist(Template, Vars, Context),
-        {iolist_to_binary(Html), Context1};
+    render_html(#render{template=Template, is_all=All, vars=Vars}, Context) ->
+        render_html_opt_all(z_convert:to_bool(All), Template, Vars, Context);
     render_html(undefined, Context) ->
         {"", Context};
     render_html(Html, Context) when is_binary(Html) ->
@@ -426,6 +432,15 @@ update_js_selector_first(CssSelector, Html, Function, AfterEffects) ->
     render_html(Html, Context) ->
         {Html1, Context1} = render_to_iolist(Html, Context),
         {iolist_to_binary(Html1), Context1}.
+
+
+    render_html_opt_all(false, Template, Vars, Context) ->
+        {Html, Context1} = z_template:render_to_iolist(Template, Vars, Context),
+        {iolist_to_binary(Html), Context1};
+    render_html_opt_all(true, Template, Vars, Context) ->
+        Templates = z_template:find_template(Template, true, Context),
+        Html = [ z_template:render(Tpl, Vars, Context) || Tpl <- Templates ],
+        render_html(Html, Context).
 
 
 %%% SIMPLE FUNCTION TO SHOW DIALOG OR GROWL (uses the dialog and growl actions) %%%
@@ -441,7 +456,15 @@ dialog(Title, Template, Vars, Context) ->
                 undefined -> Args1;
                 Class -> [{addclass, Class} | Args1]
             end,
-    z_render:wire({dialog, Args2}, Context1).
+    Args3 = case proplists:get_value(backdrop, Vars) of
+                undefined -> Args2;
+                Backdrop -> [{backdrop, Backdrop} | Args2]
+            end,
+    Args4 = case proplists:get_value(center, Vars) of
+                undefined -> Args3;
+                Center -> [{center, Center} | Args3]
+            end,
+    z_render:wire({dialog, Args4}, Context1).
 
 dialog_close(Context) ->
     z_render:wire({dialog_close, []}, Context).

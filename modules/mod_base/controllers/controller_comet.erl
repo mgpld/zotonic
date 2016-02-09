@@ -21,7 +21,7 @@
 
 -export([
     init/1, 
-    forbidden/2,
+    service_available/2,
     malformed_request/2,
     allowed_methods/2,
     content_types_provided/2,
@@ -29,73 +29,53 @@
     ]).
 
 -include_lib("controller_webmachine_helper.hrl").
--include_lib("include/zotonic.hrl").
-
-
-%% Timeout for comet flush when there is no data, webmachine 0.x had a timeout of 60 seconds, so leave after 55
--define(COMET_FLUSH_EMPTY, 55000).
-
-%% Timeout for comet flush when there is data, allow for 50 msec more to gather extra data before flushing
--define(COMET_FLUSH_DATA,  50).
+-include_lib("zotonic.hrl").
 
 
 init(_Args) -> {ok, []}.
 
-malformed_request(ReqData, _Context) ->
-    Context = z_context:new(ReqData),
-    ?WM_REPLY(false, Context).
+service_available(ReqData, DispatchArgs) when is_list(DispatchArgs) ->
+    Context  = z_context:new(ReqData, ?MODULE),
+    Context1 = z_context:continue_session(z_context:set(DispatchArgs, Context)),
+    z_context:lager_md(Context1),
+    ?WM_REPLY(true, Context1).
 
-forbidden(ReqData, Context) ->
-    %% TODO: prevent that we make a new ua session or a new page session, fail when a new session is needed
-    Context1 = ?WM_REQ(ReqData, Context),
-    Context2 = z_context:ensure_all(Context1),
-    ?WM_REPLY(false, Context2).
+%% @doc Expect an UBF encoded #z_msg_v1 record in the POST
+malformed_request(ReqData, Context0) ->
+    try
+        {Data, RD1} = wrq:req_body(ReqData),
+        {ok, #z_msg_v1{} = ZMsg, _Rest} = z_transport:data_decode(Data),
+        Context = ?WM_REQ(RD1, Context0),
+        z_context:lager_md(Context),
+        Context1 = z_context:set(z_msg, ZMsg, Context),
+        ?WM_REPLY(ZMsg#z_msg_v1.delegate =/= '$comet', Context1)
+    catch _:_ ->
+        {true, ReqData, Context0}
+    end.
 
 allowed_methods(ReqData, Context) ->
     {['POST'], ReqData, Context}.
+    
+content_types_provided(ReqData, Context) ->
+    {[{"text/x-ubf", undefined}], ReqData, Context}.
 
-content_types_provided(ReqData, Context) -> 
-    %% When handling a POST the content type function is not used, so supply false for the function.
-    { [{"application/x-javascript", false}], ReqData, Context }.
-
-
-%% @doc Collect all scripts to be pushed back to the user agent
+%% @doc Collect all data to be pushed back to the user agent
 process_post(ReqData, Context) ->
+    case wrq:get_req_header_lc("content-type", ReqData) of
+        "text/x-ubf" ++ _ ->
+            process_post_ubf(ReqData, Context);
+        "text/plain" ++ _ ->
+            process_post_ubf(ReqData, Context);
+        _ ->
+            {{halt, 415}, ReqData, Context}
+    end. 
+
+process_post_ubf(ReqData, Context) ->
     Context1 = ?WM_REQ(ReqData, Context),
-    erlang:monitor(process, Context1#context.page_pid),
-    z_session_page:comet_attach(self(), Context1#context.page_pid),
-    TRef = start_timer(?COMET_FLUSH_EMPTY),
-    process_post_loop(Context1, TRef, false).
+    Term = z_context:get(z_msg, Context1),
+    {ok, Rs, Context2} = z_transport:incoming(Term, Context1),
+    {ok, ReplyData} = z_transport:data_encode(Rs),
+    {x, RD, Context3} = ?WM_REPLY(x, Context2),
+    RD1 = wrq:append_to_resp_body(ReplyData, RD),
+    {true, RD1, Context3}.
 
-
-%% @doc Wait for all scripts to be pushed to the user agent.
-process_post_loop(Context, TRef, HasData) ->
-    receive
-        flush ->
-            erlang:cancel_timer(TRef),
-            z_session_page:comet_detach(Context#context.page_pid),
-            ?WM_REPLY(true, Context);
-
-        script_queued ->
-            Scripts = z_session_page:get_scripts(Context#context.page_pid),
-            RD  = z_context:get_reqdata(Context),
-            RD1 = wrq:append_to_response_body(Scripts, RD),
-            Context1 = z_context:set_reqdata(RD1, Context),
-            TRef1 = case HasData of
-                        true  -> TRef;
-                        false -> reset_timer(?COMET_FLUSH_DATA, TRef)
-                    end,
-            process_post_loop(Context1, TRef1, true);
-
-        {'DOWN', _MonitorRef, process, Pid, _Info} when Pid == Context#context.page_pid ->
-            self() ! flush,
-            process_post_loop(Context, TRef, HasData)
-    end.
-
-
-start_timer(Delta) ->
-    erlang:send_after(Delta, self(), flush).
-
-reset_timer(Delta, TRef) ->
-    erlang:cancel_timer(TRef),
-    start_timer(Delta).

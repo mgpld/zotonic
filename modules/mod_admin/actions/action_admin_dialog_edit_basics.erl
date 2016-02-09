@@ -63,10 +63,11 @@ event(#postback{message={edit_basics, RscId, EdgeId, Template, Actions, Callback
         {update_element, TargetId1},
         {is_update, z_convert:to_bool(z_context:get_q("is_update", Context))},
         {actions, Actions},
-        {callback, Callback}
+        {callback, Callback},
+        {center, 0}
     ],
     Title = z_convert:to_list(z_trans:lookup_fallback(m_rsc:p(ObjectId, title, Context), Context)),
-    z_render:dialog("Edit " ++ Title, "_action_dialog_edit_basics.tpl", Vars, Context);
+    z_render:dialog([?__("Edit:", Context), " " ++ Title], {cat, "_action_dialog_edit_basics.tpl"}, Vars, Context);
 
 %% @doc Save the thing and close the dialog.
 event(#submit{message={rsc_edit_basics, Args}}, Context) ->
@@ -76,7 +77,7 @@ event(#submit{message={rsc_edit_basics, Args}}, Context) ->
 
     Post = z_context:get_q_all_noz(Context),
     Props = controller_admin_edit:filter_props(Post),
-    Props1 = proplists:delete("id", Props),
+    Props1 = maybe_add_language(Id, proplists:delete("id", Props), Context),
 
     case m_rsc:update(Id, Props1, Context) of
         {ok, _} ->
@@ -95,7 +96,7 @@ event(#submit{message={rsc_edit_basics, Args}}, Context) ->
             Context1 = case proplists:get_value(update_element, Args) of
                             window -> Context;
                             undefined -> Context;
-                            UpdateElt ->
+                             UpdateElt ->
                                 Html = z_template:render(case proplists:get_value(template, Args) of 
                                                             undefined -> "_rsc_edge.tpl"; 
                                                             X -> X
@@ -124,3 +125,15 @@ event(#submit{message={rsc_edit_basics, Args}}, Context) ->
         {error, _Reason} ->
             z_render:growl_error(?__("Something went wrong. Sorry.", Context), Context)
     end.
+
+maybe_add_language(Id, Props, Context) ->
+    case proplists:is_defined("language", Props) of
+        true ->
+            Props;
+        false ->
+            case m_rsc:p_no_acl(Id, language, Context) of
+                undefined -> Props;
+                Language -> [ {language, Language} | Props ]
+            end
+    end.
+

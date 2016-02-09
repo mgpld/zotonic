@@ -154,7 +154,7 @@ msgid "Drag questions here."
 msgstr "Soruları buraya sürükleyin."
 
 #: modules/mod_survey/mod_survey.erl:83
-msgid "E-mail addresses"
+msgid "Email addresses"
 msgstr "E-mail adresleri"
 
 #: modules/mod_survey/templates/_admin_survey_editor_results.tpl:26
@@ -414,7 +414,7 @@ msgid "Show progress information as “<em>Question 3/10</em>”"
 msgstr "İlerleme durmunu “<em>Soru 3/10</em>” gibi göster"
 
 #: modules/mod_survey/templates/_admin_edit_content.survey.tpl:27
-msgid "Show results to user after completion of survey"
+msgid "Show results to user after completion (only results for multiple choice questions are shown)"
 msgstr "Anket tamamlanınca kullanıcıya sonuçlarını göster"
 
 #: modules/mod_survey/templates/_admin_edit_content.survey.tpl:75
@@ -489,9 +489,11 @@ msgstr "Anket sonuçları editörü"
 msgid "Thank you"
 msgstr "Teşekkürler"
 
-#: modules/mod_survey/templates/_survey_end.tpl:3
-msgid "Thank you for filling in our survey. Be sure to come back for other surveys!"
-msgstr "Anketimizi doldurduğunuz için teşekkür ederiz. Diğer anketler için yine bekleriz!"
+#: modules/mod_survey/templates/_survey_end.tpl:7
+msgid ""
+"Thank you for filling in our survey."
+msgstr ""
+"Anketimizi doldurduğunuz için teşekkür ederiz."
 
 #: modules/mod_survey/templates/blocks/_admin_edit_block_li_survey_truefalse.tpl:15
 msgid "The earth is flat."

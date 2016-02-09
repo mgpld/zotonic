@@ -1,7 +1,7 @@
 ACL options
 -----------
 
-:ref:`manual-authorization` checks to perform, in addition to the
+:ref:`guide-authorization` checks to perform, in addition to the
 ``acl_action`` dispatch option, can be given in the ``acl`` dispatch
 option, and accepts the following options:
 
@@ -21,4 +21,9 @@ option, and accepts the following options:
 |                      |                                             |{update, 345}]}              |
 |                      |                                             |                             |
 |                      |                                             |                             |
++----------------------+---------------------------------------------+-----------------------------+
+|ignore                |Don’t peform any access control checks.      |{acl, ignore}                |
+|                      |Be careful to add your own checks in the     |                             |
+|                      |rendered template and all its included       |                             |
+|                      |templates.                                   |                             |
 +----------------------+---------------------------------------------+-----------------------------+

@@ -24,6 +24,12 @@
          search/2,
          parse_request_args/1,
          parse_query_text/1
+        ]).
+
+%% For testing
+-export([
+    expand_object_predicates/2,
+    parse_query/3
 ]).
 
 -include_lib("zotonic.hrl").
@@ -56,41 +62,54 @@ parse_request_args([{"zotonic_host",_}|Rest], Acc) ->
 parse_request_args([{"zotonic_dispatch",_}|Rest], Acc) ->
     parse_request_args(Rest, Acc);
 parse_request_args([{K,V}|Rest], Acc) ->
-    NewVal = V,
-    parse_request_args(Rest, [{request_arg(K),NewVal}|Acc]).
+    parse_request_args(Rest, [{request_arg(K),z_convert:to_binary(V)}|Acc]).
 
 %% Parses a query text. Every line is an argument; of which the first
 %% '=' separates argument key from argument value.
 %% @doc parse_query_text(string()) -> [{K, V}]
-parse_query_text(Text) ->
-    case is_binary(Text) of
-        true ->
-            parse_query_text(z_convert:to_list(Text));
-        _ ->
-            Lines = string:tokens(Text, "\n"),
-            [ {request_arg(L), string:join(Rest, "=")} || [L|Rest] <- [ string:tokens(string:strip(L), "=") || L <- Lines] ]
-    end.
+parse_query_text(undefined) ->
+    [];
+parse_query_text(Text) when is_list(Text) ->
+    parse_query_text(list_to_binary(Text));
+parse_query_text(Text) when is_binary(Text) ->
+    Lines = binary:split(Text, <<"\n">>, [global]),
+    KVs = [ split_arg(z_string:trim(Line)) || Line <- Lines],
+    [ {request_arg(binary_to_list(K)), V} || {K,V} <- KVs, K =/= <<>> ].
+
+split_arg(<<>>) ->
+    {<<>>, <<>>};
+split_arg(B) ->
+    case binary:split(B, <<"=">>) of
+        [K,V] -> {z_string:trim(K), z_string:trim(V)};
+        [K] -> {z_string:trim(K), <<"true">>}
+    end. 
 
 
-% Convert request arguments to atom. Doing it this way avoids atom
-% table overflows.
+                                                % Convert request arguments to atom. Doing it this way avoids atom
+                                                % table overflows.
 request_arg("authoritative")       -> authoritative;
+request_arg("content_group")       -> content_group;
 request_arg("cat")                 -> cat;
+request_arg("cat_exact")           -> cat_exact;
 request_arg("cat_exclude")         -> cat_exclude;
 request_arg("creator_id")          -> creator_id;
 request_arg("modifier_id")         -> modifier_id;
 request_arg("custompivot")         -> custompivot;
+request_arg("filter")              -> filter;
 request_arg("id_exclude")          -> id_exclude;
 request_arg("hasobject")           -> hasobject;
 request_arg("hasobjectpredicate")  -> hasobjectpredicate;
 request_arg("hassubject")          -> hassubject;
 request_arg("hassubjectpredicate") -> hassubjectpredicate;
+request_arg("hasanyobject")        -> hasanyobject;
 request_arg("is_featured")         -> is_featured;
 request_arg("is_published")        -> is_published;
 request_arg("is_public")           -> is_public;
 request_arg("date_start_after")    -> date_start_after;
 request_arg("date_start_before")   -> date_start_before;
 request_arg("date_start_year")     -> date_start_year;
+request_arg("date_end_after")      -> date_end_after;
+request_arg("date_end_before")     -> date_end_before;
 request_arg("date_end_year")       -> date_end_year;
 request_arg("publication_month")   -> publication_month;
 request_arg("publication_year")    -> publication_year;
@@ -100,8 +119,12 @@ request_arg("query_id")            -> query_id;
 request_arg("rsc_id")              -> rsc_id;
 request_arg("sort")                -> sort;
 request_arg("text")                -> text;
+request_arg("match_objects")       -> match_objects;
 request_arg("upcoming")            -> upcoming;
 request_arg("ongoing")             -> ongoing;
+request_arg("finished")            -> finished;
+request_arg("unfinished")          -> unfinished;
+request_arg("unfinished_or_nodate")-> unfinished_or_nodate;
 request_arg(Term)                  -> throw({error, {unknown_query_term, Term}}).
 
 
@@ -123,16 +146,40 @@ parse_query([], _Context, Result) ->
 parse_query([{cat, Cats}|Rest], Context, Result) ->
     Cats1 = assure_categories(Cats, Context),
     Cats2 = add_or_append("rsc", Cats1, Result#search_sql.cats),
-    Tables1 = Result#search_sql.tables,
-    parse_query(Rest, Context, Result#search_sql{cats=Cats2, tables=Tables1});
+    parse_query(Rest, Context, Result#search_sql{cats=Cats2});
 
 %% cat_exclude=categoryname
 %% Filter results outside a certain category.
 parse_query([{cat_exclude, Cats}|Rest], Context, Result) ->
     Cats1 = assure_categories(Cats, Context),
     Cats2 = add_or_append("rsc", Cats1, Result#search_sql.cats_exclude),
-    Tables1 = Result#search_sql.tables,
-    parse_query(Rest, Context, Result#search_sql{cats_exclude=Cats2, tables=Tables1});
+    parse_query(Rest, Context, Result#search_sql{cats_exclude=Cats2});
+
+%% cat_exact=categoryname
+%% Filter results excactly of a category (excluding subcategories)
+parse_query([{cat_exact, Cats}|Rest], Context, Result) ->
+    Cats1 = assure_categories(Cats, Context),
+    Cats2 = add_or_append("rsc", Cats1, Result#search_sql.cats_exact),
+    parse_query(Rest, Context, Result#search_sql{cats_exact=Cats2});
+
+parse_query([{filter, R}|Rest], Context, Result) ->
+    Result1 = add_filters(R, Result),
+    parse_query(Rest, Context, Result1);
+
+%% content_group=id
+%% Include only resources which are member of the given content group (or one of its children)
+parse_query([{content_group, ContentGroup}|Rest], Context, Result) ->
+    List = z_depcache:memo(
+             fun() ->
+                     GrpId = m_rsc:rid(ContentGroup, Context),
+                     [{Lft, Rght}] = z_db:q("SELECT lft, rght FROM hierarchy WHERE name = 'content_group' AND id = $1", [GrpId], Context),
+                     R = z_db:q("SELECT id FROM hierarchy WHERE name = 'content_group' AND lft >= $1 AND rght <= $2", [Lft, Rght], Context),
+                     string:join([z_convert:to_list(I) || {I} <- R], ",")
+             end,
+             {search_query_content_group_list, ContentGroup},
+             Context),
+    Result1 = add_where("rsc.content_group_id IN (" ++ List ++ ")", Result),
+    parse_query(Rest, Context, Result1);
 
 %% id_exclude=resource-id
 %% Exclude an id from the result
@@ -146,11 +193,13 @@ parse_query([{id_exclude, _Id}|Rest], Context, Result)  ->
 
 %% hassubject=[id]
 %% Give all things which have an incoming edge to Id
-parse_query([{hassubject, Id}|Rest], Context, Result) when is_integer(Id) ->
-    parse_query([{hassubject, [Id]}|Rest], Context, Result);
+parse_query([{hassubject, Id}|Rest], Context, Result) when is_integer(Id); is_binary(Id) ->
+    parse_query([{hassubject, maybe_split_list(Id)}|Rest], Context, Result);
+parse_query([{hassubject, [$[|_] = Arg}|Rest], Context, Result) ->
+    parse_query([{hassubject, maybe_split_list(Arg)}|Rest], Context, Result);
 parse_query([{hassubject, [Id]}|Rest], Context, Result) ->
     {A, Result1} = add_edge_join("object_id", Result),
-    {Arg, Result2} = add_arg(m_rsc:rid(Id,Context), Result1),
+    {Arg, Result2} = add_arg(m_rsc:rid(Id, Context), Result1),
     Result3 = add_where(A ++ ".subject_id = " ++ Arg, Result2),
     parse_query(Rest, Context, Result3);
 
@@ -165,7 +214,7 @@ parse_query([{hassubject, [Id, Predicate, Alias]}|Rest], Context, Result) ->
                   _ -> {Arg1, R} = add_arg(m_rsc:rid(Id,Context), Result1),
                        add_where(A ++ ".subject_id = " ++ Arg1, R)
               end,
-    PredicateId = m_predicate:name_to_id_check(Predicate, Context),
+    PredicateId = predicate_to_id(Predicate, Context),
     {Arg2, Result3} = add_arg(PredicateId, Result2),
     Result4 = add_where(A ++ ".predicate_id = " ++ Arg2, Result3),
     parse_query(Rest, Context, Result4);
@@ -175,8 +224,10 @@ parse_query([{hassubject, Id}|Rest], Context, Result) when is_list(Id) ->
 
 %% hasobject=[id]
 %% Give all things which have an outgoing edge to Id
-parse_query([{hasobject, Id}|Rest], Context, Result) when is_integer(Id) ->
-    parse_query([{hasobject, [Id]}|Rest], Context, Result);
+parse_query([{hasobject, Id}|Rest], Context, Result) when is_integer(Id); is_binary(Id) ->
+    parse_query([{hasobject, maybe_split_list(Id)}|Rest], Context, Result);
+parse_query([{hasobject, [$[|_] = Arg}|Rest], Context, Result) ->
+    parse_query([{hasobject, maybe_split_list(Arg)}|Rest], Context, Result);
 parse_query([{hasobject, [Id]}|Rest], Context, Result) ->
     {A, Result1} = add_edge_join("subject_id", Result),
     {Arg, Result2} = add_arg(m_rsc:rid(Id,Context), Result1),
@@ -194,19 +245,33 @@ parse_query([{hasobject, [Id, Predicate, Alias]}|Rest], Context, Result) ->
                   _ -> {Arg1, R} = add_arg(m_rsc:rid(Id,Context), Result1),
                        add_where(A ++ ".object_id = " ++ Arg1, R)
               end,
-    PredicateId = m_predicate:name_to_id_check(Predicate, Context),
+    PredicateId = predicate_to_id(Predicate, Context),
     {Arg2, Result3} = add_arg(PredicateId, Result2),
     Result4 = add_where(A ++ ".predicate_id = " ++ Arg2, Result3),
     parse_query(Rest, Context, Result4);
 parse_query([{hasobject, Id}|Rest], Context, Result) when is_list(Id) ->
     parse_query([{hasobject, [m_rsc:rid(Id,Context)]}|Rest], Context, Result);
 
+%% hasanyobject=[[id,predicate]|id, ...]
+%% Give all things which have an outgoing edge to Id with any of the given object/predicate combinations
+parse_query([{hasanyobject, ObjPreds}|Rest], Context, Result) ->
+    OPs = expand_object_predicates(ObjPreds, Context),
+    % rsc.id in (select subject_id from edge where (object_id = ... and predicate_id = ... ) or (...) or ...)
+    Alias = "edge_" ++ z_ids:identifier(),
+    OPClauses = [ object_predicate_clause(Alias, Obj,Pred) || {Obj,Pred} <- OPs ],
+    Where = lists:flatten([
+                "rsc.id in (select ", Alias ,".subject_id from edge ",Alias," where (",
+                    z_utils:combine(") or (", OPClauses),
+                "))"
+                ]),
+    Result1 = add_where(Where, Result),
+    parse_query(Rest, Context, Result1);
 
 %% hasobjectpredicate=predicate
 %% Give all things which have any outgoing edge with given predicate
 parse_query([{hasobjectpredicate, Predicate}|Rest], Context, Result) ->
     {A, Result1} = add_edge_join("subject_id", Result),
-    PredicateId = m_predicate:name_to_id_check(Predicate, Context),
+    PredicateId = predicate_to_id(Predicate, Context),
     {Arg1, Result2} = add_arg(PredicateId, Result1),
     Result3 = add_where(A ++ ".predicate_id = " ++ Arg1, Result2),
     parse_query(Rest, Context, Result3);
@@ -215,7 +280,7 @@ parse_query([{hasobjectpredicate, Predicate}|Rest], Context, Result) ->
 %% Give all things which have any incoming edge with given predicate
 parse_query([{hassubjectpredicate, Predicate}|Rest], Context, Result) ->
     {A, Result1} = add_edge_join("object_id", Result),
-    PredicateId = m_predicate:name_to_id_check(Predicate, Context),
+    PredicateId = predicate_to_id(Predicate, Context),
     {Arg1, Result2} = add_arg(PredicateId, Result1),
     Result3 = add_where(A ++ ".predicate_id = " ++ Arg1, Result2),
     parse_query(Rest, Context, Result3);
@@ -285,37 +350,68 @@ parse_query([{ongoing, Boolean}|Rest], Context, Result) ->
               end,
     parse_query(Rest, Context, Result1);
 
+%% finished
+%% Filter on items whose start date lies in the past
+parse_query([{finished, Boolean}|Rest], Context, Result) ->
+    Result1 = case z_convert:to_bool(Boolean) of
+                  true -> add_where("rsc.pivot_date_start < current_date", Result);
+                  false -> Result
+              end,
+    parse_query(Rest, Context, Result1);
+
+%% Filter on items whose start date lies in the future
+parse_query([{unfinished, Boolean}|Rest], Context, Result) ->
+    Result1 = case z_convert:to_bool(Boolean) of
+                  true -> add_where("rsc.pivot_date_end >= current_date", Result);
+                  false -> Result
+              end,
+    parse_query(Rest, Context, Result1);
+
+%% Filter on items whose start date lies in the future or don't have an end_date
+parse_query([{unfinished_or_nodate, Boolean}|Rest], Context, Result) ->
+    Result1 = case z_convert:to_bool(Boolean) of
+                  true -> add_where("(rsc.pivot_date_end >= current_date or rsc.pivot_date_start is null)", Result);
+                  false -> Result
+              end,
+    parse_query(Rest, Context, Result1);
 
 %% authoritative={true|false}
 %% Filter on items which are authoritative or not
 parse_query([{authoritative, Boolean}|Rest], Context, Result) ->
     {Arg, Result1} = add_arg(z_convert:to_bool(Boolean), Result),
-     Result2 = add_where("rsc.is_authoritative = " ++ Arg, Result1),
-     parse_query(Rest, Context, Result2);
+    Result2 = add_where("rsc.is_authoritative = " ++ Arg, Result1),
+    parse_query(Rest, Context, Result2);
 
 %% creator_id=<rsc id>
 %% Filter on items which are created by <rsc id>
 parse_query([{creator_id, Integer}|Rest], Context, Result) ->
     {Arg, Result1} = add_arg(z_convert:to_integer(Integer), Result),
-     Result2 = add_where("rsc.creator_id = " ++ Arg, Result1),
-     parse_query(Rest, Context, Result2);
+    Result2 = add_where("rsc.creator_id = " ++ Arg, Result1),
+    parse_query(Rest, Context, Result2);
 
 %% modifier_id=<rsc id>
 %% Filter on items which are last modified by <rsc id>
 parse_query([{modifier_id, Integer}|Rest], Context, Result) ->
     {Arg, Result1} = add_arg(z_convert:to_integer(Integer), Result),
-     Result2 = add_where("rsc.modifier_id = " ++ Arg, Result1),
-     parse_query(Rest, Context, Result2);
+    Result2 = add_where("rsc.modifier_id = " ++ Arg, Result1),
+    parse_query(Rest, Context, Result2);
 
 %% query_id=<rsc id>
 %% Get the query terms from given resource ID, and use those terms.
 parse_query([{query_id, Id}|Rest], Context, Result) ->
     case m_category:is_a(m_rsc:p(Id, category_id, Context), 'query', Context) of
         true ->
-            Q = z_convert:to_list(m_rsc:p(Id, 'query', Context)),
-            parse_query(parse_query_text(Q) ++ Rest, Context, Result);
+            QArgs = try
+                        parse_query_text(z_html:unescape(m_rsc:p(Id, 'query', Context)))
+                    catch
+                        throw:{error,{unknown_query_term,Term}} ->
+                            lager:error("[~p] Unknown query term in search query ~p: ~p",
+                                        [z_context:site(Context), Id, Term]),
+                            []
+                    end,
+            parse_query(QArgs ++ Rest, Context, Result);
         false ->
-            % Fetch the id's haspart objects (assume a collection)
+                                                % Fetch the id's haspart objects (assume a collection)
             parse_query([{hassubject, [Id, haspart]} | Rest], Context, Result)
     end;
 
@@ -323,8 +419,8 @@ parse_query([{query_id, Id}|Rest], Context, Result) ->
 %% Filter to *only* include the given rsc id. Can be used for resource existence check.
 parse_query([{rsc_id, Id}|Rest], Context, Result) ->
     {Arg, Result1} = add_arg(Id, Result),
-     Result2 = add_where("rsc.id = " ++ Arg, Result1),
-     parse_query(Rest, Context, Result2);
+    Result2 = add_where("rsc.id = " ++ Arg, Result1),
+    parse_query(Rest, Context, Result2);
 
 %% sort=fieldname
 %% Order by a given field. Putting a '-' in front of the field name reverts the ordering.
@@ -344,30 +440,59 @@ parse_query([{custompivot, Table}|Rest], Context, Result) ->
 %% Perform a fulltext search
 parse_query([{text, Text}|Rest], Context, Result) ->
     case z_string:trim(Text) of 
-        "id:"++ S -> mod_search:find_by_id(S, Context);
-        [] -> parse_query(Rest, Context, Result);
+        "id:"++ S ->
+            mod_search:find_by_id(S, Context);
+        [] ->
+            parse_query(Rest, Context, Result);
         _ ->
             TsQuery = mod_search:to_tsquery(Text, Context),
             {QArg, Result1} = add_arg(TsQuery, Result),
-            {LArg, Result2} = add_arg(z_pivot_rsc:pg_lang(Context#context.language), Result1),
-            Result3 = Result2#search_sql{
-                        from=Result2#search_sql.from ++ ", to_tsquery(" ++ LArg ++ ", " ++ QArg ++ ") txtquery"
-                       },
-            Result4 = add_where("txtquery @@ rsc.pivot_tsv", Result3),
-            Result5 = add_order_unsafe("ts_rank_cd(rsc.pivot_tsv, txtquery, 32) desc", Result4),
-            parse_query(Rest, Context, Result5)
+            {BArg, Result1a} = add_arg(mod_search:rank_behaviour(Context), Result1),
+            Result2 = add_where(QArg++" @@ rsc.pivot_tsv", Result1a),
+            Result3 = add_order_unsafe(
+                              "ts_rank_cd("
+                                ++mod_search:rank_weight()
+                                ++", rsc.pivot_tsv, "
+                                ++QArg++", "
+                                ++BArg++") desc", Result2),
+            parse_query(Rest, Context, Result3)
+    end;
+
+%% match_objects=<id>
+%% Match on the objects of the resource, best matching return first.
+%% Similar to the {match_objects id=...} query.
+parse_query([{match_objects, RId}|Rest], Context, Result) ->
+    case m_rsc:rid(RId, Context) of
+        undefined ->
+            #search_result{};
+        Id ->
+            ObjectIds = m_edge:objects(Id, Context),
+            MatchTerms = [ ["zpo",integer_to_list(ObjId)] || ObjId <- ObjectIds ],
+            TsQuery = lists:flatten(z_utils:combine("|", MatchTerms)),
+            case TsQuery of
+                [] ->
+                    #search_result{};
+                _ ->
+                    {QArg, Result1} = add_arg(TsQuery, Result),
+                    Result2 = Result1#search_sql{
+                                from=Result1#search_sql.from ++ ", to_tsquery(" ++ QArg ++ ") matchquery"
+                               },
+                    Result3 = add_where("matchquery @@ rsc.pivot_rtsv", Result2),
+                    Result4 = add_order_unsafe("ts_rank(rsc.pivot_rtsv, matchquery) desc", Result3),
+                    parse_query([{id_exclude, Id}|Rest], Context, Result4)
+            end
     end;
 
 %% date_start_after=date
 %% Filter on date_start after a specific date.
 parse_query([{date_start_after, Date}|Rest], Context, Result) ->
-    {Arg, Result1} = add_arg(z_convert:to_datetime(Date), Result),
+    {Arg, Result1} = add_arg(z_datetime:to_datetime(Date, Context), Result),
     parse_query(Rest, Context, add_where("rsc.pivot_date_start >= " ++ Arg, Result1));
 
 %% date_start_after=date
 %% Filter on date_start before a specific date.
 parse_query([{date_start_before, Date}|Rest], Context, Result) ->
-    {Arg, Result1} = add_arg(z_convert:to_datetime(Date), Result),
+    {Arg, Result1} = add_arg(z_datetime:to_datetime(Date, Context), Result),
     parse_query(Rest, Context, add_where("rsc.pivot_date_start <= " ++ Arg, Result1));
 
 %% date_start_year=year
@@ -375,6 +500,18 @@ parse_query([{date_start_before, Date}|Rest], Context, Result) ->
 parse_query([{date_start_year, Year}|Rest], Context, Result) ->
     {Arg, Result1} = add_arg(z_convert:to_integer(Year), Result),
     parse_query(Rest, Context, add_where("date_part('year', rsc.pivot_date_start) = " ++ Arg, Result1));
+
+%% date_end_after=date
+%% Filter on date_end after a specific date.
+parse_query([{date_end_after, Date}|Rest], Context, Result) ->
+    {Arg, Result1} = add_arg(z_datetime:to_datetime(Date, Context), Result),
+    parse_query(Rest, Context, add_where("rsc.pivot_date_end >= " ++ Arg, Result1));
+
+%% date_end_after=date
+%% Filter on date_end before a specific date.
+parse_query([{date_end_before, Date}|Rest], Context, Result) ->
+    {Arg, Result1} = add_arg(z_datetime:to_datetime(Date, Context), Result),
+    parse_query(Rest, Context, add_where("rsc.pivot_date_end <= " ++ Arg, Result1));
 
 %% date_end_year=year
 %% Filter on year of end date
@@ -395,11 +532,11 @@ parse_query([{publication_month, Month}|Rest], Context, Result) ->
     parse_query(Rest, Context, add_where("date_part('month', rsc.publication_start) = " ++ Arg, Result1));
 
 parse_query([{publication_after, Date}|Rest], Context, Result) ->
-    {Arg, Result1} = add_arg(z_convert:to_datetime(Date), Result),
+    {Arg, Result1} = add_arg(z_datetime:to_datetime(Date, Context), Result),
     parse_query(Rest, Context, add_where("rsc.publication_start >= " ++ Arg, Result1));
 
 parse_query([{publication_before, Date}|Rest], Context, Result) ->
-    {Arg, Result1} = add_arg(z_convert:to_datetime(Date), Result),
+    {Arg, Result1} = add_arg(z_datetime:to_datetime(Date, Context), Result),
     parse_query(Rest, Context, add_where("rsc.publication_start <= " ++ Arg, Result1));
 
 %% No match found
@@ -454,6 +591,20 @@ add_custompivot_join(RscTable, Table, Search) ->
       from=Search#search_sql.from ++ " left join pivot_" ++ Table1 ++ " " ++ Alias ++ " on " ++ JoinClause
      }.
 
+%% Add a join on the hierarchy table.
+% add_hierarchy_join(HierarchyName, Lft, Rght, Search) ->
+%     {NameArg, Search1} = add_arg(HierarchyName, Search),
+%     {LftArg, Search2} = add_arg(Lft, Search1),
+%     {RghtArg, Search3} = add_arg(Rght, Search2),
+
+%     A = "h" ++ integer_to_list(length(Search#search_sql.tables)),
+%     Search4 = add_where(A ++ ".name = " ++ NameArg ++ " AND " ++ A ++ ".lft >= " ++ LftArg ++ " AND " ++ A ++ ".rght <= " ++ RghtArg, Search3),
+
+%     Search4#search_sql{
+%       tables=Search1#search_sql.tables ++ [{hierarchy, A}],
+%       from=Search1#search_sql.from ++ ", hierarchy " ++ A
+%      }.
+
 %% Add an AND clause to the WHERE of a #search_sql
 %% Clause is already supposed to be safe.
 add_where(Clause, Search) ->
@@ -471,8 +622,20 @@ add_order(Order, Search) when is_atom(Order) ->
 add_order(Order, Search) when is_binary(Order) ->
     add_order(binary_to_list(Order), Search);
 add_order("seq", Search) ->
+    add_order("+seq", Search);
+add_order([C,$s,$e,$q], Search) when C =:= $-; C =:= $+ ->
     case proplists:get_value(edge, Search#search_sql.tables) of
-        L when is_list(L) -> add_order(L++".seq", Search);
+        L when is_list(L) -> 
+            Search1 = add_order([C|L]++".seq", Search),
+            add_order([C|L]++".id", Search1);
+        undefined -> 
+            Search
+    end;
+add_order("edge."++_ = Order, Search) ->
+    add_order([$+|Order], Search);
+add_order([C,$e,$d,$g,$e,$.|Order], Search) when C =:= $-; C =:= $+ ->
+    case proplists:get_value(edge, Search#search_sql.tables) of
+        L when is_list(L) -> add_order([C|L]++[$.|Order], Search);
         undefined -> Search
     end;
 add_order(Sort, Search) ->
@@ -480,10 +643,9 @@ add_order(Sort, Search) ->
                  "random" ->
                      "random()";
                  _ -> 
-                     [FirstChar|F1] = Sort,
-                     case FirstChar of
-                         $- -> sql_safe(F1) ++ " DESC";
-                         $+ -> sql_safe(F1) ++ " ASC";
+                     case Sort of
+                         [$-|F1] -> sql_safe(F1) ++ " DESC";
+                         [$+|F1] -> sql_safe(F1) ++ " ASC";
                          _ -> sql_safe(Sort) ++ " ASC"
                      end
              end,
@@ -505,6 +667,8 @@ add_arg(ArgValue, Search) ->
 
 
 %% Make sure that parts of the query are safe to append to the search query.
+sql_safe(String) when not is_list(String) ->
+    sql_safe(z_convert:to_list(String));
 sql_safe(String) ->
     case re:run(String, ?SQL_SAFE_REGEXP) of
         {match, _} ->
@@ -516,51 +680,80 @@ sql_safe(String) ->
 
 %% Make sure the input is a list of valid categories.
 assure_categories(Name, Context) ->
-    Cats = case z_string:is_string(Name) of
-               true -> [iolist_to_binary(Name)];
-               false -> Name
+    Cats = case {z_string:is_string(Name), is_binary(Name)} of
+               {true, false} -> [iolist_to_binary(Name)];
+               {_, true} -> [Name];
+               _ -> Name
            end,
     Cats1 = assure_cat_flatten(Cats),
     lists:foldl(fun(C, Acc) ->
-                    case assure_category(C, Context) of
-                        error -> Acc;
-                        {ok, N} -> [N|Acc]
-                    end
+                        case assure_category(C, Context) of
+                            undefined -> Acc;
+                            error -> ['$error'|Acc];
+                            {ok, N} -> [N|Acc]
+                        end
                 end,
                 [],
                 Cats1).
 
 %% Flatten eventual lists of categories
+assure_cat_flatten(Name) when not is_list(Name) ->
+    assure_cat_flatten([Name]);
 assure_cat_flatten(Names) when is_list(Names) ->
     lists:flatten([  
-        case is_list(N) of
-            true -> 
-                case z_string:is_string(N) of
-                    true -> iolist_to_binary(N);
-                    false -> assure_cat_flatten(N)
-                end;
-            false ->
-                N
-        end
-        || N <- Names]).
+                     case is_list(N) of
+                         true -> 
+                             case z_string:is_string(N) of
+                                 true -> iolist_to_binary(N);
+                                 false -> assure_cat_flatten(N)
+                             end;
+                         false ->
+                             N
+                     end
+                     || N <- Names]).
 
 %% Make sure the given name is a category.
-assure_category([], _) -> error;
-assure_category(<<>>, _) -> error;
-assure_category(undefined, _) -> error;
+assure_category([], _) -> undefined;
+assure_category(<<>>, _) -> undefined;
+assure_category(undefined, _) -> undefined;
+assure_category([$'|_] = Name, Context) ->
+    case lists:last(Name) of
+        $' -> assure_category_1(z_string:trim(Name, $'), Context);
+        _ -> assure_category_1(Name, Context)
+    end;
+assure_category([$"|_] = Name, Context) ->
+    case lists:last(Name) of
+        $" -> assure_category_1(z_string:trim(Name, $"), Context);
+        _ -> assure_category_1(Name, Context)
+    end;
+assure_category(<<$', _/binary>> = Name, Context) ->
+    case binary:last(Name) of
+        $' -> assure_category_1(z_string:trim(Name, $'), Context);
+        _ -> assure_category_1(Name, Context)
+    end;
+assure_category(<<$", _/binary>> = Name, Context) ->
+    case binary:last(Name) of
+        $" -> assure_category_1(z_string:trim(Name, $"), Context);
+        _ -> assure_category_1(Name, Context)
+    end;
 assure_category(Name, Context) ->
+    assure_category_1(Name, Context).
+
+assure_category_1(Name, Context) ->
     case m_category:name_to_id(Name, Context) of
         {ok, _Id} ->
             {ok, Name};
         _ -> 
             case m_rsc:rid(Name, Context) of
                 undefined ->
-                    lager:warning("Query: unknown category ~p", [Name]),
+                    lager:warning("[~p] Query: unknown category '~p'", [z_context:site(Context), Name]),
+                    display_error([ ?__("Unknown category", Context), 32, $", z_html:escape(z_convert:to_binary(Name)), $" ], Context),
                     error;
                 CatId ->
                     case m_category:id_to_name(CatId, Context) of
                         undefined ->
-                            lager:warning("Query: ~p is not a category", [CatId]),
+                            lager:warning("[~p] Query: '~p' is not a category", [z_context:site(Context), Name]),
+                            display_error([ $", z_html:escape(z_convert:to_binary(Name)), $", 32, ?__("is not a category", Context) ], Context),
                             error;
                         Name1 ->
                             {ok, Name1}
@@ -568,4 +761,184 @@ assure_category(Name, Context) ->
             end
     end.
 
+%% If the current user is an administrator or editor, show an error message about this search
+display_error(Msg, Context) ->
+    case z_acl:is_allowed(use, mod_admin, Context) of
+        true ->
+            ContextPruned = z_context:prune_for_async(Context),
+            z_session_page:add_script(z_render:growl_error(Msg, ContextPruned));
+        false ->
+            ok
+    end.
 
+
+%% Add filters
+add_filters([ [Column|_] | _ ] = Filters, Result) when is_list(Column); is_binary(Column); is_atom(Column) ->
+    add_filters_or(Filters, Result);
+add_filters({'or', Filters}, Result) ->
+    add_filters_or(Filters, Result);
+add_filters([Column, Value], R) ->
+    add_filters([Column, eq, Value], R);
+add_filters([Column, Operator, Value], Result) ->
+    {Expr, Result1} = create_filter(Column, Operator, Value, Result),
+    add_where(Expr, Result1).
+
+add_filters_or(Filters, Result) ->
+    {Exprs, Result1} = lists:foldr(
+                         fun
+                            ([C,O,V], {Es, R}) ->
+                                 {E, R1} = create_filter(C, O, V, R),
+                                 {[E|Es], R1};
+                            ([C,V], {Es, R}) ->
+                                 {E, R1} = create_filter(C, eq, V, R),
+                                 {[E|Es], R1}
+                         end,
+                         {[], Result},
+                         Filters),
+    Or = "(" ++ string:join(Exprs, " OR ") ++ ")",
+    add_where(Or, Result1).
+
+create_filter(Column, Operator, null, Result) ->
+    create_filter(Column, Operator, undefined, Result);
+create_filter(Column, Operator, undefined, Result) ->
+    Column1 = sql_safe(Column),
+    Operator1 = map_filter_operator(Operator),
+    {create_filter_null(Column1, Operator1), Result};
+create_filter(Column, Operator, Value, Result) ->
+    {Arg, Result1} = add_arg(Value, Result),
+    Column1 = sql_safe(Column),
+    Operator1 = map_filter_operator(Operator),
+    {Column1 ++ " " ++ Operator1 ++ " " ++ Arg, Result1}.
+
+create_filter_null(Column, "=") ->
+    Column ++ " is null";
+create_filter_null(Column, "<>") ->
+    Column ++ " is not null";
+create_filter_null(_Column, _Op) ->
+    "false".
+
+map_filter_operator(eq) -> "=";
+map_filter_operator('=') -> "=";
+map_filter_operator(ne) -> "<>";
+map_filter_operator('<>') -> "<>";
+map_filter_operator(gt) -> ">";
+map_filter_operator('>') -> ">";
+map_filter_operator(lt) -> "<";
+map_filter_operator('<') -> "<";
+map_filter_operator(gte) -> ">=";
+map_filter_operator('>=') -> ">=";
+map_filter_operator(lte) -> "<=";
+map_filter_operator('<=') -> "<=";
+map_filter_operator("=") -> "=";
+map_filter_operator("<>") -> "<>";
+map_filter_operator(">") -> ">";
+map_filter_operator("<") -> "<";
+map_filter_operator(">=") -> ">=";
+map_filter_operator("<=") -> "<=";
+map_filter_operator(<<"=">>) -> "=";
+map_filter_operator(<<"<>">>) -> "<>";
+map_filter_operator(<<">">>) -> ">";
+map_filter_operator(<<"<">>) -> "<";
+map_filter_operator(<<">=">>) -> ">=";
+map_filter_operator(<<"<=">>) -> "<=";
+map_filter_operator(Op) -> throw({error, {unknown_filter_operator, Op}}).
+
+
+% Convert an expression like [123,hasdocument]
+maybe_split_list(Id) when is_integer(Id) ->
+    [Id];
+maybe_split_list(<<"[", Rest/binary>>) ->
+    split_list(Rest);
+maybe_split_list([$[|Rest]) ->
+    split_list(z_convert:to_binary(Rest));
+maybe_split_list(Other) ->
+    [Other].
+
+split_list(Bin) ->
+    Bin1 = binary:replace(Bin, <<"]">>, <<>>, [global]),
+    Parts = binary:split(Bin1, <<",">>, [global]),
+    [ unquot(z_string:trim(P)) || P <- Parts ].
+
+unquot(<<C, Rest/binary>>) when C =:= $'; C =:= $"; C =:= $` ->
+    binary:replace(Rest, <<C>>, <<>>);
+unquot([C|Rest]) when C =:= $'; C =:= $"; C =:= $` ->
+    [ X || X <- Rest, X =/= C ];
+unquot(B) ->
+    B.
+
+%% Expand the argument for hasanyobject, make pairs of {ObjectId,PredicateId}
+expand_object_predicates(Bin, Context) when is_binary(Bin) ->
+    map_rids(search_parse_list:parse(Bin), Context);
+expand_object_predicates(OPs, Context) ->
+    map_rids(OPs, Context).
+
+map_rids({rsc_list, L}, Context) ->
+    map_rids(L, Context);
+map_rids(L, Context) when is_list(L) ->
+    [ map_rid(unquot(X),Context) || X <- L, X =/= <<>> ];
+map_rids(Id, Context) ->
+    map_rid(Id, Context).
+
+map_rid([], _Context) ->  {any, any};
+map_rid([Obj,Pred|_], Context) -> {rid(Obj,Context),rid(Pred,Context)};
+map_rid([Obj], Context) ->  {rid(Obj, Context), any};
+map_rid(Obj, Context) ->  {rid(Obj, Context), any}.
+
+rid(undefined, _Context) -> undefined;
+rid(<<"*">>, _Context) -> any;
+rid('*', _Context) -> any;
+rid("*", _Context) -> any;
+rid("", _Context) -> any;
+rid(<<>>, _Context) -> any;
+rid(Id, _Context) when is_integer(Id) -> Id;
+rid(Id, Context) -> m_rsc:rid(Id, Context).
+
+predicate_to_id([$'|_] = Name, Context) ->
+    case lists:last(Name) of
+        $' -> predicate_to_id_1(z_string:trim(Name, $'), Context);
+        _ -> predicate_to_id_1(Name, Context)
+    end;
+predicate_to_id([$"|_] = Name, Context) ->
+    case lists:last(Name) of
+        $" -> predicate_to_id_1(z_string:trim(Name, $"), Context);
+        _ -> predicate_to_id_1(Name, Context)
+    end;
+predicate_to_id(<<$', _/binary>> = Name, Context) ->
+    case binary:last(Name) of
+        $' -> predicate_to_id_1(z_string:trim(Name, $'), Context);
+        _ -> predicate_to_id_1(Name, Context)
+    end;
+predicate_to_id(<<$", _/binary>> = Name, Context) ->
+    case binary:last(Name) of
+        $" -> predicate_to_id_1(z_string:trim(Name, $"), Context);
+        _ -> predicate_to_id_1(Name, Context)
+    end;
+predicate_to_id(Pred, Context) ->
+    predicate_to_id_1(Pred, Context).
+
+predicate_to_id_1(Pred, Context) ->
+    case m_predicate:name_to_id(Pred, Context) of
+        {ok, Id} ->
+            Id;
+        {error, _} ->
+            lager:warning("[~p] Query: unknown predicate '~p'", [z_context:site(Context), Pred]),
+            display_error([ ?__("Unknown predicate", Context), 32, $", z_html:escape(z_convert:to_binary(Pred)), $" ], Context),
+            0
+    end.
+
+%% Support routine for "hasanyobject"
+object_predicate_clause(_Alias, undefined, undefined) ->
+    "false";
+object_predicate_clause(_Alias, _Object, undefined) ->
+    "false";
+object_predicate_clause(_Alias, undefined, _Predicate) ->
+    "false";
+object_predicate_clause(Alias, any, any) ->
+    [Alias, ".subject_id = rsc.id"];
+object_predicate_clause(Alias, any, PredicateId) when is_integer(PredicateId) ->
+    [Alias, ".predicate_id = ", integer_to_list(PredicateId)];
+object_predicate_clause(Alias, ObjectId, any) when is_integer(ObjectId) ->
+    [Alias, ".object_id = ", integer_to_list(ObjectId)];
+object_predicate_clause(Alias, ObjectId, PredicateId) when is_integer(PredicateId), is_integer(ObjectId) ->
+    [Alias, ".object_id=", integer_to_list(ObjectId), 
+     " and ", Alias, ".predicate_id=", integer_to_list(PredicateId)].

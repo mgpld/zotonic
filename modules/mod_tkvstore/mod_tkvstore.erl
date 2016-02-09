@@ -52,7 +52,7 @@
 start_link() -> 
     start_link([]).
 start_link(Args) when is_list(Args) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Args, []).
+    gen_server:start_link(?MODULE, Args, []).
 
 
 %% @doc Do a put in the persistent store, replace existing key/value
@@ -80,6 +80,10 @@ pid_observe_tkvstore_delete(Pid, #tkvstore_delete{} = Message, _Context) ->
 %% @doc Initiates the server.
 init(Args) ->
     {context, Context} = proplists:lookup(context, Args),
+    lager:md([
+        {site, z_context:site(Context)},
+        {module, ?MODULE}
+      ]),
     m_tkvstore:init(Context),
     WriterPid = erlang:spawn_link(?MODULE, writer_loop, [self(), Context]),
     {ok, #state{

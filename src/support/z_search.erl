@@ -65,7 +65,7 @@ pager(#search_result{result=Result} = SearchResult, Page, PageLen, _Context) ->
         false ->
             []
     end,
-    Next = if Offset + PageLen < Total -> false; true -> Page+1 end,
+    Next = if Offset + PageLen < Total -> Page+1; true -> false end,
     Prev = if Page > 1 -> Page-1; true -> 1 end,
     SearchResult#search_result{
         result=OnPage,
@@ -88,17 +88,20 @@ search(Search, Context) ->
 search({SearchName, Props} = Search, OffsetLimit, Context) ->
     Props1 = case proplists:get_all_values(cat, Props) of
         [] -> Props;
+        [[]] -> Props;
         Cats -> [{cat, Cats} | proplists:delete(cat, Props)]
     end,
     Props2 = case proplists:get_all_values(cat_exclude, Props1) of
         [] -> Props1;
+        [[]] -> Props1;
         CatsX -> [{cat_exclude, CatsX} | proplists:delete(cat_exclude, Props1)]
     end,
     PropsSorted = lists:keysort(1, Props2),
     Q = #search_query{search={SearchName, PropsSorted}, offsetlimit=OffsetLimit},
     case z_notifier:first(Q, Context) of
-        undefined -> 
-            ?LOG("Unknown search query ~p~n~p~n", [Search, erlang:get_stacktrace()]),
+        undefined ->
+            Stack = erlang:get_stacktrace(),
+            lager:info("[~p] Unknown search query ~p~n~p~n", [z_context:site(Context), Search, Stack]),
             #search_result{};
         Result when Result /= undefined -> 
             search_result(Result, OffsetLimit, Context)
@@ -173,7 +176,9 @@ concat_sql_query(#search_sql{select=Select, from=From, where=Where, group_by=Gro
 
 %% @doc Inject the ACL checks in the SQL query.
 %% @spec reformat_sql_query(#search_sql{}, Context) -> #search_sql{}
-reformat_sql_query(#search_sql{where=Where, from=From, tables=Tables, args=Args, cats=TabCats, cats_exclude=TabCatsExclude} = Q, Context) ->
+reformat_sql_query(#search_sql{where=Where, from=From, tables=Tables, args=Args, 
+                               cats=TabCats, cats_exclude=TabCatsExclude,
+                               cats_exact=TabCatsExact} = Q, Context) ->
     {ExtraWhere, Args1} = lists:foldl(
                                 fun(Table, {Acc,As}) ->
                                     {W,As1} = add_acl_check(Table, As, Q, Context),
@@ -193,9 +198,13 @@ reformat_sql_query(#search_sql{where=Where, from=From, tables=Tables, args=Args,
                                         {FromNew, CatCheck} -> {FromNew, [CatCheck | C]}
                                     end
                                 end, {From1, ExtraWhere1}, TabCatsExclude),
+    {ExtraWhere3, Args2} = lists:foldl(
+                                fun({Alias, Cats}, {WAcc,As}) ->
+                                    add_cat_exact_check(Cats, Alias, WAcc, As, Context)
+                                end, {ExtraWhere2, Args1}, TabCatsExact),
 
-    Where1 = lists:flatten(concat_where(ExtraWhere2, Where)),
-    Q#search_sql{where=Where1, from=From2, args=Args1}.
+    Where1 = lists:flatten(concat_where(ExtraWhere3, Where)),
+    Q#search_sql{where=Where1, from=From2, args=Args2}.
 
 
 %% @doc Concatenate the where clause with the extra ACL checks using "and".  Skip empty clauses.
@@ -242,35 +251,34 @@ concat_sql_from1(Something) ->	%% make list for records or other stuff
 %% @doc Create extra 'where' conditions for checking the access control
 %% @spec add_acl_check({Table, Alias}, Args, Q, Context) -> {Where, NewArgs}
 add_acl_check({rsc, Alias}, Args, Q, Context) ->
-    add_acl_check1(rsc, Alias, Args, Q, Context);
+    add_acl_check_rsc(Alias, Args, Q, Context);
 add_acl_check(_, Args, _Q, _Context) ->
     {[], Args}.
 
 
 %% @doc Create extra 'where' conditions for checking the access control
-%% @spec add_acl_check1(Table, Alias, Args, SearchSQL, Context) -> {Where, NewArgs}
 %% @todo This needs to be changed for the pluggable ACL
-add_acl_check1(Table, Alias, Args, SearchSql, Context) ->
+add_acl_check_rsc(Alias, Args, SearchSql, Context) ->
     case z_notifier:first(#acl_add_sql_check{alias=Alias, args=Args, search_sql=SearchSql}, Context) of
         undefined ->
-            % N = length(Args),
             case z_acl:can_see(Context) of
                 ?ACL_VIS_USER ->
                     % Admin or supervisor, can see everything
                     {[], Args};
                 ?ACL_VIS_PUBLIC -> 
                     % Anonymous users can only see public published content
-                    Sql = Alias ++ ".visible_for = 0" ++ publish_check(Table, Alias, SearchSql),
+                    Sql = Alias ++ ".visible_for = 0" ++ publish_check(Alias, SearchSql),
                     {Sql, Args};
                 ?ACL_VIS_COMMUNITY -> 
                     % Only see published public or community content
-                    Sql = Alias ++ ".visible_for in (0,1) " ++ publish_check(Table, Alias, SearchSql),
+                    Sql = Alias ++ ".visible_for in (0,1) " ++ publish_check(Alias, SearchSql),
                     {Sql, Args};
                 ?ACL_VIS_GROUP ->
                     % Can see published community and public content or any content from one of the user's groups
-                    Sql = Alias ++ ".visible_for in (0,1) " ++ publish_check(Table, Alias, SearchSql),
-                    N = length(Args),
-                    Sql1 = "((" ++ Sql ++ ") or "++Alias++".id = $"++integer_to_list(N+1),
+                    Sql = Alias ++ ".visible_for <= 2 " ++ publish_check(Alias, SearchSql),
+                    Sql1 = lists:flatten([
+                            $(, $(, Sql, ") or ", Alias, ".id = $", integer_to_list(length(Args)+1), $)
+                        ]),
                     {Sql1, Args ++ [z_acl:user(Context)]}
             end;
         {_NewSql, _NewArgs} = Result ->
@@ -278,7 +286,7 @@ add_acl_check1(Table, Alias, Args, SearchSql, Context) ->
     end.
 
 
-publish_check(rsc, Alias, #search_sql{extra=Extra}) ->
+publish_check(Alias, #search_sql{extra=Extra}) ->
     case lists:member(no_publish_check, Extra) of
         true ->
             "";
@@ -287,9 +295,7 @@ publish_check(rsc, Alias, #search_sql{extra=Extra}) ->
             ++Alias++".is_published and "
             ++Alias++".publication_start <= now() and "
             ++Alias++".publication_end >= now()"
-    end;
-publish_check(_Table, _Alias, _SearchSql) ->
-    "".
+    end.
 
 
 %% @doc Create the 'where' conditions for the category check
@@ -327,16 +333,17 @@ cat_check_pivot1(Alias, true, {From,To}) ->
         ++ " or "++ Alias ++ ".pivot_category_nr > " ++ integer_to_list(To) ++ ")".
 
 
-
 %% Add category tree range checks by using joins. Less optimal; only
 %% used while the category tree is being recalculated.
 add_cat_check_joined(From, Alias, Exclude, Cats, Context) ->
     Ranges = m_category:ranges(Cats, Context),
     CatAlias = Alias ++ "_cat",
-    FromNew = [{"category", CatAlias}|From],
+    FromNew = [{"hierarchy", CatAlias}|From],
     CatChecks = lists:map(fun(Range) ->
                                   Check = cat_check_joined1(CatAlias, Exclude, Range),
-                                  Alias ++ ".category_id = " ++ CatAlias ++ ".id and " ++ Check
+                                  Alias ++ ".category_id = " ++ CatAlias ++ ".id and "
+                                  ++ CatAlias ++ ".name = '$category' and "
+                                  ++ Check
                           end,
                           Ranges),
     case CatChecks of
@@ -356,3 +363,14 @@ cat_check_joined1(CatAlias, true, {Left,Left}) ->
 cat_check_joined1(CatAlias, true, {Left,Right}) ->
     "(" ++ CatAlias ++ ".nr < " ++ integer_to_list(Left)
         ++ " or "++ CatAlias ++ ".nr > " ++ integer_to_list(Right) ++ ")".
+
+%% @doc Add a check for an exact category match
+add_cat_exact_check([], _Alias, WAcc, As, _Context) ->
+    {WAcc, As};
+add_cat_exact_check(CatsExact, Alias, WAcc, As, Context) ->
+    NArgs = length(As),
+    CatIds = [ m_rsc:rid(CId, Context) || CId <- CatsExact ],
+    CatArgs = [ [$$,integer_to_list(N)] || N <- lists:seq(NArgs+1,NArgs+length(CatIds))],
+    {WAcc ++ [[Alias, ".category_id in (", z_utils:combine($,, CatArgs), ")"]],
+     As ++ CatIds}.
+

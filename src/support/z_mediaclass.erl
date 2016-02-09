@@ -1,8 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2012 Marc Worrell
+%% @copyright 2012-2013 Marc Worrell
 %% @doc Manage, compile and find mediaclass definitions per context/site.
 
-%% Copyright 2012 Marc Worrell
+%% Copyright 2012-2013 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@
 ]).
 
 -record(state, {context, last=[]}).
--define(MEDIACLASS_FILENAME, "mediaclass.config").
+-define(MEDIACLASS_FILENAME, <<"mediaclass.config">>).
 -define(RESCAN_PERIOD, 10000).
 
 -include("zotonic.hrl").
@@ -99,30 +99,37 @@ expand_mediaclass_checksum(Checksum, Props) ->
         % Expand for preview generation, we got the checksum from the URL.
         case ets:lookup(?MEDIACLASS_INDEX, Checksum) of
             [#mediaclass_index{props=Ps}|_] ->
-                {ok, expand_mediaclass_1(Props, Ps)};
+                {ok, expand_mediaclass_2(Props, Ps)};
             [] ->
                 lager:warning("mediaclass expand for unknown mediaclass checksum ~p:~p", [Class, Checksum]),
-                {ok, Props};
+                {error, checksum};
             {error, _} = Error ->
                 Error
         end.
 
 
-%% @doc Expand the mediaclass for tag generation
+%% @doc Expand the optional mediaclass for tag generation
 -spec expand_mediaclass(list(), #context{}) -> {ok, list()} | {error, term()}.
 expand_mediaclass(Props, Context) ->
     case proplists:get_value(mediaclass, Props) of
         MC when is_list(MC); is_binary(MC) ->
             % Expand for tag generation
-            case get(MC, Context) of
-                {ok, Ps, _Checksum} ->
-                    {ok, expand_mediaclass_1(Props, Ps)};
-                Error ->
-                    Error
-            end
+            expand_mediaclass_1(MC, Props, Context);
+        {MC, _Checksum} when is_list(MC); is_binary(MC) ->
+            expand_mediaclass_1(MC, Props, Context);
+        undefined ->
+            {ok, Props}
+    end.
+
+expand_mediaclass_1(MC, Props, Context) ->
+    case get(MC, Context) of
+        {ok, Ps, _Checksum} ->
+            {ok, expand_mediaclass_2(Props, Ps)};
+        Error ->
+            Error
     end.
     
-expand_mediaclass_1(Props, ClassProps) ->
+expand_mediaclass_2(Props, ClassProps) ->
     lists:foldl(fun(KV, Acc) ->
                     K = key(KV),
                     case proplists:is_defined(K, Acc) of
@@ -158,7 +165,12 @@ module_reindexed(module_reindexed, Context) ->
 %% @doc Initiates the server.
 init(SiteProps) ->
     process_flag(trap_exit, true),
-    Context = z_context:new(proplists:get_value(host, SiteProps)),
+    {host, Host} = proplists:lookup(host, SiteProps),
+    lager:md([
+        {site, Host},
+        {module, ?MODULE}
+      ]),
+    Context = z_context:new(Host),
     z_notifier:observe(module_reindexed, {?MODULE, module_reindexed}, Context),
     {ok, #state{context=Context}}.
 
@@ -215,99 +227,115 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Find all mediaclass files for all device types.
 reindex(#state{context=Context, last=Last} = State) ->
-    Files = [
-        case z_module_indexer:find_ua_class_all(template, UAClass, ?MEDIACLASS_FILENAME, Context) of
-            [] -> 
-                {UAClass, undefined, undefined};
-            Ms ->
-                Paths = [ Path || #module_index{filepath=Path} <- Ms ],
-                {UAClass, Paths, lists:max([ filelib:last_modified(Path) || Path <- Paths ])}
-        end
-        || UAClass <- [ generic | z_user_agent:classes() ]
-    ],
-    case Files of
-        Last ->
+    case collect_files(z_user_agent:classes(), [], Context) of
+        {error, timeout} ->
+            lager:warning("[~p] timeout on module indexer", [z_context:site(Context)]),
             State;
-        _ ->
+        {ok, Last} ->
+            State;
+        {ok, Files} ->
             % Something changed, parse and update all classes in the files.
-            reindex_files(Files, State#state{last=Files})
+            Files1 = lists:flatten([ Fs || {Fs, MaxMod} <- Files, MaxMod =/= undefined ]),
+            Site = z_context:site(State#state.context),
+            ok = reindex_files(Files1, Site),
+            lager:debug("Re-indexed mediaclass definitions for ~p", [Site]),
+            State#state{last=Files}
     end.
 
-reindex_files(Files, State) ->
-    Tag = now(),
-    Site = z_context:site(State#state.context),
-    [ reindex_file(F, Tag, Site) || F <- Files ],
-    cleanup_ets(Tag, Site),
-    State.
 
-reindex_file({_UAClass, undefined, undefined}, _Tag, _Site) ->
-    % No mediaclass file for the ua class
-    ok;
-reindex_file({_UAClass, _Path, 0}, _Tag, _Site) ->
-    % Could not stat the mediaclass file, file might have disappeared.
-    ok;
-reindex_file({UAClass, Paths, _Modified}, Tag, Site) ->
-    Forms = [ 
-        case file:consult(Path) of
-            {error, Reason} ->
-                % log an error and continue
-                lager:error("Error consulting media class file ~p: ~p", [Path, Reason]),
-                [];
-            {ok, Fs} -> 
-                Fs
-        end
-        || Path <- Paths
-    ],
-    % Process the mediaclass definitions
+collect_files([], Acc, _Context) ->
+    {ok, lists:reverse(Acc)};
+collect_files([UAClass|Rest], Acc, Context) ->
+    case z_module_indexer:find_ua_class_all(template, UAClass, ?MEDIACLASS_FILENAME, Context) of
+        [] -> 
+            collect_files(Rest, Acc, Context);
+        Ms ->
+            Paths = [ {Module, UAClass, Path} || #module_index{filepath=Path, module=Module} <- Ms ],
+            Acc1 = [ {Paths, lists:max([ filelib:last_modified(Path) || {_, _, Path} <- Paths ])} | Acc ],
+            collect_files(Rest, Acc1, Context)
+    end.
+
+
+reindex_files(Files, Site) ->
+    Tag = make_ref(),
+    MCs = lists:flatten([ expand_file(MUP) || MUP <- Files ]),
+    ByModulePrio = prio_sort(MCs),
+    % Insert least prio first, later overwrite with higher priority modules
+    [ insert_mcs(UAClass, UAMCs, Tag, Site) || {UAClass, UAMCs} <- ByModulePrio ], 
+    cleanup_ets(Tag, Site),
+    ok.
+
+% Sort all defs, lowest prio first, higher prios later
+prio_sort(MUAProps) ->
+    WithPrio = [ {z_module_manager:prio(M), M, UA, X} || {M, UA, X} <- MUAProps ],
+    Sorted = lists:sort(fun prio_comp/2, WithPrio),
+    [ {UA, X} || {_Prio, _M, UA, X} <- Sorted ].
+
+prio_comp({P1, M1, UA1, _}, {P1, M1, UA2, _}) ->
+    not z_user_agent:order_class(UA1, UA2); 
+prio_comp({P1, M1, _UA1, _}, {P2, M2, _UA2, _}) ->
+    {P1, M1} > {P2, M2}.
+
+
+insert_mcs(UAClass, MCs, Tag, Site) ->
+    ValidUAs = lists:dropwhile(fun(X) -> X =/= UAClass end, z_user_agent:classes()),
     Defs = [
         begin
             Props1 = lists:sort(Props),
             {z_convert:to_binary(MediaClass),
              Props1,
              z_convert:to_binary(
-                z_string:to_lower(iolist_to_binary(z_utils:hex_encode(crypto:sha(term_to_binary(Props1)))))
+                z_string:to_lower(iolist_to_binary(z_utils:hex_encode(crypto:hash(sha, term_to_binary(Props1)))))
              )}
         end
-        || {MediaClass, Props} <- lists:flatten(Forms)
+        || {MediaClass, Props} <- lists:flatten(MCs)
     ],
-    % Insert all into the mediaclass ets table
-    % Also insert by checksum for the lookup of a mediaclass definition by url.
-    [
-        begin
-            K = #mediaclass_index_key{site=Site, ua_class=UAClass, mediaclass=MC},
-            case ets:lookup(?MEDIACLASS_INDEX, K) of
-                [#mediaclass_index{tag=Tag}|_] ->
-                    ok;
-                _Other ->
-                    ets:insert(?MEDIACLASS_INDEX,
-                                #mediaclass_index{
-                                    key=K,
-                                    props=Ps,
-                                    checksum=Checksum,
-                                    tag=Tag
-                                })
-            end,
-            case ets:lookup(?MEDIACLASS_INDEX, Checksum) of
-                [#mediaclass_index{tag=Tag}|_] ->
-                    ok;
-                _ ->
-                    ets:insert(?MEDIACLASS_INDEX,
-                                #mediaclass_index{
-                                    key=Checksum,
-                                    props=Ps,
-                                    checksum=Checksum,
-                                    tag=Tag
-                                })
-            end
-        end
-        || {MC, Ps, Checksum} <- Defs
-    ],
-    ok.
+    [ insert_ua_defs(UA, Defs, Tag, Site) || UA <- ValidUAs ].
+
+insert_ua_defs(UA, Defs, Tag, Site) ->
+    [ insert_ua_def(UA, Def, Tag, Site) || Def <- Defs ].
+
+% Insert the mediaclass definition by lookup key and checksum
+insert_ua_def(UAClass, {MC, Ps, Checksum}, Tag, Site) ->
+    K = #mediaclass_index_key{site=Site, ua_class=UAClass, mediaclass=MC},
+    ets:insert(?MEDIACLASS_INDEX,
+                #mediaclass_index{
+                    key=K,
+                    props=Ps,
+                    checksum=Checksum,
+                    tag=Tag
+                }),
+    ets:insert(?MEDIACLASS_INDEX,
+                #mediaclass_index{
+                    key=Checksum,
+                    props=Ps,
+                    checksum=Checksum,
+                    tag=Tag
+                }).
+
+
+expand_file({Module, UAClass, Path}) ->
+    {Module, UAClass, lists:flatten(consult_file(Path))}.
+
+consult_file(Path) ->
+    case file:consult(Path) of
+        {error, Reason} ->
+            % log an error and continue
+            lager:error("Error consulting media class file ~p: ~p (skipped)", [Path, Reason]),
+            [];
+        {ok, MediaClasses} ->
+            MediaClasses
+    end.
 
 
 %% @doc Remove all ets entries for this host with an old tag
 cleanup_ets(Tag, Site) ->
-    cleanup_ets_1(ets:first(?MEDIACLASS_INDEX), Tag, Site, []).
+    ets:safe_fixtable(?MEDIACLASS_INDEX, true),
+    try
+        cleanup_ets_1(ets:first(?MEDIACLASS_INDEX), Tag, Site, [])
+    after
+        ets:safe_fixtable(?MEDIACLASS_INDEX, false)
+    end.
     
     cleanup_ets_1('$end_of_table', _Tag, _Site, Acc) ->
         [ ets:delete(?MEDIACLASS_INDEX, K) || K <- Acc ];

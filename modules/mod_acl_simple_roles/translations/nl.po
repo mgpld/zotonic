@@ -32,7 +32,7 @@ msgid ""
 msgstr ""
 "<strong>Waarschuwing</strong>: Wanneer je */* toelaat als filter voor\n"
 "bestanden dan kunnen alle leden van deze rol volledige toegang tot\n"
-"jesite en alle onderliggende data verkrijgen."
+"je site en alle onderliggende data verkrijgen."
 
 #: modules/mod_acl_simple_roles/templates/admin_acl.tpl:22
 msgid "ACL role overview"
@@ -73,8 +73,8 @@ msgid "Categories"
 msgstr "Categorieën"
 
 #: modules/mod_acl_simple_roles/templates/_admin_edit_content.acl_role.tpl:12
-msgid "Check below what people that are member of this role are allowed to do."
-msgstr "Kies hieronder wat de leden van deze rol mogen doen."
+msgid "Check below what people that are member of this role are allowed to do"
+msgstr "Kies hieronder wat de leden van deze rol mogen doen"
 
 #: modules/mod_acl_simple_roles/templates/_admin_edit_content.acl_role.tpl:38
 msgid "Community members"
@@ -82,7 +82,7 @@ msgstr "Leden"
 
 #: modules/mod_acl_simple_roles/templates/_admin_edit_content.acl_role.tpl:84
 msgid "File types allowed to be uploaded"
-msgstr "Bestandstypes dat geupload mogen worden"
+msgstr "Bestandstypes die geüpload mogen worden"
 
 #: modules/mod_acl_simple_roles/templates/_admin_edit_content.acl_role.tpl:77
 msgid "File uploads"
@@ -93,7 +93,7 @@ msgid "Group members"
 msgstr "Groepleden"
 
 #: modules/mod_acl_simple_roles/templates/_admin_edit_content.acl_role.tpl:8
-msgid "Help about ACL roles."
+msgid "Help about ACL roles"
 msgstr "Hulp bij de ACL rollen"
 
 #: modules/mod_acl_simple_roles/templates/admin_acl.tpl:16

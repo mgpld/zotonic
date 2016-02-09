@@ -32,6 +32,7 @@
 -export([
     manage_schema/2,
 
+    observe_signup/2,
     observe_signup_url/2,
     observe_identity_verification/2,
     observe_logon_ready_page/2
@@ -43,6 +44,11 @@
 ]).
 
 -include("zotonic.hrl").
+
+
+%% @doc Add a new user or an existing person as user.
+observe_signup(#signup{id=UserId, props=Props, signup_props=SignupProps, request_confirm=RequestConfirm}, Context) ->
+    signup_existing(UserId, Props, SignupProps, RequestConfirm, Context).
 
 
 %% @doc Check if a module wants to redirect to the signup form.  Returns either {ok, Location} or undefined.
@@ -160,11 +166,34 @@ do_signup(UserId, Props, SignupProps, RequestConfirm, Context) ->
                 true -> z_notifier:map(#signup_confirm{id=NewUserId}, Context);
                 false -> nop
             end,
+            maybe_add_depiction(NewUserId, Props, Context),
             {ok, NewUserId};
         {error, Reason} ->
             throw({error, Reason})
     end.
 
+%% @doc Optionally add a depiction using the 'depiction_url' in the user's props
+maybe_add_depiction(Id, Props, Context) ->
+    case m_edge:objects(Id, depiction, Context) of
+        [] ->
+            case proplists:get_value(depiction_url, Props) of
+                Url when Url =/= <<>>, Url =/= [], Url =/= undefined ->
+                    case m_media:insert_url(Url, z_acl:logon(Id, Context)) of
+                        {ok, MediaId} ->
+                            lager:info("[~p] Added depiction from depiction_url for ~p: ~p", 
+                                       [z_context:site(Context), Id, Url]),
+                            m_edge:insert(Id, depiction, MediaId, Context);
+                        {error, _} = Error ->
+                            lager:warning("[~p] Could not insert depiction_url for ~p: ~p", 
+                                          [z_context:site(Context), Id, Url]),
+                            Error
+                    end;
+                _ ->
+                    ok
+            end;
+        _ -> 
+            ok
+    end.
 
 insert_or_update(undefined, Props, Context) ->
     m_rsc:insert(Props, Context);
@@ -191,10 +220,12 @@ ensure_identity(Id, {Type, Key, IsUnique, IsVerified}, Context) when is_binary(K
 
 props_to_rsc(Props, IsVerified, Context) ->
     Category = z_convert:to_atom(m_config:get_value(mod_signup, member_category, person, Context)),
+    ContentGroup = z_convert:to_atom(m_config:get_value(mod_signup, content_group, undefined, Context)),
     VisibleFor = z_convert:to_integer(m_config:get_value(mod_signup, member_visible_for, 0, Context)),
     Props1 = [
         {is_published, IsVerified},
         {visible_for, VisibleFor},
+        {content_group, ContentGroup},
         {category, Category},
         {is_verified_account, IsVerified},
         {creator_id, self},
@@ -218,10 +249,16 @@ props_to_rsc(Props, IsVerified, Context) ->
 
 %% @doc Check if a username exists
 username_exists(UserId, Username, Context) ->
-    case m_identity:lookup_by_username(Username, Context) of
-        undefined -> false;
-        Props -> UserId =/= proplists:get_value(rsc_id, Props)
+    case m_identity:is_reserved_name(Username) of
+        true ->
+            true;
+        false ->
+            case m_identity:lookup_by_username(Username, Context) of
+                undefined -> false;
+                Props -> UserId =/= proplists:get_value(rsc_id, Props)
+            end
     end.
+
 
 %% @doc Check if the identity exists
 identity_exists(UserId, Type, Key, Context) ->
@@ -252,7 +289,7 @@ manage_schema(install, _Context) ->
                             {visible_for, 0},
                             {page_path, "/terms"},
                             {title, "Terms of Service"},
-                            {summary, "These Terms of Service (“Terms”) govern your access to and use of the services and COMPANY’s web sites (the “Services”), and any information, text, graphics, or other materials uploaded, downloaded or appearing on the Services (collectively referred to as “Content”). Your access to and use of the Services is conditioned on your acceptance of and compliance with these Terms. By accessing or using the Services you agree to be bound by these Terms."},
+                            {summary, <<"These Terms of Service (\"Terms\") govern your access to and use of the services and COMPANY’s web sites (the \"Services\"), and any information, text, graphics, or other materials uploaded, downloaded or appearing on the Services (collectively referred to as \"Content\"). Your access to and use of the Services is conditioned on your acceptance of and compliance with these Terms. By accessing or using the Services you agree to be bound by these Terms.">>},
                             {body, "<h2>INSERT YOUR TERMS OF SERVICE HERE</h2>"}
                         ]},
             {signup_privacy, text, [
@@ -260,7 +297,7 @@ manage_schema(install, _Context) ->
                             {visible_for, 0},
                             {page_path, "/privacy"},
                             {title, "Privacy Policy"},
-                            {summary, "This Privacy Policy describes COMPANY’s policies and procedures on the collection, use and disclosure of your information. COMPANY receives your information through our various web sites, SMS, APIs, services and third-parties (“Services”). When using any of our Services you consent to the collection, transfer, manipulation, storage, disclosure and other uses of your information as described in this Privacy Policy. Irrespective of which country that you reside in or create information from, your information may be used by COMPANY in any country where COMPANY operates."},
+                            {summary, <<"This Privacy Policy describes COMPANY’s policies and procedures on the collection, use and disclosure of your information. COMPANY receives your information through our various web sites, SMS, APIs, services and third-parties (\"Services\"). When using any of our Services you consent to the collection, transfer, manipulation, storage, disclosure and other uses of your information as described in this Privacy Policy. Irrespective of which country that you reside in or create information from, your information may be used by COMPANY in any country where COMPANY operates.">>},
                             {body, "<h2>INSERT YOUR PRIVACY POLICY HERE</h2>"}
                         ]}
         ]

@@ -1,9 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009 Marc Worrell
-%% Date: 2009-07-12
+%% @copyright 2009-2015 Marc Worrell
 %% @doc Menu module.  Supports menus in Zotonic. Adds admin interface to define the menu.
 
-%% Copyright 2009 Marc Worrell
+%% Copyright 2009-2015 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,9 +20,9 @@
 -author("Marc Worrell <marc@worrell.nl>").
 
 -mod_title("Menus").
--mod_description("Menus in Zotonic, adds admin interface to define the menu.").
--mod_schema(1).
--mod_depends([admin]).
+-mod_description("Menus in Zotonic, adds admin interface to define menus and other hierarchical lists.").
+-mod_schema(2).
+-mod_depends([]).
 -mod_provides([menu]).
 
 %% interface functions
@@ -66,27 +65,77 @@ event(#postback_notify{message="menuedit", trigger=TriggerId}, Context) ->
     {Kind, RootId, Predicate} = get_kind_root(TriggerId),
     Tree = unpack(z_context:get_q("tree", Context)),
     {Tree1, Context1} = create_new(Tree, Context),
-    case z_context:get_q("kind", Context1, Kind) of
+    case Kind of
         category ->
             % This is the category hierarchy.
-            z_notifier:notify(#category_hierarchy_save{tree=Tree1}, Context1),
+            z_notifier:notify_sync(#category_hierarchy_save{tree=Tree1}, Context1),
             Context1;
         menu ->
             % A menu hierarchy, give it to the menu routines
-            z_notifier:notify(#menu_save{id=m_rsc:rid(RootId, Context1), tree=Tree1}, Context1),
+            z_notifier:notify_sync(#menu_save{id=m_rsc:rid(RootId, Context1), tree=Tree1}, Context1),
+            Context1;
+        hierarchy ->
+            _ = m_hierarchy:save(RootId, Tree1, Context),
             Context1;
         edge ->
             % Hierarchy using edges between resources
             hierarchy_edge(m_rsc:rid(RootId, Context1), Predicate, Tree1, Context1)
     end;
+event(#z_msg_v1{data=Data}, Context) ->
+    handle_cmd(proplists:get_value(<<"cmd">>, Data), Data, Context).
 
-event(#postback_notify{message="menu-item-render"}, Context) ->
-    Id = z_convert:to_integer(z_context:get_q("id", Context)),
-    Callback = z_context:get_q("callback", Context),
-    {Html, Context2} = z_template:render_to_iolist("_menu_edit_item.tpl", [{id,Id}], Context),
+
+handle_cmd(<<"copy">>, Data, Context) ->
+    FromId = z_convert:to_integer(proplists:get_value(<<"id">>, Data)),
+    case m_rsc:is_visible(FromId, Context) of
+        true ->
+            NewTitle = make_copy_title(m_rsc:p(FromId, title, Context), Context),
+            case m_rsc:duplicate(FromId, [{title, NewTitle}], Context) of
+                {ok, NewId} ->
+                    {Html, Context1} = z_template:render_to_iolist({cat, "_menu_edit_item.tpl"}, [{id,NewId}], Context),
+                    z_render:wire({script, [{script, [
+                                    <<"window.zMenuInsertAfter(\"">>,
+                                            integer_to_list(FromId), $",$,,
+                                            $",z_utils:js_escape(Html,Context1),$",
+                                    $),$;
+                                ]}]}, Context1);
+                {error, _Reason} ->
+                    z_render:growl_error(?__("Sorry, can’t copy that page.", Context), Context) 
+            end;
+        false ->
+            Context
+    end;
+handle_cmd(<<"menu-item-render">>, Data, Context) ->
+    Id = z_convert:to_integer(proplists:get_value(<<"id">>, Data)),
+    Callback = proplists:get_value(<<"callback">>, Data),
+    {Html, Context2} = z_template:render_to_iolist({cat, "_menu_edit_item.tpl"}, [{id,Id}], Context),
     z_render:wire({script, [{script, [
-                    Callback, $(, $",z_utils:js_escape(Html,Context2),$",$),$;
-                ]}]}, Context2).
+                    Callback, $(,
+                        $", integer_to_list(Id), $",$,,
+                        $",z_utils:js_escape(Html,Context2),$",
+                    $),$;
+                ]}]}, Context2);
+handle_cmd(<<"delete">>, Data, Context) ->
+    Id = z_convert:to_integer(proplists:get_value(<<"id">>, Data)),
+    case m_rsc:is_deletable(Id, Context) of
+        true ->
+            z_render:wire({dialog_delete_rsc, [{id,Id}]}, Context);
+        false ->
+            z_render:wire(
+                {alert, [{text, ?__("Sorry, you are not allowed to delete this.", Context)}]},
+                Context)
+    end.
+
+
+
+make_copy_title(Title, Context) when is_binary(Title) ->
+    iolist_to_binary([?__("COPY", Context), " ", Title]);
+make_copy_title({trans, Ts}, Context) ->
+    {trans, [ 
+        {Lang, make_copy_title(Title, z_context:set_language(Lang, Context))}
+        || {Lang,Title} <- Ts
+    ]}.
+
 
 
 % @doc Sync a hierarchy based on edges (silently ignore ACL errors)
@@ -111,15 +160,20 @@ move_edges(RootId, Tree, Pred, Context) ->
 %% @doc The id of the root ul should be one of:
 %%      category
 %%      menu-ID
+%%      hierarchy-ROOTID
 %%      edge-ROOTID
 %%      edge-ROOTID-PREDICATE
 %%      collection-ROOTID
+get_kind_root(Root) when is_binary(Root) ->
+    get_kind_root(z_convert:to_list(Root));
 get_kind_root("category") ->
     {category, undefined, undefined};
 get_kind_root("menu-"++MenuId) ->
     {menu, MenuId, undefined};
 get_kind_root(TriggerId) ->
     case string:tokens(TriggerId, "-") of
+        ["hierarchy" | Name] ->
+            {hierarchy, string:join(Name, "-"), undefined};
         ["edge", RootId, Predicate] ->
             {edge, RootId, Predicate};
         ["collection", RootId] ->
@@ -128,6 +182,8 @@ get_kind_root(TriggerId) ->
             {edge, TriggerId, haspart}
     end.
 
+unpack(S) when is_binary(S) ->
+    unpack(binary_to_list(S));
 unpack(S) ->
     {[], Tree} = unpack(S, []),
     Tree.
@@ -147,10 +203,10 @@ unpack(S, Acc) ->
     Acc1 = [{map_id(Id),Sub}|Acc],
     unpack(Rest,Acc1).
 
-map_id(Id) ->
+map_id(Id) when is_list(Id) ->
     Id1 = lists:last(string:tokens(Id, "-")),
     case z_utils:only_digits(Id1) of
-        true -> list_to_integer(Id1);
+        true -> z_convert:to_integer(Id1);
         false -> Id
     end.
 
@@ -330,14 +386,16 @@ menu_subtree(_Menu, undefined, _AddSiblings, _Context) ->
     undefined;
 menu_subtree(Menu, BelowId, AddSiblings, Context) when not is_integer(BelowId) ->
     menu_subtree(Menu, m_rsc:rid(BelowId, Context), AddSiblings, Context);
-menu_subtree(Menu, BelowId, AddSiblings, _Context) ->
-    menu_subtree_1(Menu, BelowId, AddSiblings, Menu).
+menu_subtree(Menu, BelowId, AddSiblings, Context) ->
+    menu_subtree_1(Menu, BelowId, AddSiblings, Menu, Context).
     
-    menu_subtree_1([], _BelowId, _AddSiblings, _CurrMenu) ->
+    menu_subtree_1([], _BelowId, _AddSiblings, _CurrMenu, _Context) ->
         undefined;
-    menu_subtree_1([{BelowId, Menu}|_Rest], BelowId, false, _CurrMenu) ->
+    menu_subtree_1([{BelowId, Menu}|_Rest], BelowId, false, _CurrMenu, _Context) ->
         Menu;
-    menu_subtree_1([{BelowId, _}|_Rest], BelowId, true, CurrMenu) ->
+    menu_subtree_1([{Id, Menu}|Rest], BelowId, AddSiblings, CurrMenu, Context) when not is_integer(Id) ->
+        menu_subtree_1([{m_rsc:rid(Id, Context), Menu}|Rest], BelowId, AddSiblings, CurrMenu, Context);
+    menu_subtree_1([{BelowId, _}|_Rest], BelowId, true, CurrMenu, _Context)  ->
         [
             case MenuId of
                 BelowId -> {BelowId, Menu};
@@ -345,15 +403,15 @@ menu_subtree(Menu, BelowId, AddSiblings, _Context) ->
             end
             || {MenuId,Menu} <- CurrMenu
         ];
-    menu_subtree_1([{_Id, Menu}|Rest], BelowId, AddSiblings, CurrMenu) ->
-        case menu_subtree_1(Menu, BelowId, AddSiblings, Menu) of
-            undefined -> menu_subtree_1(Rest, BelowId, AddSiblings, CurrMenu);
+    menu_subtree_1([{_Id, Menu}|Rest], BelowId, AddSiblings, CurrMenu, Context) ->
+        case menu_subtree_1(Menu, BelowId, AddSiblings, Menu, Context) of
+            undefined -> menu_subtree_1(Rest, BelowId, AddSiblings, CurrMenu, Context);
             M -> M
         end;
     % Old notation
-    menu_subtree_1([BelowId|_Rest], BelowId, false, _CurrMenu) ->
+    menu_subtree_1([BelowId|_Rest], BelowId, false, _CurrMenu, _Context) ->
         [];
-    menu_subtree_1([BelowId|_Rest], BelowId, true, CurrMenu) ->
+    menu_subtree_1([BelowId|_Rest], BelowId, true, CurrMenu, _Context) ->
         [
           case Id of
             {MenuId,_} -> {MenuId, []};
@@ -361,8 +419,8 @@ menu_subtree(Menu, BelowId, AddSiblings, _Context) ->
           end 
           || Id <- CurrMenu 
         ];
-    menu_subtree_1([_|Rest], BelowId, AddSiblings, CurrMenu) ->
-        menu_subtree_1(Rest, BelowId, AddSiblings, CurrMenu).
+    menu_subtree_1([_|Rest], BelowId, AddSiblings, CurrMenu, Context) ->
+        menu_subtree_1(Rest, BelowId, AddSiblings, CurrMenu, Context).
 
 
 
@@ -389,7 +447,9 @@ manage_schema(install, Context) ->
               }
         ]
       },
-      Context).
+      Context);
+manage_schema(_Version, _Context) ->
+    ok.
 
 
 

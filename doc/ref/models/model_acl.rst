@@ -9,21 +9,29 @@ The following m_acl model properties are available in templates:
 +--------------------+--------------------------------------+
 |Property            |Description                           |
 +====================+======================================+
-|user                |Returns the current user id.  If not  |
+|user                |Returns the current user id. If not   |
 |                    |logged in, this returns ``undefined``.|
 +--------------------+--------------------------------------+
-|is_admin            |Check if the current user isa lowed to|
-|                    |access the admin. Internally, this    |
+|is_admin            |Check if the current user is alllowed |
+|                    |to access the admin. Internally, this |
 |                    |checks the ``use, mod_admin_config``  |
 |                    |ACL.                                  |
 +--------------------+--------------------------------------+
 |use, admin, view,   |These properties are shortcuts to     |
 |delete, update,     |check if the current user is allowed  |
-|insert              |to do some action.                    |
+|insert, link        |to do some action.                    |
 +--------------------+--------------------------------------+
 |is_allowed          |Perform custom ACL checks which are   |
 |                    |different from the ones mentioned.    |
 +--------------------+--------------------------------------+
+|authenticated       |Used before the other ACL checks to   |
+|                    |check if a *typical* user is allowed  |
+|                    |to perform some actions. Example:     |
+|                    |``m.acl.authenticated.insert.article``|
+|                    |If an user is logged on the that      |
+|                    |user’s permissions are used.          |
++--------------------+--------------------------------------+
+
 
 .. highlight:: django
 
@@ -44,6 +52,17 @@ This example checks if the user can access the admin pages::
 This example performs a custom check::
 
   {% if m.acl.is_allowed.use.mod_admin_config %}
-  User has rights to edit the admin config
+      User has rights to edit the admin config
   {% endif %}
 
+And to check if a resource is editable::
+
+   {% if m.acl.is_allowed.update[id] %}
+      User can edit the resource with id {{ id }}
+   {% endif %}
+
+A short hand for the above is (assuming `id` is an integer)::
+
+   {% if id.is_editable %}
+      User can edit the resource with id {{ id }}
+   {% endif %}

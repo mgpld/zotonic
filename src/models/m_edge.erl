@@ -35,9 +35,11 @@
     insert/5,
     delete/2,
     delete/4,
+    delete/5,
     delete_multiple/4,
     replace/4,
     duplicate/3,
+    merge/3,
     update_nth/5,
     object/4,
     subject/4,
@@ -47,6 +49,8 @@
     subjects/2,
     object_edge_ids/3,
     subject_edge_ids/3,
+    object_edge_props/3,
+    subject_edge_props/3,
     update_sequence/4,
     set_sequence/4,
     update_sequence_edge_ids/4,
@@ -68,11 +72,30 @@ m_find_value(o, #m{value=undefined}, _Context) ->
         end
     end;
 
+m_find_value(o_props, #m{value=undefined}, _Context) ->
+    fun(Id, _IdContext) ->
+        fun(Pred, PredContext) ->
+            object_edge_props(Id, Pred, PredContext)
+        end
+    end;
+
 m_find_value(s, #m{value=undefined}, _Context) ->
     fun(Id, _IdContext) ->
         fun(Pred, PredContext) ->
             subject_edge_ids(Id, Pred, PredContext)
         end
+    end;
+
+m_find_value(s_props, #m{value=undefined}, _Context) ->
+    fun(Id, _IdContext) ->
+        fun(Pred, PredContext) ->
+            subject_edge_props(Id, Pred, PredContext)
+        end
+    end;
+
+m_find_value(edges, #m{value=undefined}, _Context) ->
+    fun(Id, IdContext) ->
+        get_edges(Id, IdContext)
     end;
 
 %% m.edge.id[subject_id].predicatename[object_id] returns the
@@ -130,7 +153,8 @@ get_edges(SubjectId, Context) ->
             Edges;
         undefined ->
             Edges = z_db:assoc("
-                select e.id, e.subject_id, e.predicate_id, p.name, e.object_id, e.seq 
+                select e.id, e.subject_id, e.predicate_id, p.name, e.object_id,
+                       e.seq, e.created, e.creator_id
                 from edge e join rsc p on p.id = e.predicate_id 
                 where e.subject_id = $1 
                 order by e.predicate_id, e.seq, e.id", [SubjectId], Context),
@@ -160,32 +184,57 @@ insert(Subject, Pred, Object, Opts, Context) ->
     SubjectId = m_rsc:name_to_id_check(Subject, Context),
     insert(SubjectId, Pred, Object, Opts, Context).
 
-    insert1(SubjectId, PredId, ObjectId, Opts, Context) ->
-        case z_db:q1("select id from edge where subject_id = $1 and object_id = $2 and predicate_id = $3", [SubjectId, ObjectId, PredId], Context) of
-            undefined ->
-                F = fun(Ctx) ->
-                        case proplists:is_defined(no_touch, Opts) of 
-                            true -> skip;
-                            false -> m_rsc:touch(SubjectId, Ctx)
-                        end,
-                        z_db:insert(edge, [{subject_id, SubjectId}, {object_id, ObjectId}, {predicate_id, PredId}], Ctx)
-                    end,
-                
-                {ok, PredName} = m_predicate:id_to_name(PredId, Context),
-                case z_acl:is_allowed(insert, #acl_edge{subject_id=SubjectId, predicate=PredName, object_id=ObjectId}, Context) of
-                    true ->
-                        {ok, EdgeId} = z_db:transaction(F, Context),
-                        z_depcache:flush(SubjectId, Context),
-                        z_depcache:flush(ObjectId, Context),
-                        z_notifier:notify(#edge_insert{subject_id=SubjectId, predicate=PredName, object_id=ObjectId}, Context),
-                        {ok, EdgeId};
-                    AclError ->
-                        {error, {acl, AclError}}
-                end;
-            EdgeId ->
-                % Edge exists - skip
-                {ok, EdgeId}
-        end.
+insert1(SubjectId, PredId, ObjectId, Opts, Context) ->
+case z_db:q1("select id 
+              from edge 
+              where subject_id = $1 
+                and object_id = $2
+                and predicate_id = $3",
+             [SubjectId, ObjectId, PredId], 
+             Context)
+of
+    undefined ->
+        F = fun(Ctx) ->
+                case z_convert:to_bool(proplists:get_value(no_touch, Opts, false)) of 
+                    true -> skip;
+                    false -> m_rsc:touch(SubjectId, Ctx)
+                end,
+                SeqOpt = case proplists:get_value(seq, Opts) of
+                            S when is_integer(S) -> [{seq, S}];
+                            undefined -> []
+                         end,
+                CreatedOpt = case proplists:get_value(created, Opts) of
+                                DT when is_tuple(DT) -> [{created,DT}];
+                                undefined -> []
+                             end,
+                EdgeProps = [
+                    {subject_id, SubjectId},
+                    {object_id, ObjectId},
+                    {predicate_id, PredId},
+                    {creator_id, case proplists:get_value(creator_id, Opts) of
+                                    undefined -> z_acl:user(Ctx);
+                                    CreatorId -> CreatorId
+                                 end}
+                    | (SeqOpt ++ CreatedOpt)
+                ],
+                z_db:insert(edge, EdgeProps, Ctx)
+            end,
+        {ok, PredName} = m_predicate:id_to_name(PredId, Context),
+        case z_acl:is_allowed(insert, 
+                              #acl_edge{subject_id=SubjectId, predicate=PredName, object_id=ObjectId}, 
+                              Context)
+        of
+            true ->
+                {ok, EdgeId} = z_db:transaction(F, Context),
+                z_edge_log_server:check(Context),
+                {ok, EdgeId};
+            AclError ->
+                {error, {acl, AclError}}
+        end;
+    EdgeId ->
+        % Edge exists - skip
+        {ok, EdgeId}
+end.
 
 
 %% @doc Delete an edge by Id
@@ -199,9 +248,7 @@ delete(Id, Context) ->
             end,
             
             z_db:transaction(F, Context),
-            z_depcache:flush(SubjectId, Context),
-            z_depcache:flush(ObjectId, Context),
-            z_notifier:notify(#edge_delete{subject_id=SubjectId, predicate=PredName, object_id=ObjectId}, Context),
+            z_edge_log_server:check(Context),
             ok;
         AclError -> 
             {error, {acl, AclError}}
@@ -209,19 +256,23 @@ delete(Id, Context) ->
 
 %% @doc Delete an edge by subject, object and predicate id
 delete(SubjectId, Pred, ObjectId, Context) ->
+    delete(SubjectId, Pred, ObjectId, [], Context).
+
+delete(SubjectId, Pred, ObjectId, Options, Context) ->
     PredId = m_predicate:name_to_id_check(Pred, Context),
     {ok, PredName} = m_predicate:id_to_name(PredId, Context),
     case z_acl:is_allowed(delete, #acl_edge{subject_id=SubjectId, predicate=PredName, object_id=ObjectId}, Context) of
         true ->
             F = fun(Ctx) ->
-                m_rsc:touch(SubjectId, Ctx),
+                case proplists:get_value(no_touch, Options) of
+                    true -> ok;
+                    _ -> m_rsc:touch(SubjectId, Ctx)
+                end,
                 z_db:q("delete from edge where subject_id = $1 and object_id = $2 and predicate_id = $3",  [SubjectId, ObjectId, PredId], Ctx)
             end,
 
             z_db:transaction(F, Context),
-            z_depcache:flush(SubjectId, Context),
-            z_depcache:flush(ObjectId, Context),
-            z_notifier:notify(#edge_delete{subject_id=SubjectId, predicate=PredName, object_id=ObjectId}, Context),
+            z_edge_log_server:check(Context),
             ok;
         AclError ->
             {error, {acl, AclError}}
@@ -248,12 +299,7 @@ delete_multiple(SubjectId, Preds, ObjectId, Context) ->
                 0 -> 
                     ok;
                 N when is_integer(N) -> 
-                    z_depcache:flush(SubjectId, Context),
-                    z_depcache:flush(ObjectId, Context),
-                    [
-                        z_notifier:notify(#edge_delete{subject_id=SubjectId, predicate=PredName, object_id=ObjectId}, Context)
-                        || PredName <- PredNames
-                    ],
+                    z_edge_log_server:check(Context),
                     ok;
                 Error -> 
                     Error
@@ -281,7 +327,7 @@ replace(SubjectId, Pred, NewObjects, Context) ->
 
     replace1(SubjectId, PredId, NewObjects, Context) ->
         {ok, PredName} = m_predicate:id_to_name(PredId, Context),
-        case objects(SubjectId, PredName, Context) of
+        case objects(SubjectId, PredId, Context) of
             NewObjects -> 
                 ok;
 
@@ -290,81 +336,153 @@ replace(SubjectId, Pred, NewObjects, Context) ->
                 Allowed1 = [ z_acl:is_allowed(delete, 
                                              #acl_edge{subject_id=SubjectId, predicate=PredName, object_id=ObjectId},
                                              Context)
-                            || ObjectId <- CurrObjects ],
+                            || ObjectId <- CurrObjects -- NewObjects ],
                 Allowed2 = [ z_acl:is_allowed(insert, 
                                              #acl_edge{subject_id=SubjectId, predicate=PredName, object_id=ObjectId},
                                              Context)
-                            || ObjectId <- NewObjects ],
+                            || ObjectId <- NewObjects -- CurrObjects ],
 
                 case is_allowed(Allowed1) andalso is_allowed(Allowed2) of
                     true ->
-                        Values = string:join([
-                            lists:flatten([
-                                $(, integer_to_list(SubjectId),
-                                $,, integer_to_list(PredId),
-                                $,, integer_to_list(Id),
-                                $,, z_convert:to_list(z_acl:user(Context)),
-                                ",now())"
-                            ]) || Id <- NewObjects
-                        ], ","),
-                        F = fun(Ctx) ->
-                                    z_db:q("delete from edge where subject_id = $1 and predicate_id = $2", 
-                                           [SubjectId, PredId], Ctx),
-                                    case NewObjects of
-                                        [] -> nop;
-                                        _ ->
-                                            z_db:q("insert into edge (subject_id, predicate_id, object_id, creator_id, created)
-                                                        values "++Values, Ctx)
-                                    end,
-                                    m_rsc:touch(SubjectId, Ctx)
-                        end,
-            
-                        % Sync all caches, notify edge delete/insert listeners
-                        z_db:transaction(F, Context),
-                        z_depcache:flush(SubjectId, Context),
-                        [z_depcache:flush(ObjectId, Context) || ObjectId <- NewObjects],
-                        [z_depcache:flush(ObjectId, Context) || ObjectId <- CurrObjects],
-                        [
-                            case lists:member(ObjId, NewObjects) of
-                                true -> nop;
-                                false -> z_notifier:notify({edge_delete, SubjectId, PredName, ObjId}, Context)
-                            end
-                            || ObjId <- CurrObjects
-                        ],
-                        [
-                            case lists:member(ObjId, CurrObjects) of
-                                true -> nop;
-                                false -> z_notifier:notify({edge_insert, SubjectId, PredName, ObjId}, Context)
-                            end
-                            || ObjId <- NewObjects
-                        ],
-                        ok;
-                    AclError ->
-                        {error, {acl, AclError}}
+                        Result = set_sequence(SubjectId, PredId, NewObjects, Context),
+                        z_edge_log_server:check(Context),
+                        Result;
+                    false ->
+                        {error, eacces}
                 end
         end.
 
 
-%% @doc Duplicate all edges from one id to another id.  Skip all edges that give ACL errors.
+%% @doc Duplicate all edges from one id to another id. Skip all edges that give ACL errors.
 duplicate(Id, ToId, Context) ->
-    case z_acl:rsc_editable(Id, Context) of
+    case z_acl:rsc_editable(Id, Context) andalso z_acl:rsc_editable(ToId, Context) of
         true ->
             F = fun(Ctx) ->
                 m_rsc:touch(ToId, Ctx),
-                Edges = z_db:q("select predicate_id, object_id, seq from edge where subject_id = $1", [Id], Ctx),
+                FromEdges = z_db:q("
+                                select predicate_id, object_id, seq 
+                                from edge 
+                                where subject_id = $1
+                                order by seq, id",
+                                [Id],
+                                Ctx),
+                ToEdges = z_db:q("select predicate_id, object_id from edge where subject_id = $1", [ToId], Ctx),
+                FromEdges1 = lists:filter(
+                                fun({PredId, ObjectId, _Seq}) ->
+                                    Pair = {PredId, ObjectId},
+                                    not lists:member(Pair, ToEdges)
+                                end,
+                                FromEdges),
+                FromEdges2 = lists:filter(
+                                fun({PredId, ObjectId, _Seq}) ->
+                                    {ok, PredName} = m_predicate:id_to_name(PredId, Context),
+                                    z_acl:is_allowed(
+                                        insert, 
+                                        #acl_edge{subject_id=ToId, predicate=PredName, object_id=ObjectId}, 
+                                        Context)
+                                end,
+                                FromEdges1),
                 UserId = z_acl:user(Ctx),
-                [
-                    catch z_db:insert(edge, [{subject_id, ToId}, {predicate_id, PredId}, {object_id, ObjId}, {seq, Seq}, {creator_id, UserId}], Ctx)
-                    || {PredId, ObjId, Seq} <- Edges
-                ]
+                lists:foreach(
+                        fun({PredId, ObjectId, Seq}) ->
+                            z_db:insert(
+                                    edge,
+                                    [{subject_id, ToId},
+                                     {predicate_id, PredId}, 
+                                     {object_id, ObjectId},
+                                     {seq, Seq},
+                                     {creator_id, UserId}],
+                                    Ctx)
+                        end,
+                        FromEdges2)
             end,
             z_db:transaction(F, Context),
-            z_depcache:flush(ToId, Context),
+            z_edge_log_server:check(Context),
             ok;
         false ->
             {error, {eacces, Id}}
     end.
-    
+
+%% @doc Move all edges from one id to another id, part of m_rsc:merge_delete/3
+merge(WinnerId, LooserId, Context) ->
+    case {z_acl:rsc_editable(WinnerId, Context), z_acl:rsc_deletable(LooserId, Context)} of
+        {true, true} ->
+            F = fun(Ctx) ->
+                %% Edges outgoing from the looser
+                LooserOutEdges = z_db:q("select predicate_id, object_id, id
+                                         from edge 
+                                         where subject_id = $1",
+                                        [LooserId],
+                                        Ctx),
+                WinnerOutEdges = z_db:q("select predicate_id, object_id 
+                                         from edge
+                                         where subject_id = $1", 
+                                        [WinnerId],
+                                        Ctx),
+                LooserOutEdges1 = lists:filter(
+                                fun({PredId, ObjectId, _EdgeId}) ->
+                                    not lists:member({PredId, ObjectId}, WinnerOutEdges)
+                                end,
+                                LooserOutEdges),
+                % TODO: discuss if we should enact these extra ACL checks
+                % LooserOutEdges2 = lists:filter(
+                %                 fun({PredId, ObjectId, _EdgeId}) ->
+                %                     {ok, PredName} = m_predicate:id_to_name(PredId, Context),
+                %                     z_acl:is_allowed(
+                %                         insert, 
+                %                         #acl_edge{subject_id=WinnerId, predicate=PredName, object_id=ObjectId}, 
+                %                         Context)
+                %                 end,
+                %                 LooserOutEdges1),
+                lists:foreach(
+                        fun({_PredId, _ObjId, EdgeId}) ->
+                            z_db:q("update edge 
+                                    set subject_id = $1 
+                                    where id = $2", 
+                                   [WinnerId, EdgeId],
+                                   Context)
+                        end,
+                        LooserOutEdges1),
+
+                %% Edges incoming to the looser
+                LooserInEdges = z_db:q("select predicate_id, subject_id, id
+                                        from edge 
+                                        where object_id = $1",
+                                       [LooserId],
+                                       Ctx),
+                WinnerInEdges = z_db:q("select predicate_id, subject_id 
+                                        from edge 
+                                        where object_id = $1",
+                                       [WinnerId],
+                                       Ctx),
+                LooserInEdges1 = lists:filter(
+                                    fun({PredId, SubjectId, _EdgeId}) ->
+                                        not lists:member({PredId, SubjectId}, WinnerInEdges)
+                                    end,
+                                    LooserInEdges),
+                lists:foreach(
+                        fun({_PredId, _SubjId, EdgeId}) ->
+                            z_db:q("update edge 
+                                    set object_id = $1 
+                                    where id = $2", 
+                                   [WinnerId, EdgeId],
+                                   Context)
+                        end,
+                        LooserInEdges1),
+
+                z_db:q("update edge set creator_id = $1 where creator_id = $2",
+                       [WinnerId, LooserId],
+                       Context)
+            end,
+            z_db:transaction(F, Context),
+            z_edge_log_server:check(Context),
+            ok;
+        {false, _} ->
+            {error, {eacces, WinnerId}};
+        {_, false} ->
+            {error, {eacces, WinnerId}}
+    end.
+
 
 %% @doc Update the nth edge of a subject.  Set a new object, keep the predicate.
 %% When there are not enough edges then an error is returned. The first edge is nr 1.
@@ -395,8 +513,7 @@ update_nth(SubjectId, Predicate, Nth, ObjectId, Context) ->
         true -> 
             case z_db:transaction(F, Context) of
                 {ok,EdgeId} ->
-                    z_depcache:flush(SubjectId, Context),
-                    z_notifier:notify({edge_insert, SubjectId, PredName, ObjectId}, Context),
+                    z_edge_log_server:check(Context),
                     {ok, EdgeId};
                 {error, Reason} ->
                     {error, Reason}
@@ -406,7 +523,7 @@ update_nth(SubjectId, Predicate, Nth, ObjectId, Context) ->
     end.
 
 
-%% @doc Return the Nth object with a certaing predicate of a subject.
+%% @doc Return the Nth object with a certain predicate of a subject.
 object(Id, Pred, N, Context) ->
     Ids = objects(Id, Pred, Context),
     try
@@ -415,7 +532,7 @@ object(Id, Pred, N, Context) ->
         _:_ -> undefined
     end.
 
-%% @doc Return the Nth subject with a certaing predicate of an object.
+%% @doc Return the Nth subject with a certain predicate of an object.
 subject(Id, Pred, N, Context) ->
     Ids = subjects(Id, Pred, Context),
     try
@@ -424,7 +541,7 @@ subject(Id, Pred, N, Context) ->
         _:_ -> undefined
     end.
 
-%% @doc Return all object ids of an id with a certain predicate.  The order of the ids is deterministic.
+%% @doc Return all object ids of an id with a certain predicate. The order of the ids is deterministic.
 %% @spec objects(Id, Pred, Context) -> List
 objects(_Id, undefined, _Context) ->
     [];
@@ -513,6 +630,47 @@ subject_edge_ids(Id, Predicate, Context) ->
     end.
 
 
+%% @doc Return all object ids with edge properties
+-spec object_edge_props(integer(), binary()|list()|atom()|integer(), #context{}) -> list().
+object_edge_props(Id, Predicate, Context) ->
+    case m_predicate:name_to_id(Predicate, Context) of
+        {ok, PredId} ->
+            F = fun() ->
+                z_db:assoc("
+                        select *
+                        from edge
+                        where subject_id = $1
+                          and predicate_id = $2
+                        order by seq, id", 
+                       [Id, PredId], 
+                       Context)
+            end,
+            z_depcache:memo(F, {object_edge_props, Id, PredId}, ?DAY, [Id], Context);
+        {error, _} ->
+            []
+    end.
+
+%% @doc Return all subject ids with the edge properties
+-spec subject_edge_props(integer(), binary()|list()|atom()|integer(), #context{}) -> list().
+subject_edge_props(Id, Predicate, Context) ->
+    case m_predicate:name_to_id(Predicate, Context) of
+        {ok, PredId} ->
+            F = fun() ->
+                z_db:assoc("
+                        select *
+                        from edge 
+                        where object_id = $1 
+                          and predicate_id = $2 
+                        order by seq, id", 
+                       [Id, PredId], 
+                       Context)
+            end,
+            z_depcache:memo(F, {subject_edge_props, Id, PredId}, ?DAY, [Id], Context);
+        {error, _} ->
+            []
+    end.
+
+
 %% @doc Reorder the edges so that the mentioned ids are in front, in the listed order.
 %% @spec update_sequence(Id, Predicate, ObjectIds, Context) -> ok | {error, Reason}
 update_sequence(Id, Pred, ObjectIds, Context) ->
@@ -552,7 +710,7 @@ update_sequence(Id, Pred, ObjectIds, Context) ->
 
 
 %% @doc Set edges order so that the specified object ids are in given order.
-%% Any extra edges not speicified will be deleted, and any missing edges will be inserted.
+%% Any extra edges not specified will be deleted, and any missing edges will be inserted.
 %% @spec set_sequence(Id, Predicate, ObjectIds, Context) -> ok | {error, Reason}
 set_sequence(Id, Pred, ObjectIds, Context) ->
     case z_acl:rsc_editable(Id, Context) of

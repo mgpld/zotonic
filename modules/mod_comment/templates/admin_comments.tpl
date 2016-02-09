@@ -5,14 +5,14 @@
 {% endblock %}
 
 {% block content %}
-<div class="edit-header">
-
-    <div class="pull-right">
-        <a class="btn btn-small" href="{% url admin_comments_settings %}">{_ Settings _}</a>
-    </div>
-
+<div class="admin-header">
     <h2>{_ Recent comments _}</h2>
+</div>
 
+<div class="well">
+    <a class="btn btn-default btn-sm" href="{% url admin_comments_settings %}">{_ Settings _}</a>
+</div>
+<div>
     <table class="table table-striped do_adminLinkedTable">
         <thead>
             <tr>
@@ -31,11 +31,11 @@
                 <td>{{ comment.created|date:_"d M Y, H:i" }}</td>
                 <td>{{ m.rsc[comment.rsc_id].title|truncate:20 }}</td>
                 <td>{{ comment.message|striptags|truncate:40 }}</td>
-                <td title="{{ comment.email }}">
-                    <div class="pull-right">
-                        {% button class="btn btn-mini" text=_"view" action={redirect location=[m.rsc[comment.rsc_id].page_url,"#comment-",id|format_integer]|join } %}
+                <td title="{{ comment.email|escape }}">
+                    <div class="pull-right buttons">
+                        {% button class="btn btn-default btn-xs" text=_"view" action={redirect location=[m.rsc[comment.rsc_id].page_url,"#comment-",id|format_integer]|join } %}
                         {% include "_admin_comments_toggledisplay.tpl" element=#comment.id %}
-                        {% button class="btn btn-mini"
+                        {% button class="btn btn-default btn-xs"
                            text=_"delete"
                            action={confirm text=_"Are you sure you wish to delete that comment?"
                            action={postback delegate="controller_admin_comments"

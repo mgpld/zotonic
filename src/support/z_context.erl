@@ -1,8 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009-2012  Marc Worrell
+%% @copyright 2009-2014  Marc Worrell
 %% @doc Request context for Zotonic request evaluation.
 
-%% Copyright 2009-2012 Marc Worrell
+%% Copyright 2009-2014 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -30,11 +30,16 @@
     hostname_port/1,
     site_protocol/1,
 
+    db_pool/1,
+    db_driver/1,
+         
     is_request/1,
 
+    prune_for_spawn/1,
     prune_for_async/1,
     prune_for_template/1,
     prune_for_database/1,
+    prune_for_scomp/1,
     prune_for_scomp/2,
     output/2,
 
@@ -45,7 +50,6 @@
 
     combine_results/2,
 
-    continue_session/1,
     has_session/1,
     has_session_page/1,
     
@@ -53,11 +57,15 @@
     ensure_session/1,
     ensure_qs/1,
 
+    continue_all/1,
+    continue_session/1,
+
     get_reqdata/1,
     set_reqdata/2,
     get_controller_module/1,
     set_controller_module/2,
 
+    set_q/3,
     get_q/2,
     get_q/3,
     get_q_all/1,
@@ -72,6 +80,9 @@
 
     spawn_link_session/4,
     spawn_link_page/4,
+
+    lager_md/1,
+    lager_md/2,
 
     get_value/2,
 
@@ -96,7 +107,12 @@
     get_all/1,
 
     language/1,
+    fallback_language/1,
     set_language/2,
+
+    tz/1,
+    tz_config/1,
+    set_tz/2,
 
     merge_scripts/2,
     copy_scripts/2,
@@ -115,16 +131,15 @@
     set_cookie/3,
     set_cookie/4,
     get_cookie/2,
+    get_cookies/2,
 
     cookie_domain/1,
-    document_domain/1,
     streamhost/1,
     websockethost/1,
     has_websockethost/1
 ]).
 
 -include_lib("zotonic.hrl").
-
 
 %% @doc Return a new empty context, no request is initialized.
 %% @spec new(HostDescr) -> Context2
@@ -135,6 +150,7 @@ new(#context{} = C) ->
         host=C#context.host,
         ua_class=C#context.ua_class,
         language=C#context.language,
+        tz=C#context.tz,
         depcache=C#context.depcache,
         notifier=C#context.notifier,
         session_manager=C#context.session_manager,
@@ -144,6 +160,7 @@ new(#context{} = C) ->
         dropbox_server=C#context.dropbox_server,
         pivot_server=C#context.pivot_server,
         module_indexer=C#context.module_indexer,
+        db=C#context.db,
         translation_table=C#context.translation_table
     };
 new(undefined) ->
@@ -152,8 +169,8 @@ new(undefined) ->
         Site -> new(Site)
     end;
 new(Host) when is_atom(Host) ->
-    Context = set_server_names(#context{host=Host}),
-    Context#context{language=z_trans:default_language(Context)};
+    set_default_language_tz(
+        set_server_names(#context{host=Host}));
 new(ReqData) ->
     %% This is the requesting thread, enable simple memo functionality.
     z_memo:enable(),
@@ -164,25 +181,50 @@ new(ReqData) ->
                         wm_reqdata=ReqData,
                         ua_class=z_user_agent:get_class(ReqData)
                     }),
-    set_dispatch_from_path(Context#context{language=z_trans:default_language(Context)}).
-
+    set_dispatch_from_path(set_default_language_tz(Context)).
 
 %% @doc Create a new context record for a host with a certain language.
 new(Host, Lang) when is_atom(Host), is_atom(Lang) ->
     Context = set_server_names(#context{host=Host}),
-    Context#context{language=Lang};
+    Context#context{
+        language=[Lang],
+        tz=tz_config(Context)
+    };
 %% @doc Create a new context record for the current request and resource module
 new(ReqData, Module) ->
     %% This is the requesting thread, enable simple memo functionality.
     z_memo:enable(),
     z_depcache:in_process(true),
     Context = set_server_names(#context{wm_reqdata=ReqData, controller_module=Module, host=site(ReqData)}),
-    set_dispatch_from_path(Context#context{language=z_trans:default_language(Context)}).
+    set_dispatch_from_path(
+        set_default_language_tz(Context)).
 
+
+set_default_language_tz(Context) ->
+    F = fun() -> {z_trans:default_language(Context), tz_config(Context)} end,
+    {DefaultLang, TzConfig} = z_depcache:memo(F, default_language_tz, ?DAY, [config], Context),
+    Context#context{
+        language= [DefaultLang],
+        tz= TzConfig
+    }.
 
 % @doc Create a new context used when testing parts of zotonic
 new_tests() ->
-    z_trans_server:set_context_table(#context{host=test, language=en, notifier='z_notifier$test'}).
+    Context = z_trans_server:set_context_table(
+            #context{
+                host=test,
+                language=[en],
+                tz= <<"UTC">>,
+                notifier='z_notifier$test'
+            }),
+    case ets:info(Context#context.translation_table) of
+        undefined -> 
+            ets:new(Context#context.translation_table, 
+                    [named_table, set, protected,  {read_concurrency, true}]);
+        _TabInfo ->
+            ok
+    end,
+    Context.
 
 
 %% @doc Set the dispatch rule for this request to the context var 'zotonic_dispatch'
@@ -196,8 +238,9 @@ set_dispatch_from_path(Context) ->
 %% @spec set_server_names(Context1) -> Context2
 set_server_names(#context{host=Host} = Context) ->
     HostAsList = [$$ | atom_to_list(Host)],
+    Depcache = list_to_atom("z_depcache"++HostAsList),
     Context#context{
-        depcache=list_to_atom("z_depcache"++HostAsList),
+        depcache=Depcache,
         notifier=list_to_atom("z_notifier"++HostAsList),
         session_manager=list_to_atom("z_session_manager"++HostAsList),
         dispatcher=list_to_atom("z_dispatcher"++HostAsList),
@@ -206,6 +249,7 @@ set_server_names(#context{host=Host} = Context) ->
         dropbox_server=list_to_atom("z_dropbox"++HostAsList),
         pivot_server=list_to_atom("z_pivot_rsc"++HostAsList),
         module_indexer=list_to_atom("z_module_indexer"++HostAsList),
+        db={z_db_pool:db_pool_name(Host), z_db_pool:db_driver(Context#context{depcache=Depcache})},
         translation_table=z_trans_server:table(Host)
     }.
 
@@ -249,6 +293,12 @@ is_request(#context{wm_reqdata=undefined}) -> false;
 is_request(_Context) -> true.
 
 
+%% @doc Minimal prune, for ensuring that the context can safely used in two processes
+prune_for_spawn(#context{} = Context) ->
+    Context#context{
+        dbc=undefined
+    }.
+
 %% @doc Make the context safe to use in a async message. This removes buffers and the db transaction.
 prune_for_async(#context{} = Context) ->
     #context{
@@ -268,8 +318,11 @@ prune_for_async(#context{} = Context) ->
         dropbox_server=Context#context.dropbox_server,
         pivot_server=Context#context.pivot_server,
         module_indexer=Context#context.module_indexer,
+        db=Context#context.db,
         translation_table=Context#context.translation_table,
-        language=Context#context.language
+        language=Context#context.language,
+        ua_class=Context#context.ua_class,
+        tz=Context#context.tz
     }.
 
 
@@ -302,16 +355,17 @@ prune_for_database(Context) ->
         scomp_server=Context#context.scomp_server,
         dropbox_server=Context#context.dropbox_server,
         pivot_server=Context#context.pivot_server,
-        module_indexer=Context#context.module_indexer
+        module_indexer=Context#context.module_indexer,
+        db=Context#context.db
     }.
 
 
 %% @doc Cleanup a context for cacheable scomp handling.  Resets most of the accumulators to prevent duplicating
 %% between different (cached) renderings.
-prune_for_scomp(VisibleFor, Context) ->
-    z_acl:set_visible_for(VisibleFor, Context#context{
+prune_for_scomp(Context) ->
+    Context#context{
         dbc=undefined,
-        wm_reqdata=undefined,
+        wm_reqdata=prune_reqdata(Context#context.wm_reqdata),
         updates=[],
         actions=[],
         content_scripts=[],
@@ -319,19 +373,43 @@ prune_for_scomp(VisibleFor, Context) ->
         wire=[],
         validators=[],
         render=[]
-    }).
+    }.
 
+prune_for_scomp(VisibleFor, Context) ->
+    z_acl:set_visible_for(VisibleFor, prune_for_scomp(Context)).
+
+prune_reqdata(undefined) ->
+    undefined;
+prune_reqdata(ReqData) ->
+    #wm_reqdata{
+        socket=ReqData#wm_reqdata.socket,
+        peer=ReqData#wm_reqdata.peer,
+        resp_headers=mochiweb_headers:empty(),
+        req_cookie=[],
+        req_headers=[]
+    }.
 
 %% @doc Make the url an absolute url by prepending the hostname.
 %% @spec abs_url(iolist(), Context) -> binary()
-abs_url(<<"http:", _/binary>> = Url, _Context) -> Url;
-abs_url(<<"https", _/binary>> = Url, _Context) -> Url;
+abs_url(<<"http:", _/binary>> = Url, _Context) -> 
+    Url;
+abs_url(<<"https", _/binary>> = Url, _Context) ->
+    Url;
+abs_url(<<"//", _/binary>> = Url, Context) ->
+    <<(site_protocol(Context))/binary, $:, Url/binary>>;
 abs_url(Url, Context) when is_list(Url) ->
     abs_url(iolist_to_binary(Url), Context);
 abs_url(Url, Context) ->
     case has_url_protocol(Url) of
-        true -> Url;
-        false -> z_convert:to_binary([site_protocol(Context), "://", hostname_port(Context), Url])
+        true -> 
+            Url;
+        false ->
+            case z_notifier:first(#url_abs{url=Url}, Context) of
+                undefined ->
+                    z_convert:to_binary([site_protocol(Context), "://", hostname_port(Context), Url]);
+                AbsUrl ->
+                    AbsUrl
+            end
     end.
 
     has_url_protocol(<<>>) ->
@@ -342,6 +420,15 @@ abs_url(Url, Context) ->
         true;
     has_url_protocol(_) ->
         false.
+
+
+%% @doc Fetch the pid of the database worker pool for this site
+db_pool(#context{db={Pool, _Driver}}) ->
+    Pool.
+
+%% @doc Fetch the database driver module for this site
+db_driver(#context{db={_Pool, Driver}}) ->
+    Driver.
 
 %% @doc Fetch the protocol for absolute urls referring to the site (defaults to http).
 %%      Useful when the site is behind a https proxy.
@@ -355,12 +442,19 @@ site_protocol(Context) ->
 %% @todo pickle/depickle the visitor id (when any)
 %% @spec pickle(Context) -> tuple()
 pickle(Context) ->
-    {pickled_context, Context#context.host, Context#context.user_id, Context#context.language, undefined}.
+    {pickled_context,
+        Context#context.host, 
+        Context#context.user_id,
+        Context#context.language,
+        Context#context.tz,
+        undefined}.
 
 %% @doc Depickle a context for restoring from a database
 %% @todo pickle/depickle the visitor id (when any)
 depickle({pickled_context, Host, UserId, Language, _VisitorId}) ->
-    Context = set_server_names(#context{host=Host, language=Language}),
+    depickle({pickled_context, Host, UserId, Language, 0, _VisitorId});
+depickle({pickled_context, Host, UserId, Language, Tz, _VisitorId}) ->
+    Context = set_server_names(#context{host=Host, language=Language, tz=Tz}),
     case UserId of
         undefined -> Context;
         _ -> z_acl:logon(UserId, Context)
@@ -396,6 +490,11 @@ output1([{trans, _} = Trans|Rest], Context, Acc) ->
     output1(Rest, Context, [z_trans:lookup_fallback(Trans, Context)|Acc]);
 output1([{{_,_,_},{_,_,_}} = D|Rest], Context, Acc) ->
     output1([filter_date:date(D, "Y-m-d H:i:s", Context)|Rest], Context, Acc);
+output1([{javascript, Script}|Rest], Context, Acc) ->
+    Context1 = Context#context{
+              content_scripts=combine(Context#context.content_scripts, [Script])
+           },
+    output1(Rest, Context1, Acc);
 output1([T|Rest], Context, Acc) when is_tuple(T) ->
     output1([iolist_to_binary(io_lib:format("~p", [T]))|Rest], Context, Acc);
 output1([C|Rest], Context, Acc) ->
@@ -403,12 +502,19 @@ output1([C|Rest], Context, Acc) ->
     
     render_script(Args, Context) ->
         NoStartup = z_convert:to_bool(proplists:get_value(nostartup, Args, false)),
+        NoStream = z_convert:to_bool(proplists:get_value(nostream, Args, false)),
         Extra = [ S || S <- z_notifier:map(#scomp_script_render{is_nostartup=NoStartup, args=Args}, Context), S /= undefined ],
         Script = case NoStartup of
             false ->
                 [ z_script:get_page_startup_script(Context),
                   Extra,
-                  z_script:get_script(Context) ];
+                  z_script:get_script(Context),
+                  case NoStream of
+                      false ->
+                          z_script:get_stream_start_script(Context);
+                      true ->
+                          []
+                  end];
             true ->
                 [z_script:get_script(Context), Extra]
         end,
@@ -444,7 +550,7 @@ merge_scripts(C, Acc) ->
     
 combine([],X) -> X;
 combine(X,[]) -> X;
-combine(X,Y) -> [X++Y].
+combine(X,Y) -> [X,Y].
 
 %% @doc Remove all scripts from the context
 %% @spec clean_scripts(Context) -> Context
@@ -468,9 +574,10 @@ copy_scripts(From, Context) ->
 %% @doc Continue an existing session, if the session id is in the request.
 continue_session(Context) ->
     case z_session_manager:continue_session(Context) of
+        {ok, #context{session_pid=Pid} = Context1} when is_pid(Pid) ->
+            maybe_logon_from_session(Context1);
         {ok, Context1} ->
-            Context2 = z_auth:logon_from_session(Context1),
-            z_notifier:foldl(session_context, Context2, Context2);
+            Context1;
         {error, _} ->
             Context
     end.
@@ -492,45 +599,40 @@ has_session(_) ->
 %% @doc Ensure session and page session. Fetches and parses the query string.
 ensure_all(Context) ->
     case get(no_session, Context, false) of
-        false ->
-            ensure_page_session(ensure_session(ensure_qs(Context)));
-        true ->
-            continue_page_session(continue_session(ensure_qs(Context)))
+        false -> ensure_page_session(ensure_session(ensure_qs(Context)));
+        true -> continue_all(Context)
     end.
 
+continue_all(Context) ->
+    ensure_page_session(continue_session(ensure_qs(Context))).
 
 
 %% @doc Ensure that we have a session, start a new session process when needed
+ensure_session(#context{session_pid=undefined}=Context) ->
+    {ok, Context1} = z_session_manager:ensure_session(Context),
+    maybe_logon_from_session(Context1);
 ensure_session(Context) ->
-    case Context#context.session_pid of
-        undefined ->
-            {ok, Context1} = z_session_manager:ensure_session(Context),
-            Context2 = z_auth:logon_from_session(Context1),
-            Context3 = z_notifier:foldl(session_context, Context2, Context2),
-            set_nocache_headers(Context3);
-        _ ->
-            Context
-    end.
+    Context.
 
-%% @doc Ensure that we have a page session, used for comet and postback requests.
+
+%% @doc After ensuring a session, try to log on from the user-id stored in the session
+maybe_logon_from_session(#context{user_id=undefined} = Context) ->
+    Context1 = z_auth:logon_from_session(Context),
+    Context2 = z_notifier:foldl(session_context, Context1, Context1),
+    set_nocache_headers(Context2);
+maybe_logon_from_session(Context) ->
+    Context.
+
+%% @doc Ensure that we have a page session process for this request.
+ensure_page_session(#context{session_pid=undefined} = Context) ->
+    Context;
+    
 ensure_page_session(Context) ->
-    case Context#context.page_pid of
-        undefined ->
-            z_session:ensure_page_session(Context);
-        _ ->
-            Context
-    end.
-
-continue_page_session(Context) ->
-    case Context#context.session_pid of
-        undefined ->
-            Context;
-        _ ->
-            z_session:ensure_page_session(Context)
-    end.
+    z_session:ensure_page_session(Context).
 
 
-%% @doc Ensure that we have parsed the query string, fetch body if necessary
+%% @doc Ensure that we have parsed the query string, fetch body if necessary.
+%%      If this is a POST then the session/page-session might be continued after this call.
 ensure_qs(Context) ->
     case proplists:lookup('q', Context#context.props) of
         {'q', _Qs} ->
@@ -545,9 +647,10 @@ ensure_qs(Context) ->
                             end,
                             dict:to_list(PathDict)),
             QPropsUrl = z_utils:prop_replace('q', PathArgs++Query, Context#context.props),
-            {Body, ContextParsed} = parse_form_urlencoded(Context#context{props=QPropsUrl}),
+            {Body, ContextParsed} = parse_post_body(Context#context{props=QPropsUrl}),
             QPropsAll = z_utils:prop_replace('q', PathArgs++Body++Query, ContextParsed#context.props),
-            ContextParsed#context{props=QPropsAll}
+            ContextQs = ContextParsed#context{props=QPropsAll},
+            z_notifier:foldl(request_context, ContextQs, ContextQs)
     end.
 
 
@@ -570,6 +673,14 @@ get_controller_module(Context) ->
 %% @spec set_controller_module(Module::atom(), Context) -> NewContext
 set_controller_module(Module, Context) ->
     Context#context{controller_module=Module}.
+
+
+%% @doc Set the value of a request parameter argument
+-spec set_q(string(), any(), #context{}) -> #context{}.
+set_q(Key, Value, Context) ->
+    Qs = get_q_all(Context),
+    Qs1 = proplists:delete(Key, Qs),
+    z_context:set('q', [{Key,Value}|Qs1], Context). 
 
 
 %% @spec get_q(Key::string(), Context) -> Value::string() | undefined
@@ -624,6 +735,8 @@ get_q_all_noz(Context) ->
 
     is_zotonic_arg("zotonic_host") -> true;
     is_zotonic_arg("zotonic_dispatch") -> true;
+    is_zotonic_arg("zotonic_dispatch_path") -> true;
+    is_zotonic_arg("zotonic_dispatch_path_rewrite") -> true;
     is_zotonic_arg("postback") -> true;
     is_zotonic_arg("triggervalue") -> true;
     is_zotonic_arg("z_trigger_id") -> true;
@@ -695,6 +808,44 @@ spawn_link_page(Module, Func, Args, Context) ->
 
 
 %% ------------------------------------------------------------------------------------
+%% Set lager metadata for the current process
+%% ------------------------------------------------------------------------------------
+
+lager_md(ContextOrReqData) ->
+    lager_md([], ContextOrReqData).
+
+lager_md(MD, #context{} = Context) when is_list(MD) ->
+    RD = get_reqdata(Context),
+    lager:md([
+            {site, site(Context)},
+            {user_id, Context#context.user_id},
+            {controller, Context#context.controller_module},
+            {dispatch, get(zotonic_dispatch, Context)},
+            {method, m_req:get(method, RD)},
+            {remote_ip, m_req:get(peer, RD)},
+            {is_ssl, m_req:get(is_ssl, RD)},
+            {ua_class, Context#context.ua_class},
+            {session_id, Context#context.session_id},
+            {page_id, Context#context.page_id},
+            {req_id, m_req:get(req_id, RD)}
+            | MD
+        ]);
+lager_md(MD, #wm_reqdata{} = RD) when is_list(MD) ->
+    DispRule = case dict:find(zotonic_dispatch, wrq:path_info(RD)) of
+                    {ok, Dispatch} -> Dispatch;
+                    error -> undefined
+               end,
+    lager:md([
+            {site, z_context:site(RD)},
+            {dispatch, DispRule},
+            {method, m_req:get(method, RD)},
+            {remote_ip, m_req:get(peer, RD)},
+            {is_ssl, m_req:get(is_ssl, RD)},
+            {req_id, m_req:get(req_id, RD)}
+            | MD
+        ]).
+
+%% ------------------------------------------------------------------------------------
 %% Set/get/modify state properties
 %% ------------------------------------------------------------------------------------
 
@@ -726,8 +877,8 @@ persistent_id(Context) ->
 %% @spec set_persistent(Key, Value, Context) -> Context
 %% @doc Set the value of the visitor variable Key to Value
 set_persistent(Key, Value, Context) ->
-    z_session:set_persistent(Key, Value, Context),
-    Context.
+    z_session:set_persistent(Key, Value, Context).
+
 
 %% @spec get_persistent(Key, Context) -> Value
 %% @doc Fetch the value of the visitor variable Key
@@ -831,21 +982,67 @@ incr(Key, Value, Context) ->
 	end,
     {R, set(Key, R, Context)}.
 
-
 %% @doc Return the selected language of the Context
+-spec language(#context{}) -> atom().
 language(Context) ->
-    Context#context.language.
+    % A check on atom must exist because the language setting may be stored in mnesia and passed to the context when the site starts
+    case Context#context.language of
+        [Language|_] -> Language;
+        Language -> Language
+    end.
 
-%% @doc Set the language of the context.
-%% @spec set_language(atom(), context()) -> context()
+%% @doc Return the first fallback language of the Context
+-spec fallback_language(#context{}) -> atom().
+fallback_language(Context) ->
+    % Take the second item of the list, if it exists
+    case Context#context.language of
+        [_|[Fallback|_]] -> Fallback;
+        _ -> undefined
+    end.
+
+%% @doc Set the language of the context, either an atom (language) or a list (language and fallback languages)
+-spec set_language(atom()|binary()|string()|list(), #context{}) -> #context{}.
 set_language(Lang, Context) when is_atom(Lang) ->
-    Context#context{language=Lang};
+    Context#context{language=[Lang]};
+set_language(Langs, Context) when is_list(Langs) ->
+    Context#context{language=Langs};
 set_language(Lang, Context) ->
     Lang1 = z_convert:to_list(Lang),
     case z_trans:is_language(Lang1) of
         true -> set_language(list_to_atom(Lang1), Context);
         false -> Context
     end.
+
+%% @doc Return the selected timezone of the Context; defaults to the site's timezone
+-spec tz(#context{}) -> binary().
+tz(#context{tz=TZ}) when TZ =/= undefined; TZ =/= <<>> ->
+    TZ;
+tz(Context) ->
+    tz_config(Context).
+
+%% @doc Return the site's configured timezone.
+-spec tz_config(#context{}) -> binary().
+tz_config(Context) ->
+    case m_config:get_value(mod_l10n, timezone, Context) of
+        None when None =:= undefined; None =:= <<>> ->
+            z_config:get(timezone);
+        TZ ->
+            TZ
+    end.
+
+%% @doc Set the timezone of the context.
+-spec set_tz(string()|binary(), #context{}) -> #context{}.
+set_tz(Tz, Context) when is_list(Tz) ->
+    set_tz(z_convert:to_binary(Tz), Context);
+set_tz(Tz, Context) when is_binary(Tz), Tz =/= <<>> ->
+    Context#context{tz=z_convert:to_binary(Tz)};
+set_tz(true, Context) ->
+    Context#context{tz= <<"UTC">>};
+set_tz(1, Context) ->
+    Context#context{tz= <<"UTC">>};
+set_tz(Tz, Context) ->
+    lager:error("Unknown timezone ~p", [Tz]),
+    Context.
 
 %% @doc Set a response header for the request in the context.
 %% @spec set_resp_header(Header, Value, Context) -> NewContext
@@ -878,49 +1075,19 @@ get_req_path(Context) ->
 cookie_domain(Context) ->
     case m_site:get(cookie_domain, Context) of
         Empty when Empty == undefined; Empty == []; Empty == <<>> ->
-            %% When there is a stream domain, the check if the stream domain is a subdomain
-            %% of the hostname, if so then set a wildcard
-            case m_site:get(streamhost, Context) of
-                None when None == undefined; None == []; None == <<>> ->
-                    undefined;
-                StreamDomain ->
-                    [StreamDomain1|_] = string:tokens(z_convert:to_list(StreamDomain), ":"),
-                    Hostname = hostname(Context),
-                    case postfix(Hostname, StreamDomain1) of
-                        [] -> Hostname;
-                        [$.|_] = Prefix -> Prefix;
-                        Prefix -> [$.|Prefix]
-                    end
-            end;
+            undefined;
         Domain ->
             z_convert:to_list(Domain)
-    end.
-
-
-    %% Return the longest matching postfix of two lists.
-    postfix(A, B) ->
-        postfix(lists:reverse(z_convert:to_list(A)), lists:reverse(z_convert:to_list(B)), []).
-    
-    postfix([X|A], [X|B], Acc) ->
-        postfix(A, B, [X|Acc]);
-    postfix(_A, _B, Acc) ->
-        Acc.
-
-%% @doc The document domain used for cross domain iframe javascripts
-document_domain(Context) ->
-    case cookie_domain(Context) of
-        [$.|Domain] -> Domain;
-        Domain -> Domain
     end.
 
 %% @doc Fetch the domain and port for stream (comet/websocket) connections
 %% @spec streamhost(Context) -> list()
 streamhost(Context) ->
-    case m_site:get(streamhost, Context) of
-        Empty when Empty == undefined; Empty == []; Empty == <<>> ->
-            hostname_port(Context);
-        Domain ->
-            Domain
+    case m_site:get(redirect, Context) of
+        false ->
+            wrq:get_req_header_lc("host", Context#context.wm_reqdata);
+        _ -> 
+            hostname_port(Context)
     end.
 
 %% @doc Fetch the domain and port for websocket connections
@@ -936,32 +1103,35 @@ websockethost(Context) ->
 %% @doc Return true iff this site has a separately configured websockethost
 %% @spec has_websockethost(Context) -> bool()
 has_websockethost(Context) ->
-    z_convert:to_bool(m_site:get(websockethost, Context)).
+    not z_utils:is_empty(m_site:get(websockethost, Context)).
 
 
 %% ------------------------------------------------------------------------------------
 %% Local helper functions
 %% ------------------------------------------------------------------------------------
 
-%% @spec parse_form_urlencoded(context()) -> {list(), NewContext}
+%% @spec parse_post_body(context()) -> {list(), NewContext}
 %% @doc Return the keys in the body of the request, only if the request is application/x-www-form-urlencoded
-parse_form_urlencoded(Context) ->
+parse_post_body(Context) ->
     ReqData = get_reqdata(Context),
     case wrq:get_req_header_lc("content-type", ReqData) of
         "application/x-www-form-urlencoded" ++ _ ->
             case wrq:req_body(ReqData) of
                 {undefined, ReqData1} ->
-                     {[], set_reqdata(ReqData1, Context)};
+                    {[], set_reqdata(ReqData1, Context)};
                 {Binary, ReqData1} ->
-                     {mochiweb_util:parse_qs(Binary), set_reqdata(ReqData1, Context)}
+                    {mochiweb_util:parse_qs(Binary), set_reqdata(ReqData1, Context)}
             end;
         "multipart/form-data" ++ _ ->
-            FileCheckFun = fun(_Filename, _ContentType, _Size) ->
-                                ok
-                           end,
-            {Form, ContextRcv} = z_parse_multipart:recv_parse(FileCheckFun, Context),
+            {Form, ContextRcv} = z_parse_multipart:recv_parse(Context),
+            QArgs = lists:map(
+                        fun
+                            ({Key,Val}) when is_binary(Val) -> {Key,z_convert:to_list(Val)};
+                            (KV) -> KV
+                        end,
+                        Form#multipart_form.args),
             FileArgs = [ {Name, #upload{filename=Filename, tmpfile=TmpFile}} || {Name, Filename, TmpFile} <- Form#multipart_form.files ],
-            {Form#multipart_form.args ++ FileArgs, ContextRcv};
+            {QArgs ++ FileArgs, ContextRcv};
         _Other ->
             {[], Context}
     end.
@@ -1002,17 +1172,33 @@ set_cookie(Key, Value, Context) ->
 
 %% @doc Set a cookie value with cookie options.
 set_cookie(Key, Value, Options, Context) ->
-    % Add domain to cookie if not set
-    Options1 = case proplists:lookup(domain, Options) of
-                   {domain, _} -> Options;
-                   none -> [{domain, z_context:cookie_domain(Context)}|Options]
-               end,
-    Options2 = z_notifier:foldl(#cookie_options{name=Key, value=Value}, Options1, Context),
-    RD = Context#context.wm_reqdata,
-    Hdr = mochiweb_cookies:cookie(Key, Value, Options2),
-    RD1 = wrq:merge_resp_headers([Hdr], RD),
-    z_context:set_reqdata(RD1, Context).
+    case controller_websocket:is_websocket_request(Context) of
+        true ->
+            %% Store the cookie in the session and trigger an ajax cookie fetch.
+            z_session:add_cookie(Key, Value, Options, Context),
+            add_script_page(<<"z_fetch_cookies();">>, Context),
+            Context;
+        false ->
+            % Add domain to cookie if not set
+            ValueAsString = z_convert:to_list(Value),
+            Options1 = case proplists:lookup(domain, Options) of
+                           {domain, _} -> Options;
+                           none -> [{domain, z_context:cookie_domain(Context)}|Options]
+                       end,
+            Options2 = z_notifier:foldl(#cookie_options{name=Key, value=ValueAsString}, Options1, Context),
+            RD = Context#context.wm_reqdata,
+            Hdr = mochiweb_cookies:cookie(Key, ValueAsString, Options2),
+            RD1 = wrq:merge_resp_headers([Hdr], RD),
+            z_context:set_reqdata(RD1, Context)
+    end.
+
 
 %% @doc Read a cookie value from the current request.
 get_cookie(Key, #context{wm_reqdata=RD}) ->
     wrq:get_cookie_value(Key, RD).
+
+get_cookies(Key, #context{wm_reqdata=RD}) ->
+    case wrq:req_cookie(RD) of
+        undefined -> [];
+        Cookies -> proplists:get_all_values(Key, Cookies) 
+    end.

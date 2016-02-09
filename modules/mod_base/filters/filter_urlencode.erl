@@ -40,6 +40,8 @@
 
 urlencode(undefined, _Context) ->
     undefined;
+urlencode({trans, _} = Tr, Context) ->
+    urlencode(z_trans:lookup_fallback(Tr, Context), Context);
 urlencode(Input, _Context) when is_binary(Input) ->
     urlencode1(Input, 0);
 urlencode(Input, _Context) when is_list(Input) ->
@@ -52,8 +54,6 @@ urlencode1(Input, Index) when is_binary(Input) ->
     case Input of
         <<_:Index/binary, Byte, _/binary>> when ?NO_ENCODE(Byte) ->
             urlencode1(Input, Index + 1);
-        <<Pre:Index/binary, $\s, Post/binary>> ->
-            process_binary_match(Pre, <<"+">>, size(Post), urlencode1(Post, 0));
         <<Pre:Index/binary, Hi:4, Lo:4, Post/binary>> ->
             HiDigit = hexdigit(Hi),
             LoDigit = hexdigit(Lo),
@@ -64,10 +64,12 @@ urlencode1(Input, Index) when is_binary(Input) ->
     end;
 urlencode1([], Acc) ->
     lists:reverse(Acc);
+urlencode1([L | Rest], Acc) when is_list(L) ->
+    urlencode1(Rest, [urlencode1(L, []) | Acc]);
+urlencode1([B | Rest], Acc) when is_binary(B) ->
+    urlencode1(Rest, [urlencode1(B, 0) | Acc]);
 urlencode1([C | Rest], Acc) when ?NO_ENCODE(C) ->
     urlencode1(Rest, [C | Acc]);
-urlencode1([$\s | Rest], Acc) ->
-    urlencode1(Rest, [$+ | Acc]);
 urlencode1([C | Rest], Acc) ->
     <<Hi:4, Lo:4>> = <<C>>,
     urlencode1(Rest, [hexdigit(Lo), hexdigit(Hi), $\% | Acc]).

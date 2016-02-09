@@ -35,12 +35,13 @@
 
 
 
-init([]) -> 
+init(_Args) -> 
     {ok, []}.
 
 
 resource_exists(ReqData, _Context) ->
     Context  = z_context:new(ReqData, ?MODULE),
+    z_context:lager_md(Context),
     Context1 = z_context:ensure_qs(Context),
     {true, ReqData, Context1}.
 
@@ -78,9 +79,9 @@ response(ReqData, Context) ->
                                             true ->
                                                 case m_oauth_app:exchange_request_for_access(Token, Context) of
                                                     {ok, NewToken} ->
-                                                        ReqData1 = wrq:set_resp_body(oauth_uri:params_to_string(
-                                                                                       [{"oauth_token", binary_to_list(z_db:get(token, NewToken))},
-                                                                                        {"oauth_token_secret", binary_to_list(z_db:get(token_secret, NewToken))}]), ReqData),
+                                                        ReqData1 = wrq:set_resp_body(oauth:uri_params_encode(
+                                                                                       [{"oauth_token", binary_to_list(proplists:get_value(token, NewToken))},
+                                                                                        {"oauth_token_secret", binary_to_list(proplists:get_value(token_secret, NewToken))}]), ReqData),
                                                         {{halt, 200}, ReqData1, Context};
 
                                                     {false, Reason} ->

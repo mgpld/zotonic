@@ -38,6 +38,7 @@
     f/1,
     f/2,
     get_seconds/0,
+    ranges/1,
     group_by/3,
     group_proplists/2,
     hex_decode/1,
@@ -60,6 +61,9 @@
     json_escape/1,
     lib_dir/0,
     lib_dir/1,
+    wildcard/1,
+    wildcard/2,
+    filter_dot_files/1,
     list_dir_recursive/1,
     name_for_host/2,
     only_digits/1,
@@ -84,7 +88,7 @@
     flush_message/1,
     ensure_existing_module/1,
     generate_username/2,
-    
+
     %% Deprecated, see z_url.erl
     url_path_encode/1,
     url_encode/1,
@@ -109,6 +113,25 @@ lib_dir() ->
 lib_dir(Dir) ->
     {ok, Path} = zotonic_app:get_path(),
     filename:join([Path, Dir]).
+
+%% @doc filename:wildcard version which filters dotfiles like unix does
+wildcard(Wildcard) ->
+    filter_dot_files(filelib:wildcard(Wildcard)).
+
+wildcard(Wildcard, DirName) ->
+    filter_dot_files(filelib:wildcard(Wildcard, DirName)).
+
+%% @doc Filter all filenames which start with a dot.
+filter_dot_files(Names) ->
+    [NoDotName || NoDotName <- Names, no_dot_file(NoDotName)].
+
+    no_dot_file(Name) ->
+        no_dot_file1(filename:split(Name)).
+
+    no_dot_file1([]) -> true;
+    no_dot_file1([[$.|_] | _]) -> false;
+    no_dot_file1([_|Rest]) -> no_dot_file1(Rest).
+
 
 %% @doc Return the current tick count
 now() ->
@@ -152,14 +175,14 @@ encode_value(Value, Context) ->
     Salt = z_ids:id(),
     Secret = z_ids:sign_key(Context),
     base64:encode(
-      term_to_binary({Value, Salt, crypto:sha_mac(Secret, term_to_binary([Value, Salt]))})
+      term_to_binary({Value, Salt, crypto:hmac(sha, Secret, term_to_binary([Value, Salt]))})
      ).
 
 %% 23 usec on core2duo 2GHz
 decode_value(Data, Context) ->
     Secret = z_ids:sign_key(Context),
     {Value, Salt, Sign} = binary_to_term(base64:decode(Data)),
-    Sign = crypto:sha_mac(Secret, term_to_binary([Value, Salt])),
+    Sign = crypto:hmac(sha, Secret, term_to_binary([Value, Salt])),
     Value.
 
 encode_value_expire(Value, Date, Context) ->
@@ -167,7 +190,7 @@ encode_value_expire(Value, Date, Context) ->
 
 decode_value_expire(Data, Context) ->
     {Value, Expire} = decode_value(Data, Context),
-    case Expire >= calendar:local_time() of
+    case Expire >= calendar:universal_time() of
         false -> {error, expired};
         true -> {ok, Value}
     end.
@@ -180,16 +203,24 @@ checksum(Data, Context) ->
 
 checksum_assert(Data, Checksum, Context) ->
     Sign = z_ids:sign_key_simple(Context),
-    assert(list_to_binary(z_utils:hex_decode(Checksum)) == erlang:md5([Sign,Data]), checksum_invalid).
+    try
+        assert(list_to_binary(z_utils:hex_decode(Checksum)) == erlang:md5([Sign,Data]), checksum_invalid)
+    catch
+        error:badarg ->
+            erlang:error(checksum_invalid);
+        error:{case_clause, _} ->
+            % Odd length checksum
+            erlang:error(checksum_invalid)
+    end.
 
 
 %%% PICKLE / UNPICKLE %%%
 pickle(Data, Context) ->
     BData = erlang:term_to_binary(Data),
-    Nonce = crypto:rand_bytes(4), 
+    Nonce = crypto:rand_bytes(4),
     Sign  = z_ids:sign_key(Context),
     SData = <<BData/binary, Nonce:4/binary>>,
-    <<Mac:16/binary>> = crypto:md5_mac(Sign, SData),	
+    <<Mac:16/binary>> = crypto:hmac(md5, Sign, SData),
     base64url:encode(<<Mac:16/binary, Nonce:4/binary, BData/binary>>).
 
 depickle(Data, Context) ->
@@ -197,10 +228,13 @@ depickle(Data, Context) ->
         <<Mac:16/binary, Nonce:4/binary, BData/binary>> = base64url:decode(Data),
         Sign  = z_ids:sign_key(Context),
         SData = <<BData/binary, Nonce:4/binary>>,
-        <<Mac:16/binary>> = crypto:md5_mac(Sign, SData),
+        <<Mac:16/binary>> = crypto:hmac(md5, Sign, SData),
         erlang:binary_to_term(BData)
     catch
-        _M:_E -> erlang:throw("Postback data invalid, could not depickle: "++Data)
+        _M:_E ->
+            lager:error("[~p] Postback data invalid, could not depickle: ~p",
+                        [z_context:site(Context), Data]),
+            erlang:throw({checksum_invalid, Data})
     end.
 
 
@@ -229,18 +263,18 @@ os_filename(A) when is_list(A) ->
     os_filename(lists:flatten(A), []).
 
 os_filename([], Acc) ->
-    filename:nativename([$"] ++ lists:reverse(Acc) ++ [$"]);
+    filename:nativename([$'] ++ lists:reverse(Acc) ++ [$']);
 os_filename([$\\|Rest], Acc) ->
     os_filename_bs(Rest, Acc);
-os_filename([$"|Rest], Acc) ->
-    os_filename(Rest, [$", $\\ | Acc]);
+os_filename([$'|Rest], Acc) ->
+    os_filename(Rest, [$', $\\ | Acc]);
 os_filename([C|Rest], Acc) ->
     os_filename(Rest, [C|Acc]).
 
 os_filename_bs([$\\|Rest], Acc) ->
     os_filename(Rest, [$\\,$\\|Acc]);
-os_filename_bs([$"|Rest], Acc) ->
-    os_filename(Rest, [$",$\\,$\\,$\\|Acc]);
+os_filename_bs([$'|Rest], Acc) ->
+    os_filename(Rest, [$',$\\,$\\,$\\|Acc]);
 os_filename_bs([C|Rest], Acc) ->
     os_filename(Rest, [C,$\\|Acc]).
 
@@ -299,9 +333,9 @@ os_escape(win32, [C|Rest], Acc) ->
 %%% ESCAPE JAVASCRIPT %%%
 
 %% @doc Javascript escape, see also: http://code.google.com/p/doctype/wiki/ArticleXSSInJavaScript
-js_escape({trans, []}, undefined) -> [];
-js_escape({trans, Ts}, undefined) -> js_escape(hd(Ts));
-js_escape({trans, _} = Tr, Context) -> js_escape(z_trans:lookup_fallback(Tr, Context), Context);
+js_escape({trans, []}, _OptContext) -> [];
+js_escape({trans, _} = Tr, OptContext) -> js_escape(z_trans:lookup_fallback(Tr, OptContext), OptContext);
+js_escape({trust, Value}, _Context) -> Value;
 js_escape(undefined, _OptContext) -> [];
 js_escape([], _OptContext) -> [];
 js_escape(<<>>, _OptContext) -> [];
@@ -344,7 +378,7 @@ js_array(L) ->
 js_object(L) -> js_object(L, undefined).
 
 js_object([], _OptContext) -> <<"{}">>;
-js_object(L, OptContext) -> js_object(L,[], OptContext).
+js_object(L, OptContext) -> iolist_to_binary(js_object(L, [], OptContext)).
 
 js_object(L, [], Context) -> js_object1(L, [], Context);
 js_object(L, [Key|T], Context) -> js_object(proplists:delete(Key,L), T, Context).
@@ -357,9 +391,10 @@ js_object1([{Key,Value}|T], Acc, OptContext) ->
     Prop = [atom_to_list(Key), $:, js_prop_value(Key, Value, OptContext)],
     js_object1(T, [Prop|Acc], OptContext).
 
+
 js_prop_value(_, undefined, _OptContext) -> <<"null">>;
 js_prop_value(_, true, _OptContext) -> <<"true">>;
-js_prop_value(_, false, _OptContext) -> <<"true">>;
+js_prop_value(_, false, _OptContext) -> <<"false">>;
 js_prop_value(_, Atom, _OptContext) when is_atom(Atom) -> [$",js_escape(erlang:atom_to_list(Atom)), $"];
 js_prop_value(pattern, [$/|T]=List, OptContext) ->
     %% Check for regexp
@@ -379,12 +414,13 @@ js_prop_value(pattern, [$/|T]=List, OptContext) ->
             end
     end;
 js_prop_value(_, Int, _OptContext) when is_integer(Int) -> integer_to_list(Int);
+js_prop_value(_, {trust, Value}, _OptContext) -> Value;
 js_prop_value(_, Value, OptContext) -> [$",js_escape(Value, OptContext),$"].
 
 
 %% @doc Deprecated: moved to z_json.
 json_escape(A) ->
-    z_json:escape(A).
+    z_json:json_escape(A).
 
 
 only_letters([]) ->
@@ -399,7 +435,9 @@ only_digits([]) ->
 only_digits(L) when is_list(L) ->
     only_digits1(L);
 only_digits(B) when is_binary(B) ->
-    only_digits(binary_to_list(B)).
+    only_digits(binary_to_list(B));
+only_digits(_) -> false.
+
 
 only_digits1([]) ->
     true;
@@ -445,6 +483,7 @@ coalesce([H|_]) -> H.
 is_empty(undefined) -> true;
 is_empty([]) -> true;
 is_empty(<<>>) -> true;
+is_empty({{9999,_,_},{_,_,_}}) -> true;
 is_empty(_) -> false.
 
 
@@ -493,7 +532,7 @@ props_merge(Ps, [{K,_}=P|Xs]) ->
     case proplists:is_defined(K, Ps) of
         true -> props_merge(Ps, Xs);
         false -> props_merge([P|Ps], Xs)
-    end. 
+    end.
 
 
 %% @doc Given a list of proplists, make it a nested list with respect to a property, combining elements
@@ -556,7 +595,7 @@ nested_props_assign([K], V, Acc) ->
     end;
 nested_props_assign([H|T], V, Acc) ->
     case only_digits(H) of
-        true -> 
+        true ->
             Index = list_to_integer(H),
             NewV = case get_nth(Index, Acc) of
                        L when is_list(L) -> nested_props_assign(T, V, L);
@@ -576,7 +615,7 @@ get_nth(N, L) when N >= 1 ->
     try lists:nth(N, L) catch _:_ -> undefined end.
 
 set_nth(N, V, L) when N >= 1 ->
-    try 
+    try
         case lists:split(N-1, L) of
             {Pre, []} -> Pre ++ [V];
             {Pre, [_|T]} -> Pre ++ [V|T]
@@ -648,6 +687,20 @@ vsplit_in(N, L, RunLength, Acc) ->
 		{Row,Rest} = lists:split(RunLength, L),
 		vsplit_in(N-1, Rest, RunLength, [Row|Acc]).
 
+
+%% @doc Convert a sorted list of integers to a list of range pairs {From,To}
+-spec ranges([integer()]) -> [ {integer(),integer()} ].
+ranges([]) ->
+    [];
+ranges([N|Ns]) ->
+    ranges(Ns, [{N,N}]).
+
+ranges([],Acc) ->
+    lists:reverse(Acc);
+ranges([N|Ns], [{A,B}|Acc]) when B+1 =:= N ->
+    ranges(Ns, [{A,N}|Acc]);
+ranges([N|Ns], Acc) ->
+    ranges(Ns, [{N,N}|Acc]).
 
 %% @doc Group by a property or m_rsc property, keeps the input list in the same order.
 group_by([], _, _Context) ->
@@ -778,7 +831,7 @@ ensure_existing_module(ModuleName) when is_list(ModuleName) ->
     end;
 ensure_existing_module(ModuleName) when is_atom(ModuleName) ->
     case module_loaded(ModuleName) of
-        true -> 
+        true ->
             {ok, ModuleName};
         false ->
             case code:ensure_loaded(ModuleName) of

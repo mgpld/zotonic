@@ -91,11 +91,19 @@ insert(Notification, UserId, ResourceId, Context) ->
 		1 ->
 			insert(Notification, UserId, ResourceId, Context);
 		0 ->
-			1 = z_db:q("insert into email_receive_recipient (recipient, notification, user_id, rsc_id)
-						values ($1, $2, $3, $4)",
-					   [Recipient, Notification, UserId, ResourceId],
-					   Context),
-			{ok, Recipient}
+			try
+				1 = z_db:q("insert into email_receive_recipient (recipient, notification, user_id, rsc_id)
+							values ($1, $2, $3, $4)",
+						   [Recipient, Notification, UserId, ResourceId],
+						   Context),
+				{ok, Recipient}
+			catch
+				throw:{error, {error,error,<<"23503">>,_Msg,_Detail} = Error} ->
+					lager:warning(z_context:lager_md(Context),
+								  "[~p] Error on creating a new e-mail address ~p",
+								  [z_context:site(Context), Error]),
+					{error, notfound}
+			end
 	end.
 
 
@@ -149,7 +157,7 @@ create_table(Context) ->
 				notification varchar(64) not null,
 				user_id integer,
                 rsc_id integer,
-				created timestamp not null default current_timestamp,
+				created timestamp with time zone not null default current_timestamp,
 
                 CONSTRAINT email_receive_recipient_pkey PRIMARY KEY (recipient),
                 CONSTRAINT fk_email_receive_recipient_user_id FOREIGN KEY (user_id)

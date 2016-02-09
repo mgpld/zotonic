@@ -1,4 +1,4 @@
-/* z.menuedit.js
+/* zp-menuedit.css
 ----------------------------------------------------------
 
 @author Marc Worrell <marc@worrell.nl>
@@ -42,6 +42,7 @@ ul.tree-list li img.grippy {
 
 ul.tree-list .active {
     font-weight: bold;
+    background: #f0f0ff;
 }
 ul.tree-list .active .menu-edit {
     opacity: 0.5;
@@ -49,7 +50,7 @@ ul.tree-list .active .menu-edit {
 }
 
 
-ul.tree-list li div {
+ul.tree-list li > div {
     cursor: move;
     clear: both;
     border: 1px solid #E0E0E0;
@@ -71,14 +72,17 @@ ul.tree-list li div {
 ul.tree-list li .btns {
     position: absolute;
     right: 4px;
+    top: -2px;
 }
 ul.tree-list li .btns .btn-group {
     margin-left: 4px;
     display: inline-block;
 }
-
 .menu-edit a {
     float: right;
+}
+.menu-item .category {
+    color: #999;
 }
 
 ul.tree-list .btn-group {
@@ -92,3 +96,4 @@ ul.tree-list .btn-group {
     #menu-editor .widget-header .btn-group {
         margin-right: 12px;
     }
+

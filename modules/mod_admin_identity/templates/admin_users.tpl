@@ -2,77 +2,95 @@
 
 {% block title %}{_ Users _}{% endblock %}
 
+{% block search_target %}{% url admin_user %}{% endblock %}
+
+{% block search_placeholder %}{_ Search users _}{% endblock %}
+
 {% block content %}
-<div class="edit-header">
+    {% with m.acl.is_allowed.use.mod_admin_identity as is_users_editable %}
 
-    <h2>
-        {_ Users _}{% if q.qs %},
-        {_ matching _} “{{ q.qs|escape }}”
-        {% button text=_"show all" action={redirect dispatch="admin_user"} %}
-        {% else %} {_ overview _}{% endif %}
-    </h2>
-
-    <p>
-        {_ Every page/person can be made into a user on the edit page.
-        The difference between a user and a normal page is only
-        that the former has logon credentials attached to its page record. _}
-    </p>
-
-    {% if m.acl.is_admin %}
-    <div class="well">
-        {% button class="btn btn-primary" text=_"Make a new user" action={dialog_user_add on_success={reload}} %}
+    <div class="admin-header">
+        <h2>
+            {% if q.qs %}
+                {_ Users _} {_ matching _} “{{ q.qs|escape }}”
+            {% else %}
+                {_ Users Overview _}
+            {% endif %}
+        </h2>
+        <p>
+            {_ Every page/person can be made into a user on the edit page. The difference between a user and a normal page is only that the former has logon credentials attached to its page record. _}
+        </p>
     </div>
+    
+    {% if is_users_editable %}
+        <div class="well">
+            {% button class="btn btn-primary" text=_"Make a new user" action={dialog_user_add on_success={reload}} %}
+        </div>
     {% else %}
-    <div class="alert alert-info">{_ You need to be an administrator to add users. _}</div>
+        <div class="alert alert-info">{_ You need to be an administrator to add users. _}</div>
     {% endif %}
-</div>
 
-<div>
-    {% with m.acl.user as me %}
-    {% with m.search.paged[{users text=q.qs page=q.page}] as result %}
+    <div>
+        {% with m.acl.user as me %}
 
-    <table class="table table-striped do_adminLinkedTable">
-        <thead>
-            <tr>
-                <th width="20%">{_ Name _}</th>
-                <th width="15%">{_ Username _}</th>
-                <th width="10%">{_ Modified on _}</th>
-                <th width="40%">{_ Created on _}</th>
-            </tr>
-        </thead>
+            <form method="GET" action="{% url admin_users %}">
+                <label style="font-weight: normal; margin: 0">
+                    <input type="hidden" name="qs" value="{{ q.qs }}" />
+                    <input type="checkbox" name="persons" value="1" {% if q.persons %}checked="checked"{% endif %}
+                        onchange="this.form.submit()" />
+                    {_ Also show persons without user account _}
+                </label>
+            </form>
+            
+            {% with m.search.paged[{users text=q.qs page=q.page users_only=not(q.persons)}] as result %}
 
-        <tbody>
-            {% for id, rank in result %}
-            <tr id="{{ #tr.id }}" data-href="{% url admin_edit_rsc id=id %}" {% if not id.is_published %}class="unpublished"{% endif %}>
-                <td>{{ m.rsc[id].title|striptags }}</td>
-                <td>{{ m.identity[id].username|escape }}{% if id == me %}  <strong>{_ (that's you) _}</strong>{% endif %}</td>
-                <td>{{ m.rsc[id].modified|date:_"d M, H:i" }}</td>
-                <td>
-                    <div class="pull-right">
-                        {% button class="btn btn-mini" action={dialog_set_username_password id=id} text=_"set username/ password" on_delete={slide_fade_out target=#tr.id} %}
-                        {% if id /= 1 %}
-                        {% button class="btn btn-mini" text=_"delete username" action={dialog_delete_username id=id on_success={slide_fade_out target=#tr.id}} %}
-                        {% endif %}
-                        {% button class="btn btn-mini" text=_"edit" action={redirect dispatch="admin_edit_rsc" id=id} %}
-                    </div>
-                    {{ m.rsc[id].created|date:_"d M, H:i" }}
-                </td>
-            </tr>
+                <table class="table table-striped do_adminLinkedTable">
+                    <thead>
+                        <tr>
+                            <th width="20%">{_ Name _}</th>
+                            <th width="15%">{_ Username _}</th>
+                            <th width="10%">{_ Modified on _}</th>
+                            <th width="40%">{_ Created on _}</th>
+                        </tr>
+                    </thead>
 
-            {% empty %}
-            <tr>
-                <td colspan="4">
-                    {_ No users found. _}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+                    <tbody>
+                        {% for id in result %}
+                            <tr id="{{ #tr.id }}" data-href="javascript:;" {% if not id.is_published %}class="unpublished"{% endif %}>
+                                <td>{{ m.rsc[id].title|striptags }}</td>
+                                <td>
+                                    {% if not m.identity[id].username %}
+                                        &mdash;
+                                    {% else %}
+                                        {{ m.identity[id].username|escape }}{% if id == me %}  <strong>{_ (that's you) _}</strong>{% endif %}</td>
+                                {% endif %}
+                                <td>{{ m.rsc[id].modified|date:_"d M, H:i" }}</td>
+                                <td>
+                                    <div class="pull-right buttons">
+                                        {% if is_users_editable %}
+                                            {% button class="btn btn-default btn-xs" action={dialog_set_username_password id=id} text=_"set username / password" on_delete={slide_fade_out target=#tr.id} %}
+                                        {% endif %}
+                                        {% button class="btn btn-default btn-xs" text=_"edit" action={redirect dispatch="admin_edit_rsc" id=id} %}
+                                    </div>
+                                    {{ m.rsc[id].created|date:_"d M, H:i" }}
+                                </td>
+                            </tr>
+                            {% wire id=" #"|append:#tr.id|append:" td" action={dialog_edit_basics id=id target=undefined} %}
+                        {% empty %}
+                            <tr>
+                                <td colspan="4">
+                                    {_ No users found. _}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
 
-    {% pager result=result dispatch="admin_user" qargs %}
+                {% pager result=result dispatch="admin_user" qargs hide_single_page %}
 
-    {% endwith %}
-    {% endwith %}
+            {% endwith %}
+        {% endwith %}
+    </div>
 
-</div>
+{% endwith %}
 {% endblock %}

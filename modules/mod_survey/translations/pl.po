@@ -159,7 +159,7 @@ msgid "Drag questions here."
 msgstr "Pytania przeciągaj tutaj."
 
 #: modules/mod_survey/mod_survey.erl:83
-msgid "E-mail addresses"
+msgid "Email addresses"
 msgstr "Adresy e-mail"
 
 #: modules/mod_survey/templates/_admin_survey_questions_edit.tpl:4
@@ -428,7 +428,7 @@ msgstr ""
 "Pokazuj informacje o postępie badania w postaci \"<em>Pytanie 3/10</em>\""
 
 #: modules/mod_survey/templates/_admin_edit_content.survey.tpl:27
-msgid "Show results to user after completion of survey"
+msgid "Show results to user after completion (only results for multiple choice questions are shown)"
 msgstr "Po zakończeniu badania pokaż użytkownikowi wyniki."
 
 #: modules/mod_survey/templates/_admin_edit_content.survey.tpl:75
@@ -505,8 +505,8 @@ msgstr "Dziękujemy"
 
 #: modules/mod_survey/templates/_survey_end.tpl:3
 msgid ""
-"Thank you for filling in our survey. Be sure to come back for other surveys!"
-msgstr "Dziękujemy za udział w naszym badaniu. Zajrzyj do nas w przyszłości!"
+"Thank you for filling in our survey."
+msgstr "Dziękujemy za udział w naszym badaniu."
 
 #: modules/mod_survey/templates/blocks/_admin_edit_block_li_survey_truefalse.tpl:15
 msgid "The earth is flat."

@@ -1,14 +1,20 @@
+{% block blocks_before %}{% endblock %}
+
 {% with blocks|if_undefined:(m.admin_blocks.list[id]) as blocks %}
 <div id="edit-blocks-wrapper">
     <input type="hidden" id="block-" name="block-" value="" /> 
     {% include "_admin_edit_block_addblock.tpl" %}
     <ul class="blocks ui-sortable" id="edit-blocks">
-    {% for blk in id.blocks %}
-        {% include "_admin_edit_block_li.tpl" %}
-    {% endfor %}
+        {% block blocks %}
+            {% for blk in id.blocks %}
+                {% include "_admin_edit_block_li.tpl" %}
+            {% endfor %}
+        {% endblock %}
     </ul>
 </div>
 {% endwith %}
+
+{% block blocks_after %}{% endblock %}
 
 {% javascript %}
 $('#edit-blocks').sortable({ 
@@ -17,44 +23,46 @@ $('#edit-blocks').sortable({
     revert: 'invalid',
     axis: 'y',
     start: function(event, ui) {
-        z_tinymce_save($(this));
-        z_tinymce_remove($(this));
+        z_editor_save($(this));
+        z_editor_remove($(this));
     },
     stop: function(event, ui) {
-        z_tinymce_add($(this));
+        z_editor_add($(this));
     }
 })
-.on('click', '.icon-remove', function(event) { 
+.on('click', '.block-remove', function(event) { 
     event.stopPropagation();
-    var block = $(this).closest('li');
+    var $block = $(this).closest('li');
     z_dialog_confirm({
         title: '{_ Confirm block removal _}',
         text: '<p>{_ Do you want to remove this block? _}</p>',
         cancel: '{_ Cancel _}',
         ok: '{_ Delete _}',
         on_confirm: function() { 
-                        $(block).fadeTo('fast', 0.0)
-                                .slideUp('normal', 0.0, 
-                                 function() { 
-                                    z_tinymce_remove($(this)); 
-                                    $(this).remove(); 
-                                });
-                    }
+            $block
+                .fadeTo('fast', 0.0)
+                .slideUp('normal', 0.0, function() { 
+                    z_editor_remove($(this)); 
+                    $(this).remove(); 
+                });
+        }
     })
 });
 
 $('#edit-blocks-wrapper').on('click', '.block-add-block .dropdown-menu a', function(event) {
-    var block_type = $(this).data('block-type'); 
-    var after_block = $(this).closest('li.block').attr('id');
-    var langs = '';
-    
+    var $this = $(this),
+        block_type = $this.data('block-type'),    
+        after_block = $(this).closest('li.block').attr('id');
+        langs = '';
     $('input[name=language]:checked').each(function() { langs += ',' + $(this).val(); });
     
     z_notify('admin-insert-block', { 
                 z_delegate: 'mod_admin', 
                 type: block_type, 
-                after: after_block, 
-                rsc_id: {{ id }}, 
+                after: after_block,
+                {% if id %}
+                    rsc_id: {{ id }}, 
+                {% endif %}
                 language: langs,
                 edit_language: $('.language-tabs .active').attr('lang')
             });
@@ -73,7 +81,6 @@ window.zAdminBlockConnectDone = function(v) {
     var target_id = $(".rsc-item-wrapper", $block_page).attr('id');
     $("input[type=hidden]", $block_page).val(v.object_id);
     z_notify("update", {z_delegate: 'mod_admin', template: "_rsc_item.tpl", id: v.object_id, z_target_id: target_id});
-    window.zAdminConnectDone(v);
 }
 
 $('#edit-blocks-wrapper').on('click', '.rsc-item h5 a', function(event) {
@@ -90,12 +97,14 @@ $('#edit-blocks-wrapper').on('click', '.rsc-item h5 a', function(event) {
 {% endjavascript %}
 
 {% wire name="admin-block-connect" 
-        action={dialog_open
-                    subject_id=id
-                    predicate=""
-                    template="_action_dialog_connect.tpl" 
-                    title=_"Find page"
-                    callback="window.zAdminBlockConnectDone"}
+    action={dialog_open
+        subject_id=id
+        predicate=""
+        template="_action_dialog_connect.tpl"
+        title=_"Find page"
+        callback="window.zAdminBlockConnectDone"
+        center=0
+    }
 %}
 
 {% wire name="admin-edit-basics" action={dialog_edit_basics template="_rsc_item.tpl"} %}

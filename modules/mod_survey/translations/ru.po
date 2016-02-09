@@ -157,7 +157,7 @@ msgid "Drag questions here."
 msgstr "Перетащите вопросы сюда."
 
 #: modules/mod_survey/mod_survey.erl:83
-msgid "E-mail addresses"
+msgid "Email addresses"
 msgstr "Адреса e-mail"
 
 #: modules/mod_survey/templates/_admin_survey_editor_results.tpl:26
@@ -425,7 +425,7 @@ msgid "Show progress information as “<em>Question 3/10</em>”"
 msgstr "Показывать информацию о прогрессе как «<em>Вопрос 3/10</em>»"
 
 #: modules/mod_survey/templates/_admin_edit_content.survey.tpl:27
-msgid "Show results to user after completion of survey"
+msgid "Show results to user after completion (only results for multiple choice questions are shown)"
 msgstr "Показывать результаты пользователю после завершения анкетирования"
 
 #: modules/mod_survey/templates/_admin_edit_content.survey.tpl:75
@@ -502,10 +502,9 @@ msgstr "Спасибо"
 
 #: modules/mod_survey/templates/_survey_end.tpl:3
 msgid ""
-"Thank you for filling in our survey. Be sure to come back for other surveys!"
+"Thank you for filling in our survey."
 msgstr ""
-"Спасибо за заполнение нашей анкеты. Не забудьте вернуться за остальными "
-"анкетами!"
+"Спасибо за заполнение нашей анкеты."
 
 #: modules/mod_survey/templates/blocks/_admin_edit_block_li_survey_truefalse.tpl:15
 msgid "The earth is flat."

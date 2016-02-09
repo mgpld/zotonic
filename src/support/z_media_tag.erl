@@ -28,6 +28,10 @@
 
 %% interface functions
 -export([
+    scomp_viewer/3,
+    scomp_tag/3,
+    scomp_url/3,
+
     viewer/3,
     tag/3,
     url/3,
@@ -40,6 +44,46 @@
 -include_lib("zotonic.hrl").
 
 -compile([{parse_transform, lager_transform}]).
+
+%% @doc Called from erlydtl, render the media viewer for some resource/medium
+scomp_viewer(undefined, _Options, _Context) ->
+    <<>>;
+scomp_viewer(IdOrName, Options, Context) ->
+    case viewer(IdOrName, Options, Context) of
+        {ok, Rendered} ->
+            Rendered;
+        {error, Reason} ->
+            lager:debug("[~p] Could not render media-viewer for ~p (~p), error ~p",
+                        [z_context:site(Context), IdOrName, Options, Reason]),
+            <<>>
+    end.
+
+%% @doc Called from erlydtl, render the media tag for some resource/medium
+scomp_tag(undefined, _Options, _Context) ->
+    <<>>;
+scomp_tag(IdOrName, Options, Context) ->
+    case tag(IdOrName, Options, Context) of
+        {ok, Rendered} ->
+            Rendered;
+        {error, Reason} ->
+            lager:debug("[~p] Could not render media-tag for ~p (~p), error ~p",
+                        [z_context:site(Context), IdOrName, Options, Reason]),
+            <<>>
+    end.
+
+%% @doc Called from erlydtl, render the media url for some resource/medium
+scomp_url(undefined, _Options, _Context) ->
+    <<>>;
+scomp_url(IdOrName, Options, Context) ->
+    case url(IdOrName, Options, Context) of
+        {ok, Rendered} ->
+            Rendered;
+        {error, Reason} ->
+            lager:debug("[~p] Could not render media-url for ~p (~p), error ~p",
+                        [z_context:site(Context), IdOrName, Options, Reason]),
+            <<>>
+    end.
+
 
 %% @spec viewer(MediaReference, Options, Context) -> {ok, HtmlFragMent} | {error, Reason}
 %%   MediaReference = Filename | RscId | MediaPropList
@@ -97,58 +141,37 @@ viewer(Filename, Options, Context) ->
 %%   MediaReference = Filename | RscId | MediaPropList
 %% @doc Generate a HTML image tag for the image with the filename and options. The medium _must_ be in
 %% a format for which we can generate a preview.  Note that this will never generate video or audio.
-tag(What, Options, Context) ->
-    tag(What, Options, Context, []).
-
-tag(undefined, _Options, _Context, _Visited) ->
+tag(undefined, _Options, _Context) ->
     {ok, []};
-tag([], _Options, _Context, _Visited) ->
+tag([], _Options, _Context) ->
     {ok, []};
-tag(#rsc_list{list=[]}, _Options, _Context, _Visited) ->
+tag(#rsc_list{list=[]}, _Options, _Context) ->
     {ok, []};
-tag(#rsc_list{list=[Id|_]}, Options, Context, Visited) ->
-    tag(Id, Options, Context, Visited);
-tag(Name, Options, Context, Visited) when is_atom(Name) ->
+tag(#rsc_list{list=[Id|_]}, Options, Context) ->
+    tag(Id, Options, Context);
+tag(Name, Options, Context) when is_atom(Name) ->
     case m_rsc:name_to_id(Name, Context) of
-        {ok, Id} -> tag(Id, Options, Context, Visited);
+        {ok, Id} -> tag(Id, Options, Context);
         _ -> {ok, []}
     end;
-tag(Id, Options, Context, Visited) when is_integer(Id) ->
-    case m_media:get(Id, Context) of
-        Props when is_list(Props) ->
-            case mediaprops_filename(Id, Props, Context) of
-                [] -> {ok, []};
-                Filename -> tag1(Props, Filename, Options, Context)
-            end;
-        undefined ->
-            NewId = case z_notifier:first(#media_stillimage{id=Id, props=[]}, Context) of
-                        {ok, N} -> N;
-                        _ ->
-                            %% Use the first depiction edge
-                            m_edge:object(Id, depiction, 1, Context)
-                    end,
-            case NewId of
-                undefined -> {ok, []};
-                _ -> case lists:member(NewId, Visited) of
-                         true -> {ok, []}; %% cycle detected
-                         false -> tag(NewId, Options, Context, [NewId|Visited]) %% recurse
-                     end
-            end
-    end;
-tag([{_Prop, _Value}|_] = Props, Options, Context, _Visited) ->
+tag(Id, Options, Context) when is_integer(Id) ->
+    tag(m_media:depiction(Id, Context), Options, Context);
+tag([{_Prop, _Value}|_] = Props, Options, Context) ->
     case mediaprops_filename(proplists:get_value(id, Props), Props, Context) of
-        [] -> {ok, []};
-        Filename -> tag1(Props, Filename, Options, Context)
+        None when None =:= []; None =:= <<>>; None =:= undefined ->
+            {ok, []};
+        Filename -> 
+            Options1 = opt_crop_center(proplists:get_value(id, Props), Options, Context),
+            tag1(Props, Filename, Options1, Context)
     end;
-tag(Filename, Options, Context, _Visited) when is_binary(Filename) ->
+tag(Filename, Options, Context) when is_binary(Filename) ->
     tag(binary_to_list(Filename), Options, Context);
-tag(Filename, Options, Context, _Visited) when is_list(Filename) ->
+tag(Filename, Options, Context) when is_list(Filename) ->
     FilePath = filename_to_filepath(Filename, Context),
     tag1(FilePath, Filename, Options, Context);
-tag({filepath, Filename, FilePath}, Options, Context, _Visited) ->
+tag({filepath, Filename, FilePath}, Options, Context) ->
     tag1(FilePath, Filename, Options, Context).
 
-    
 
     tag1(_MediaRef, {filepath, Filename, FilePath}, Options, Context) ->
         tag1(FilePath, Filename, Options, Context);
@@ -178,7 +201,7 @@ tag({filepath, Filename, FilePath}, Options, Context, _Visited) ->
                     end,
         % Filter some opts
         case proplists:get_value(link, TagOpts) of
-            Empty when Empty == undefined; Empty == []; Empty == <<>> ->
+            None when None =:= []; None =:= <<>>; None =:= undefined ->
                 {ok, iolist_to_binary(z_tags:render_tag("img", [{src,Url}|TagOpts2]))};
             Link ->
                 HRef = iolist_to_binary(get_link(MediaRef, Link, Context)),
@@ -186,38 +209,21 @@ tag({filepath, Filename, FilePath}, Options, Context, _Visited) ->
                 {ok, iolist_to_binary(z_tags:render_tag("a", [{href,HRef}], Tag))}
         end.
 
+get_link(Media, true, Context) ->
+    Id = media_id(Media),
+    case m_rsc:p(Id, website, Context) of
+        None when None =:= []; None =:= <<>>; None =:= undefined ->
+            m_rsc:p(Id, page_url, Context);
+        Website ->
+            Website
+    end;
+get_link(_Media, Id, Context) when is_integer(Id) ->
+    m_rsc:p(Id, page_url, Context);
+get_link(_Media, HRef, _Context) when is_binary(HRef); is_list(HRef) ->
+    HRef.
 
-    % Given the media properties of an id, find the depicting file
-    mediaprops_filename(Id, undefined, Context) ->
-        case z_notifier:first({media_stillimage, Id, []}, Context) of
-            {ok, Filename} -> Filename;
-            undefined -> undefined
-        end;
-    mediaprops_filename(Id, Props, Context) ->
-        case z_notifier:first({media_stillimage, Id, Props}, Context) of
-            {ok, Filename} -> Filename;
-            _ -> case z_convert:to_list(proplists:get_value(preview_filename, Props)) of
-                     [] -> z_convert:to_list(proplists:get_value(filename, Props));
-                     Filename -> Filename
-                 end
-        end.
-
-
-    get_link(Media, true, Context) ->
-        Id = media_id(Media),
-        case m_rsc:p(Id, website, Context) of
-            Empty when Empty == undefined; Empty == <<>>; Empty == [] ->
-                m_rsc:p(Id, page_url, Context);
-            Website ->
-                Website
-        end;
-    get_link(_Media, Id, Context) when is_integer(Id) ->
-        m_rsc:p(Id, page_url, Context);
-    get_link(_Media, HRef, _Context) when is_binary(HRef); is_list(HRef) ->
-        HRef.
-
-    media_id([{_,_}|_] = List) ->
-        proplists:get_value(id, List).
+media_id([{_,_}|_] = List) ->
+    proplists:get_value(id, List).
 
 %% @doc Give the filepath for the filename being served.
 %% @todo Ensure the file is really in the given directory (ie. no ..'s)
@@ -231,44 +237,34 @@ filename_to_filepath(Filename, #context{host=Host} = Context) ->
                 _ -> Filename
             end;
         _ ->
-            filename:join([z_utils:lib_dir(priv), "sites", Host, "files", "archive", Filename])
+            filename:join([z_path:site_dir(Host), "files", "archive", Filename])
     end.
 
 
-%% @doc Give the base url for the filename being served
-%% @todo Use the dispatch rules to find the correct image path (when we want that...)
-filename_to_urlpath(Filename) ->
-    filename:join("/image/", Filename).
+%% @doc Give the base url for the filename being served using the 'image' dispatch rule
+filename_to_urlpath(Filename, Context) ->
+    z_dispatcher:url_for(image, [{star, Filename}], z_context:set_language(undefined, Context)).
 
 
 %% @spec url(MediaRef, Options, Context) -> {ok, Url::binary()} | {error, Reason}
 %% @doc Generate the url for the image with the filename and options
 url(undefined, _Options, _Context) ->
     {error, enoent};
-url(Id, Options, Context) when is_integer(Id) ->
-    case m_media:get(Id, Context) of
-        Props when is_list(Props) ->
-            url(Props, Options, Context);
-        undefined ->
-            case z_notifier:first({media_stillimage, Id, []}, Context) of
-                {ok, Filename} ->
-                    {url, Url, _TagOptions, _ImageOptions} = url1(Filename, Options, Context),
-                    {ok, Url};
-                _ -> {ok, <<>>}
-            end
+url(Name, Options, Context) when is_atom(Name) ->
+    case m_rsc:name_to_id(Name, Context) of
+        {ok, Id} -> url(Id, Options, Context);
+        _ -> {ok, []}
     end;
+url(Id, Options, Context) when is_integer(Id) ->
+    url(m_media:depiction(Id, Context), Options, Context);
 url([{_Prop, _Value}|_] = Props, Options, Context) ->
-    case z_convert:to_list(proplists:get_value(filename, Props)) of
-        None when None == undefined; None == <<>>; None == [] -> 
-            case z_notifier:first({media_stillimage, proplists:get_value(id, Props), Props}, Context) of
-                {ok, Filename} ->
-                    {url, Url, _TagOptions, _ImageOptions} = url1(Filename, Options, Context),
-                    {ok, Url};
-                _ ->
-                    {ok, <<>>}
-            end;
-        Filename -> 
-            {url, Url, _TagOptions, _ImageOptions} = url1(Filename, Options, Context),
+    Id = proplists:get_value(id, Props),
+    case mediaprops_filename(Id, Props, Context) of
+        None when None =:= []; None =:= <<>>; None =:= undefined ->
+            {ok, []};
+        Filename ->
+            Options1 = opt_crop_center(Id, Options, Context),
+            {url, Url, _TagOptions, _ImageOptions} = url1(Filename, Options1, Context),
             {ok, Url}
     end;
 url(Filename, Options, Context) ->
@@ -286,6 +282,26 @@ url1(File, Options, Context) ->
             {url, z_dispatcher:abs_url(Url, Context), TagOpts, ImageOpts};
         false -> 
             UrlAndOpts
+    end.
+
+% Given the media properties of an id, find the depicting file
+mediaprops_filename(Id, undefined, Context) ->
+    case z_notifier:first({media_stillimage, Id, []}, Context) of
+        {ok, Filename} -> Filename;
+        undefined -> undefined
+    end;
+mediaprops_filename(undefined, Props, _Context) ->
+    case z_convert:to_list(proplists:get_value(preview_filename, Props)) of
+        [] -> z_convert:to_list(proplists:get_value(filename, Props));
+        Filename -> Filename
+    end;
+mediaprops_filename(Id, Props, Context) ->
+    case z_notifier:first({media_stillimage, Id, Props}, Context) of
+        {ok, Filename} -> Filename;
+        _ -> case z_convert:to_list(proplists:get_value(preview_filename, Props)) of
+                 [] -> z_convert:to_list(proplists:get_value(filename, Props));
+                 Filename -> Filename
+             end
     end.
 
 use_absolute_url(Options, Context) ->
@@ -308,17 +324,17 @@ url2(File, Options, Context) ->
     {TagOpts, ImageOpts} = lists:partition(fun is_tagopt/1, Options),
     % Map all ImageOpts to an opt string
     MimeFile = z_media_identify:guess_mime(Filename),
-    {_Mime,Extension} = z_media_preview:out_mime(MimeFile, ImageOpts),
+    {_Mime,Extension} = z_media_preview:out_mime(MimeFile, ImageOpts, Context),
     case props2url(ImageOpts, Context) of
         {no_checksum, UrlProps} ->
             PropsQuoted = mochiweb_util:quote_plus(UrlProps),
-            {url, list_to_binary(filename_to_urlpath(lists:flatten([Filename,PropsQuoted,Extension]))), 
+            {url, filename_to_urlpath(lists:flatten([Filename,PropsQuoted,Extension]), Context), 
                   TagOpts,
                   ImageOpts};
         {checksum, UrlProps} ->
             Checksum = z_utils:checksum([Filename,UrlProps,Extension], Context),
             PropCheck = mochiweb_util:quote_plus(iolist_to_binary([UrlProps,$(,Checksum,$)])),
-            {url, list_to_binary(filename_to_urlpath(lists:flatten([Filename,PropCheck,Extension]))), 
+            {url, filename_to_urlpath(lists:flatten([Filename,PropCheck,Extension]), Context), 
                   TagOpts,
                   ImageOpts}
     end.
@@ -335,6 +351,7 @@ is_tagopt({align, _}) -> true;  % HTML 1.0 for e-mails
 is_tagopt({width, _}) -> false;
 is_tagopt({height, _}) -> false;
 is_tagopt({crop, _}) -> false;
+is_tagopt({grey, _}) -> false;
 is_tagopt({gray, _}) -> false;
 is_tagopt({mono, _}) -> false;
 is_tagopt({extent, _}) -> false;
@@ -358,12 +375,23 @@ props2url([{mediaclass, _}] = Props, Context) ->
     {no_checksum, iolist_to_binary([$(,Acc,$)])};
 props2url(Props, Context) -> 
     {Width, Height, Acc} = props2url(Props, undefined, undefined, [], Context),
-    Size =  case {Width,Height} of
-                {undefined,undefined} -> [];
-                {_W,undefined} -> [integer_to_list(Width)] ++ "x";
-                {undefined,_H} -> [$x|integer_to_list(Height)];
-                {_W,_H} -> integer_to_list(Width) ++ [$x|integer_to_list(Height)]
-            end,
+    case {Width,Height} of
+        {undefined,undefined} -> 
+            case Acc of
+                [[<<"mediaclass-">>|_]] ->
+                    {no_checksum, iolist_to_binary([$(,Acc,$)])};
+                _ ->
+                    with_checksum([], Acc)
+            end;
+        {_W,undefined} -> 
+            with_checksum([integer_to_list(Width)] ++ "x", Acc);
+        {undefined,_H} -> 
+            with_checksum([$x|integer_to_list(Height)], Acc);
+        {_W,_H} ->
+            with_checksum(integer_to_list(Width) ++ [$x|integer_to_list(Height)], Acc)
+    end.
+
+with_checksum(Size, Acc) ->
     {checksum, iolist_to_binary([$(, z_utils:combine(")(", [Size|lists:reverse(Acc)]), $)])}.
 
 props2url([], Width, Height, Acc, _Context) ->
@@ -403,50 +431,77 @@ props2url([{Prop,Value}|Rest], Width, Height, Acc, Context) ->
     props2url(Rest, Width, Height, [[atom_to_list(Prop),$-,z_convert:to_list(Value)]|Acc], Context).
 
 
-%% @spec url2props(Url, Context) -> {Filepath,PreviewPropList,Checksum,ChecksumBaseString} | error
 %% @doc Translate an url of the format "image.jpg(300x300)(crop-center)(checksum).jpg" to parts
 %% @todo Map the extension to the format of the preview (.jpg or .png)
+-spec url2props(binary()|string(), #context{}) -> 
+            {ok, {FilePath :: string(), Props :: list(), Checksum :: string(), ChecksumBaseString :: string()}} |
+            {error, no_lparen|checksum_invalid|badarg}.
+url2props(Url, Context) when is_binary(Url) ->
+    url2props(erlang:binary_to_list(Url), Context);
 url2props(Url, Context) ->
     {Filepath,Rest} = lists:splitwith(fun(C) -> C =/= $( end, Url),
     PropsRoot = filename:rootname(Rest),
     % Take the checksum from the string
     case string:rchr(PropsRoot, $() of
         0 ->
-            error;
+            {error, no_lparen};
         LastParen ->
-            {Props,[$(|Check]} = lists:split(LastParen-1, PropsRoot),
-            Check1 = string:strip(Check, right, $)),
-            PropList = case Props of
-                           "()" ++ _ -> [""|string:tokens(Props, ")(")];
-                           _ -> string:tokens(Props, ")(")
-                       end,
-            FileMime = z_media_identify:guess_mime(Rest),
-            {_Mime, Extension} = z_media_preview:out_mime(FileMime, PropList),
-            case {Check1,PropList} of
-                {"mediaclass-"++_, []} ->
-                    % shorthand with only the mediaclass
-                    {Filepath,url2props1([Check1], []),none,none};
+            case lists:last(PropsRoot) of
+                $) ->
+                    {Props,[$(|Check]} = lists:split(LastParen-1, PropsRoot),
+                    Check1 = string:strip(Check, right, $)),
+                    PropList = case Props of
+                                   "()" ++ _ -> [""|string:tokens(Props, ")(")];
+                                   _ -> string:tokens(Props, ")(")
+                               end,
+                    FileMime = z_media_identify:guess_mime(Rest),
+                    {_Mime, Extension} = z_media_preview:out_mime(FileMime, map_mime_props(PropList), Context),
+                    case {Check1,PropList} of
+                        {"mediaclass-"++_, []} ->
+                            % shorthand with only the mediaclass
+                            {ok, {Filepath,url2props1([Check1], []),none,none}};
+                        _ ->
+                            % multiple args, also needs a checksum
+                            try
+                                z_utils:checksum_assert([Filepath,Props,Extension], Check1, Context),
+                                PropList1 = case PropList of
+                                                [] -> 
+                                                    [];
+                                                [Size|RestProps]->
+                                                    {W,XH} = lists:splitwith(fun(C) -> C >= $0 andalso C =< $9 end, Size),
+                                                    SizeProps = case {W,XH} of
+                                                                    {"", "x"}            -> [];
+                                                                    {"", ""}             -> [];
+                                                                    {Width, ""}          -> [{width,list_to_integer(Width)}]; 
+                                                                    {Width, "x"}         -> [{width,list_to_integer(Width)}]; 
+                                                                    {"", [$x|Height]}    -> [{height,list_to_integer(Height)}]; 
+                                                                    {Width, [$x|Height]} -> [{width,list_to_integer(Width)},{height,list_to_integer(Height)}]
+                                                                end,
+                                                    SizeProps ++ url2props1(RestProps, [])
+                                            end,
+                                {ok, {Filepath,PropList1,Check1,Props}}
+                            catch
+                                error:checksum_invalid ->
+                                    {error, checksum_invalid};
+                                error:badarg ->
+                                    {error, badarg}
+                            end
+                    end;
                 _ ->
-                    % multiple args, also needs a checksum
-                    z_utils:checksum_assert([Filepath,Props,Extension], Check1, Context),
-                    PropList1 = case PropList of
-                                    [] -> 
-                                        [];
-                                    [Size|RestProps]->
-                                        {W,XH} = lists:splitwith(fun(C) -> C >= $0 andalso C =< $9 end, Size),
-                                        SizeProps = case {W,XH} of
-                                                        {"", "x"}            -> [];
-                                                        {"", ""}             -> [];
-                                                        {Width, ""}          -> [{width,list_to_integer(Width)}]; 
-                                                        {Width, "x"}         -> [{width,list_to_integer(Width)}]; 
-                                                        {"", [$x|Height]}    -> [{height,list_to_integer(Height)}]; 
-                                                        {Width, [$x|Height]} -> [{width,list_to_integer(Width)},{height,list_to_integer(Height)}]
-                                                    end,
-                                        SizeProps ++ url2props1(RestProps, [])
-                                end,
-                    {Filepath,PropList1,Check1,Props}
+                    {error, badarg}
             end
     end.
+
+map_mime_props(Props) ->
+    [ map_mime_prop(P) || P <- Props ].
+
+map_mime_prop("lossless") ->
+    lossless;
+map_mime_prop("mediaclass-"++Rest) ->
+    {mediaclass, lists:takewhile(fun(C) -> C =/= $. end, Rest)};
+map_mime_prop(X) -> 
+    X.
+
 
 url2props1([], Acc) ->
     lists:reverse(Acc);
@@ -460,4 +515,12 @@ url2props1([P|Rest], Acc) ->
     url2props1(Rest, [Filter|Acc]).
 
 
-    
+
+opt_crop_center(Id, Options, Context) ->
+    case {proplists:get_value(crop, Options), m_rsc:p(Id, crop_center, Context)} of
+        {true, <<"+",_/binary>> = C} ->
+            z_utils:prop_replace(crop, C, Options);
+        {_, _} ->
+            Options
+    end.
+

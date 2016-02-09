@@ -20,11 +20,13 @@
 -author("Marc Worrell <marc@worrell.nl>").
 
 -export([is_allowed/3,
+         maybe_allowed/3,
 
          rsc_visible/2,
          rsc_prop_visible/3,
          rsc_editable/2,
          rsc_deletable/2,
+         rsc_linkable/2,
 
          rsc_update_check/3,
 
@@ -40,6 +42,7 @@
          anondo/1,
          anondo/2,
          logon/2,
+         logon_prefs/2,
          logoff/1,
 
          wm_is_authorized/2,
@@ -54,21 +57,31 @@
 
 -type acl() :: list(operationrequest()).
 -type operationrequest() :: {action(), object()}.
--type action() :: atom().
+-type action() :: use | admin | view | insert | update | delete | link | atom().
 -type object() :: m_rsc:resource().
 
 %% @doc Check if an action is allowed for the current actor.
--spec is_allowed(term(), term(), #context{}) -> true | false | undefined.
+-spec is_allowed(term(), term(), #context{}) -> true | false.
 is_allowed(_Action, _Object, #context{acl=admin}) ->
     true;
 is_allowed(_Action, _Object, #context{user_id=?ACL_ADMIN_USER_ID}) ->
     true;
+is_allowed(link, Object, Context) ->
+    is_allowed(insert, #acl_edge{subject_id=Object, predicate=relation, object_id=Object}, Context);
 is_allowed(Action, Object, Context) ->
-    case z_notifier:first(#acl_is_allowed{action=Action, object=Object}, Context) of
+    case maybe_allowed(Action, Object, Context) of
         undefined -> false;
-        Other -> Other
+        true -> true;
+        false -> false
     end.
 
+-spec maybe_allowed(term(), term(), #context{}) -> true | false | undefined.
+maybe_allowed(_Action, _Object, #context{acl=admin}) ->
+    true;
+maybe_allowed(_Action, _Object, #context{user_id=?ACL_ADMIN_USER_ID}) ->
+    true;
+maybe_allowed(Action, Object, Context) ->
+    z_notifier:first(#acl_is_allowed{action=Action, object=Object}, Context).
 
 %% @doc Check if an action on a property of a resource is allowed for the current actor.
 -spec is_allowed_prop(term(), term(), atom(), #context{}) -> true | false | undefined.
@@ -108,7 +121,6 @@ rsc_visible(Id, Context) when is_integer(Id) ->
             is_allowed(view, Id, Context)
     end;
 rsc_visible(RscName, Context) ->
-    ?DEBUG(RscName),
     case m_rsc:rid(RscName, Context) of
         undefined -> true;
         RscId -> rsc_visible(RscId, Context)
@@ -179,6 +191,18 @@ rsc_deletable(RscName, Context) ->
         RscId -> rsc_deletable(RscId, Context)
     end.
 
+%% @doc Check if the resource is connected to another resource by the current user
+rsc_linkable(undefined, _Context) ->
+    false;
+rsc_linkable(_Id, #context{acl=admin}) ->
+    true;
+rsc_linkable(Id, Context) when is_integer(Id) ->
+    is_allowed(link, Id, Context);
+rsc_linkable(RscName, Context) ->
+    case m_rsc:rid(RscName, Context) of
+        undefined -> false;
+        RscId -> is_allowed(link, RscId, Context)
+    end.
 
 %% @doc Filter the properties of an update.  This is before any escaping.
 rsc_update_check(Id, Props, Context) ->
@@ -196,11 +220,12 @@ set_visible_for(?ACL_VIS_COMMUNITY, Context) ->
     Context#context{user_id=?ACL_ANY_USER_ID, acl=undefined};
 set_visible_for(?ACL_VIS_GROUP, Context) ->
     Context#context{acl=undefined};
-set_visible_for(?ACL_VIS_USER, Context) ->
+set_visible_for(_VisibleFor, Context) ->
     Context.
 
 
 %% @doc Return the max visible_for the current user can see
+%% @todo Change this for the pluggable ACL
 can_see(#context{user_id=undefined}) ->
     ?ACL_VIS_PUBLIC;
 can_see(#context{user_id=?ACL_ADMIN_USER_ID}) ->
@@ -222,14 +247,11 @@ args_to_visible_for(Args) ->
     case proplists:get_value(visible_for, Args) of
         undefined   -> ?ACL_VIS_USER;
         "user"      -> ?ACL_VIS_USER;
-        3           -> ?ACL_VIS_USER;
         "group"     -> ?ACL_VIS_GROUP;
-        2           -> ?ACL_VIS_GROUP;
         "community" -> ?ACL_VIS_COMMUNITY;
-        1           -> ?ACL_VIS_COMMUNITY;
         "world"     -> ?ACL_VIS_PUBLIC;
         "public"    -> ?ACL_VIS_PUBLIC;
-        0           -> ?ACL_VIS_PUBLIC
+        N when is_integer(N), N >= 0 -> N
     end.
 
 
@@ -262,14 +284,15 @@ set_admin(Context) ->
     Context#context{acl=admin}.
 
 
-%% @doc Check if the current user is the admin or a sudo action
+%% @doc Check if the current user is an admin or a sudo action
 is_admin(#context{user_id=?ACL_ADMIN_USER_ID}) -> true;
 is_admin(#context{acl=admin}) -> true;
-is_admin(_) -> false.
+is_admin(Context) -> is_allowed(use, mod_admin_config, Context).
 
 
 %% @doc Call a function as the anonymous user.
 %% @spec anondo(FuncDef, #context{}) -> FuncResult
+-spec anondo({atom(),atom()}|{atom(),atom(),list()}|function(), #context{}) -> any().
 anondo({M,F}, Context) ->
     erlang:apply(M, F, [set_anonymous(Context)]);
 anondo({M,F,A}, Context) ->
@@ -280,21 +303,29 @@ anondo(F, Context) when is_function(F, 1) ->
 anondo(Context) ->
     set_anonymous(Context).
 
+-spec set_anonymous(#context{}) -> #context{}.
 set_anonymous(Context) ->
     Context#context{acl=undefined, user_id=undefined}.
 
 
 %% @doc Log the user with the id on, fill the acl field of the context
-%% @spec logon(integer(), #context{}) -> #context{}
+-spec logon(pos_integer(), #context{}) -> #context{}.
 logon(Id, Context) ->
     case z_notifier:first(#acl_logon{id=Id}, Context) of
         undefined -> Context#context{acl=undefined, user_id=Id};
         #context{} = NewContext -> NewContext
     end.
 
+%% @doc Log the user with the id on, fill acl and set all user preferences (like timezone and language)
+-spec logon_prefs(pos_integer(), #context{}) -> #context{}.
+logon_prefs(Id, Context) ->
+    z_notifier:foldl(#user_context{id=Id}, z_acl:logon(Id, Context), Context).
+
 
 %% @doc Log off, reset the acl field of the context
-%% @spec logoff(#context{}) -> #context{}
+-spec logoff(#context{}) -> #context{}.
+logoff(#context{user_id=undefined, acl=undefined} = Context) ->
+    Context;
 logoff(Context) ->
     case z_notifier:first(#acl_logoff{}, Context) of
         undefined -> Context#context{user_id=undefined, acl=undefined};
@@ -308,21 +339,22 @@ logoff(Context) ->
 wm_is_authorized(true, Context) ->
     ?WM_REPLY(true, Context);
 wm_is_authorized(false, Context) ->
-    wm_is_authorized(false, logon, Context);
+    wm_is_authorized(false, undefined, Context);
 wm_is_authorized(ACLs, Context) when is_list(ACLs) ->
-    wm_is_authorized(ACLs, logon, Context).
+    wm_is_authorized(ACLs, undefined, Context).
 
 -spec wm_is_authorized(boolean() | acl(), Redirect | ReqData, #context{}) -> webzmachine:reply() when
-      Redirect :: atom(),
+      Redirect :: atom() | undefined,
       ReqData :: webzmachine:reqdata().
 wm_is_authorized(true, _Redirect, Context) ->
     wm_is_authorized(true, Context);
+wm_is_authorized(false, undefined, _Context) ->
+    throw({stop_request, 403});
 wm_is_authorized(false, Redirect, Context) ->
     ContextLocation = wm_set_location(Redirect, Context),
     ?WM_REPLY({halt, 302}, ContextLocation);
 wm_is_authorized(ACLs, Redirect, Context) when is_list(ACLs), is_atom(Redirect) ->
-    ContextEnsured = z_context:ensure_all(Context),
-    wm_is_authorized(wm_is_allowed(ACLs, ContextEnsured), Redirect, ContextEnsured);
+    wm_is_authorized(wm_is_allowed(ACLs, Context), Redirect, Context);
 wm_is_authorized(ACLs, ReqData, Context) when is_list(ACLs) ->
     wm_is_authorized(ACLs, ?WM_REQ(ReqData, Context));
 wm_is_authorized(Action, Object, Context) ->
@@ -341,7 +373,9 @@ wm_is_authorized(Action, Object, Redirect, ReqData, Context) ->
 -spec wm_set_location(Redirect::atom(), #context{}) -> #context{}.
 wm_set_location(Redirect, Context) ->
     RequestPath = wrq:raw_path(z_context:get_reqdata(Context)),
-    Location = z_dispatcher:url_for(Redirect, [{p,RequestPath}], Context),
+    Location = z_context:abs_url(
+                    z_dispatcher:url_for(Redirect, [{p,RequestPath}], Context),
+                    Context),
     z_context:set_resp_header("Location", Location, Context).
 
 %% Check list of {Action,Object} ACL pairs

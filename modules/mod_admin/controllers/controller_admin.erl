@@ -19,16 +19,21 @@
 -module(controller_admin).
 -author("Tim Benniks <tim@timbenniks.com>").
 
--export([is_authorized/2
-        ]).
+-export([
+	is_authorized/2
+    ]).
 
 -include_lib("controller_html_helper.hrl").
 
 is_authorized(ReqData, Context) ->
-    z_acl:wm_is_authorized(use, z_context:get(acl_module, Context, mod_admin), admin_logon, ReqData, Context).
+    z_admin_controller_helper:is_authorized(mod_admin, ReqData, Context).
 
 html(Context) ->
     Template = z_context:get(template, Context, "admin.tpl"),
     Selected = z_context:get(selected, Context, "dashboard"),
-    Html = z_template:render(Template, [{selected, Selected}], Context),
+    Args = z_context:get_all(Context),
+    Vars = [
+    	{selected, Selected} | Args
+    ],
+    Html = z_template:render(Template, Vars, Context),
     z_context:output(Html, Context).

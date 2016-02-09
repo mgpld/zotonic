@@ -113,7 +113,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 do_discover(Url, State) ->
     UrlExtra = oembed_url_extra(State#state.context),
-    discover_per_provider(Url, UrlExtra, oembed_providers:list()).
+    fixup_html(discover_per_provider(Url, UrlExtra, oembed_providers:list())).
 
 
 discover_per_provider(Url, UrlExtra, [Provider=#oembed_provider{}|Rest]) ->
@@ -130,9 +130,8 @@ discover_per_provider(Url, UrlExtra, [Provider=#oembed_provider{}|Rest]) ->
         nomatch ->
             discover_per_provider(Url, UrlExtra, Rest)
     end;
-
 discover_per_provider(Url, UrlExtra, []) ->
-    lager:warning("Fallback embed.ly discovery for url: ~p~n", [Url]),
+    lager:debug("Fallback embed.ly discovery for url: ~p~n", [Url]),
     oembed_request(?EMBEDLY_ENDPOINT ++ z_utils:url_encode(Url) ++ UrlExtra).
 
 
@@ -153,13 +152,22 @@ oembed_request(RequestUrl) ->
         {timeout, ?HTTP_GET_TIMEOUT},
         {relaxed, true}
     ],
-    {ok, {{_, Code, _}, Headers, Body}} = httpc:request(get, {RequestUrl, []}, HttpOptions, []),
-    case Code of
-        200 -> 
-            {ok, z_convert:convert_json(mochijson2:decode(Body))};
-        _Other ->
-            lager:warning("OEmbed HTTP Request returned ~p for '~p' (~p ~p)", [Code, RequestUrl, Headers, Body]),
-            {error, {http, Code, Body}}  %% empty proplist
+    case httpc:request(get, {RequestUrl, []}, HttpOptions, []) of
+        {ok, {{_, Code, _}, Headers, Body}} ->
+            case Code of
+                200 -> 
+                    {ok, z_convert:convert_json(mochijson2:decode(Body))};
+                404 ->
+                    {error, {http, 404, <<>>}};
+                NoAccess when NoAccess =:= 401; NoAccess =:= 403 ->
+                    lager:warning("OEmbed HTTP Request returned ~p for '~p' (~p ~p)", [Code, RequestUrl, Headers, Body]),
+                    {error, {http, Code, Body}};
+                _Other ->
+                    lager:info("OEmbed HTTP Request returned ~p for '~p' (~p ~p)", [Code, RequestUrl, Headers, Body]),
+                    {error, {http, Code, Body}}
+            end;
+        {error, _} = Error ->
+            Error
     end.
 
 %% @doc Construct extra URL arguments to the OEmbed client request from the oembed module config.
@@ -171,6 +179,22 @@ oembed_url_extra(Context) ->
              H -> X1 ++ "&maxheight=" ++ z_utils:url_encode(z_convert:to_list(H))
          end,
     X2.
+
+%% @doc Fix oembed returned HTML, remove http: protocol to ensure that the oembed can also be shown on https: sites.
+fixup_html({ok, Props}) ->
+    {ok, fixup_protocol(html, Props)};
+fixup_html({error, _} = Error) ->
+    Error.
+
+fixup_protocol(Key, Props) ->
+    case lists:keytake(Key, 1, Props) of
+        false ->
+            Props;
+        {value, {Key, Value}, Props1} ->
+            Value1 = binary:replace(Value, <<"http://">>, <<"//">>, [global]),
+            [{Key,Value1}|Props1]
+    end.
+
 
 %% @doc Name of the oembed client gen_server for this site
 srv_name(Context) ->

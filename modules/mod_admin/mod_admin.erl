@@ -22,18 +22,21 @@
 
 -mod_title("Admin module").
 -mod_description("Provides administrative interface for editing pages, media, users etc.").
--mod_depends([base, authentication]).
+-mod_depends([base, authentication, mod_search, mod_mqtt]).
 -mod_provides([admin]).
+-mod_schema(1).
 -mod_prio(1000).
 
 -export([
-         observe_sanitize_element/3,
-         observe_admin_menu/3,
-         observe_admin_edit_blocks/3,
-         observe_module_ready/2,
-         event/2,
+     observe_sanitize_element/3,
+     observe_admin_menu/3,
+     observe_admin_edit_blocks/3,
+     observe_module_ready/2,
+     event/2,
 
-         do_link/5
+     do_link/5,
+
+     manage_schema/2
 ]).
 
 -include_lib("zotonic.hrl").
@@ -44,7 +47,7 @@
 %% <img class="z-tinymce-media z-tinymce-media-align-block z-tinymce-media-size-small z-tinymce-media-crop- z-tinymce-media-link- " 
 %%      src="/admin/media/preview/41113" 
 %%      alt="" />
-observe_sanitize_element(sanitize_element, {<<"img">>, Attrs, _Enclosed} = Element, Context) ->
+observe_sanitize_element(#sanitize_element{}, {<<"img">>, Attrs, _Enclosed} = Element, Context) ->
     case proplists:get_value(<<"src">>, Attrs) of
         <<"/admin/media/preview/", Number/binary>> ->
             NumberList = binary_to_list(Number),
@@ -58,12 +61,12 @@ observe_sanitize_element(sanitize_element, {<<"img">>, Attrs, _Enclosed} = Eleme
                         32,
                         class_to_opts(proplists:get_value(<<"class">>, Attrs))
                     ],
-                    ?DEBUG({comment, iolist_to_binary(CommentText)})
+                    {comment, iolist_to_binary(CommentText)}
             end;
         _OtherSrc ->
             Element
     end;
-observe_sanitize_element(sanitize_element, Element, _Context) ->
+observe_sanitize_element(#sanitize_element{}, Element, _Context) ->
     Element.
 
 
@@ -98,7 +101,10 @@ observe_admin_menu(admin_menu, Acc, Context) ->
      #menu_item{id=admin_media,
                 parent=admin_content,
                 label=?__("Media", Context),
-                url={admin_media}},
+                url={admin_media}}
+    ]
+    ++ admin_menu_content_queries(Context) ++
+    [
 
      %% STRUCTURE %%
      #menu_item{id=admin_structure,
@@ -125,6 +131,25 @@ observe_admin_menu(admin_menu, Acc, Context) ->
                 url={admin_status}}
 
      |Acc].
+
+
+admin_menu_content_queries(Context) ->
+    #search_result{result=Result} = z_search:search({all_bytitle, [{cat,admin_content_query}]}, Context),
+    AdminOverviewQueryId = m_rsc:rid(admin_overview_query, Context),
+    Result1 = lists:filter(
+                    fun({_Title,Id}) ->
+                        Id =/= AdminOverviewQueryId
+                    end,
+                    Result),
+    lists:map(fun({Title, Id}) ->
+                #menu_item{
+                    id={admin_query, Id},
+                    parent=admin_content,
+                    label=Title,
+                    url={admin_overview_rsc, [{qquery, Id}]}
+                }
+              end,
+              Result1).
 
 
 observe_admin_edit_blocks(#admin_edit_blocks{}, Menu, Context) ->
@@ -160,7 +185,7 @@ event(#postback_notify{message="admin-insert-block"}, Context) ->
                         end
                    end,
     Type = z_string:to_name(z_context:get_q("type", Context)),
-    RscId = list_to_integer(z_context:get_q("rsc_id", Context)),
+    RscId = z_convert:to_integer(z_context:get_q("rsc_id", Context)),
     Render = #render{
                 template="_admin_edit_block_li.tpl",
                 vars=[
@@ -182,15 +207,19 @@ event(#postback_notify{message="feedback", trigger="dialog-connect-find", target
     % Find pages matching the search criteria.
     SubjectId = z_convert:to_integer(z_context:get_q(subject_id, Context)),
     Category = z_context:get_q(find_category, Context),
-    Text=z_context:get_q(find_text, Context),
+    Predicate = z_context:get_q(predicate, Context, ""),
+    Text = z_context:get_q(find_text, Context),
     Cats = case Category of
                 "p:"++Predicate -> m_predicate:object_category(Predicate, Context);
+                <<"p:", Predicate/binary>> -> m_predicate:object_category(Predicate, Context);
                 "" -> [];
+                <<>> -> [];
                 CatId -> [{z_convert:to_integer(CatId)}]
            end,
     Vars = [
         {subject_id, SubjectId},
         {cat, Cats},
+        {predicate, Predicate},
         {text, Text}
     ],
     z_render:wire([
@@ -198,18 +227,47 @@ event(#postback_notify{message="feedback", trigger="dialog-connect-find", target
         {update, [{target, TargetId}, {template, "_action_dialog_connect_tab_find_results.tpl"} | Vars]}
     ], Context);
 
-event(#postback_notify{message="admin-connect-select"}, Context) ->
-    SubjectId = z_convert:to_integer(z_context:get_q("subject_id", Context)),
-    Predicate = z_context:get_q("predicate", Context),
-    ObjectId = z_convert:to_integer(z_context:get_q("select_id", Context)),
-    Callback = z_context:get_q("callback", Context),
+event(#postback{message={admin_connect_select, Args}}, Context) ->
+    SelectId = z_context:get_q("select_id", Context),
+    SubjectId0 = proplists:get_value(subject_id, Args),
+    ObjectId0 = proplists:get_value(object_id, Args),
+    Predicate = proplists:get_value(predicate, Args),
+    Callback = proplists:get_value(callback, Args),
+    
+    QAction = proplists:get_all_values(action, Args),
+    QActions = proplists:get_value(actions, Args, []),
+    QAction1 = case QAction of
+        [undefined] -> [];
+        _ -> QAction
+    end,
+    QActions1 = case QActions of
+        undefined -> [];
+        _ -> QActions
+    end,
+    Actions = QAction1 ++ QActions1,
+
+    {SubjectId, ObjectId} =
+        case z_utils:is_empty(ObjectId0) of
+            true ->
+                {z_convert:to_integer(SubjectId0),
+                 z_convert:to_integer(SelectId)};
+            false ->
+                {z_convert:to_integer(SelectId),
+                 z_convert:to_integer(ObjectId0)}
+        end,
+    
     case do_link(SubjectId, Predicate, ObjectId, Callback, Context) of
         {ok, Context1} ->
-            z_render:dialog_close(Context1);
+            Context2 = z_render:dialog_close(Context1),
+            case Actions of
+                [] -> Context2;
+                _ -> z_render:wire(Actions, Context2)
+            end;
         {error, Context1} ->
             Context1
     end;
 
+%% Called when a block connection is done
 event(#postback_notify{message="update", target=TargetId}, Context) ->
     Template = filename:basename(z_context:get_q("template", Context)),
     Id = z_convert:to_integer(z_context:get_q("id", Context)),
@@ -270,7 +328,7 @@ do_link(SubjectId, Predicate, ObjectId, Callback, Context)
                 ]}]}, Context)}
     end;
 do_link(SubjectId, Predicate, ObjectId, Callback, Context) ->
-    case z_acl:rsc_editable(SubjectId, Context) of
+    case z_acl:rsc_linkable(SubjectId, Context) of
         true ->
             {EdgeId,IsNew} = case m_edge:get_id(SubjectId, Predicate, ObjectId, Context) of
                 undefined ->
@@ -310,11 +368,11 @@ do_link(SubjectId, Predicate, ObjectId, Callback, Context) ->
                 end,
 
             case IsNew of
-                true -> {ok, z_render:growl([?__("Added the connection to", Context1),"“",Title,"”."], Context1)};
+                true -> {ok, z_render:growl([?__("Added the connection to", Context1),<<" \"">>, Title, <<"\".">>], Context1)};
                 false -> {ok, Context1}
             end;
         false ->
-            {error, z_render:growl_error(?__("Sorry, you have no permission to add the connection.",Context), Context)}
+            {error, z_render:growl_error(?__("Sorry, you have no permission to add the connection.", Context), Context)}
     end.
 
 context_language(Context) ->
@@ -328,3 +386,17 @@ context_language(Context) ->
             end
     end.
 
+
+manage_schema(_Version, _Context) ->
+    #datamodel{
+        categories=[
+            {admin_content_query,
+             'query',
+             [
+                {title, {trans, [
+                            {en, <<"Admin content query">>},
+                            {nl, <<"Admin inhoud zoekopdracht">>}
+                    ]}}
+             ]}
+        ]
+    }.

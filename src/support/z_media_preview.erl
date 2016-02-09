@@ -1,10 +1,10 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009-2012 Marc Worrell
-%% @doc Make still previews of media, using image manipulation functions.  Resize, crop, gray, etc.
+%% @copyright 2009-2014 Marc Worrell
+%% @doc Make still previews of media, using image manipulation functions.  Resize, crop, grey, etc.
 %% This uses the command line imagemagick tools for all image manipulation.
 %% This code is adapted from PHP GD2 code, so the resize/crop could've been done more efficiently, but it works :-)
 
-%% Copyright 2009-2012 Marc Worrell
+%% Copyright 2009-2014 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,16 +26,18 @@
 %% interface functions
 -export([
     convert/4,
+    convert/5,
     size/3,
     can_generate_preview/1,
+    out_mime/3,
     out_mime/2,
     string2filter/2,
     cmd_args/3,
     calc_size/7
 ]).
 
--define(MAX_WIDTH,  5000).
--define(MAX_HEIGHT, 5000).
+-define(MAX_WIDTH,  10000).
+-define(MAX_HEIGHT, 10000).
 
 % Low and max image size (in total pixels) for quality 99 and 55.
 % A small thumbnail needs less compression to keep image quality.
@@ -48,51 +50,107 @@
 %% @spec convert(InFile, OutFile, Filters, Context) -> ok | {error, Reason}
 %% @doc Convert the Infile to an outfile with a still image using the filters.
 convert(InFile, InFile, _, _Context) ->
-    lager:error("convert will overwrite input file ~p", [InFile]),
+    lager:error("Image convert will overwrite input file ~p", [InFile]),
     {error, will_overwrite_infile};
 convert(InFile, OutFile, Filters, Context) ->
-    case z_media_identify:identify(InFile, Context) of
+    convert(InFile, InFile, OutFile, Filters, Context).
+
+
+convert(InFile, MediumFilename, OutFile, Filters, Context) ->
+    case z_media_identify:identify(InFile, MediumFilename, MediumFilename, Context) of
         {ok, FileProps} ->
             {mime, Mime} = proplists:lookup(mime, FileProps),
             case can_generate_preview(Mime) of
                 true ->
                     case z_mediaclass:expand_mediaclass_checksum(Filters) of
                         {ok, FiltersExpanded} ->
-                            convert_1(InFile, OutFile, Mime, FileProps, FiltersExpanded);
+                            convert_1(os:find_executable("convert"), InFile, OutFile, Mime, FileProps, FiltersExpanded);
                         {error, _} = Error ->
                             lager:warning("cannot expand mediaclass for ~p (~p)", [Filters, Error]),
                             Error
                     end;
                 false ->
-                    lager:error("cannot convert a ~p (~p)", [Mime, InFile]),
+                    lager:info("cannot convert a ~p (~p)", [Mime, InFile]),
                     {error, mime_type}
             end;
         {error, Reason} ->
             {error, Reason}
     end.
 
-    convert_1(InFile, OutFile, Mime, FileProps, Filters) ->
-        OutMime = z_media_identify:guess_mime(OutFile),
-        {EndWidth, EndHeight, CmdArgs} = cmd_args(FileProps, Filters, OutMime),
-        z_utils:assert(EndWidth  < ?MAX_WIDTH, image_too_wide),
-        z_utils:assert(EndHeight < ?MAX_HEIGHT, image_too_high),
-        file:delete(OutFile),
-        ok = filelib:ensure_dir(OutFile),
-        Cmd = lists:flatten([
-            "convert ",
-            z_utils:os_filename(InFile++infile_suffix(Mime)), " ",
-            lists:flatten(z_utils:combine(32, CmdArgs)), " ",
-            z_utils:os_filename(OutFile)
-        ]),
-        lager:debug("Image Preview: ~p", [Cmd]),
-        Result = z_media_preview_server:exec(Cmd, OutFile),
-        case filelib:is_regular(OutFile) of
-            true ->
-                ok;
-            false -> 
-                lager:error("convert cmd ~p failed, result ~p", [Cmd, Result]),
-                {error, convert_error}
-        end.
+convert_1(false, _InFile, _OutFile, _Mime, _FileProps, _Filters) ->
+    lager:error("Install ImageMagick 'convert' to generate previews of images."),
+    {error, "'convert' not installed"};
+convert_1(ConvertCmd, InFile, OutFile, Mime, FileProps, Filters) ->
+    OutMime = z_media_identify:guess_mime(OutFile),
+    {EndWidth, EndHeight, CmdArgs} = cmd_args(FileProps, Filters, OutMime),
+    z_utils:assert(EndWidth  < ?MAX_WIDTH, image_too_wide),
+    z_utils:assert(EndHeight < ?MAX_HEIGHT, image_too_high),
+    file:delete(OutFile),
+    ok = filelib:ensure_dir(OutFile),
+    Cmd = lists:flatten([
+        z_utils:os_filename(ConvertCmd), " ",
+        opt_density(FileProps),
+        z_utils:os_filename(InFile++infile_suffix(Mime)), " ",
+        lists:flatten(z_utils:combine(32, CmdArgs)), " ",
+        z_utils:os_filename(OutFile)
+    ]),
+    case run_cmd(Cmd, OutFile) of
+        ok ->
+            case filelib:is_regular(OutFile) of
+                true ->
+                    ok;
+                false -> 
+                    case filelib:is_regular(InFile) of
+                        false -> {error, enoent};
+                        true -> {error, convert_error}
+                    end
+            end;
+        {error, _} = Error ->
+            lager:error("convert cmd ~p failed, result ~p", [Cmd, Error]),
+            Error
+    end.
+
+opt_density(Props) ->
+    case proplists:get_value(mime, Props) of
+        <<"application/pdf">> -> " -density 150x150 ";
+        "application/pdf" -> " -density 150x150 ";
+        _Mime -> ""
+    end.
+
+run_cmd(Cmd, OutFile) ->
+    jobs:run(media_preview_jobs,
+            fun() ->
+                case filelib:is_regular(OutFile) of
+                    true -> ok;
+                    false -> once(Cmd, OutFile)
+                end
+            end).
+
+
+once(Cmd, OutFile) ->
+    MyPid = self(),
+    Key = {n,l,Cmd},
+    case gproc:reg_or_locate(Key) of
+        {MyPid, _} ->
+            lager:debug("Convert: ~p", [Cmd]),
+            Result = os:cmd(Cmd),
+            gproc:unreg(Key),
+            case filelib:is_regular(OutFile) of
+                true ->
+                    ok;
+                false -> 
+                    lager:error("convert cmd ~p failed, result ~p", [Cmd, Result]),
+                    {error, convert_error}
+            end;
+        {_OtherPid, _} ->
+            lager:debug("Waiting for parallel: ~p", [Cmd]),
+            Ref = gproc:monitor(Key),
+            receive
+                {gproc, unreg, Ref, Key} -> 
+                    ok
+            end 
+    end.
+
 
 
 %% Return the ImageMagick input-file suffix.
@@ -121,7 +179,7 @@ size(InFile, Filters, Context) ->
             true ->
                 {width, ImageWidth}   = proplists:lookup(width, FileProps),
                 {height, ImageHeight} = proplists:lookup(height, FileProps),
-                {orientation, Orientation} = proplists:lookup(orientation, FileProps),
+                Orientation = proplists:get_value(orientation, FileProps, 1),
                 
                 ReqWidth   = z_convert:to_integer(proplists:get_value(width, Filters)),
                 ReqHeight  = z_convert:to_integer(proplists:get_value(height, Filters)),
@@ -157,7 +215,7 @@ cmd_args(FileProps, Filters, OutMime) ->
     {height, ImageHeight} = proplists:lookup(height, FileProps),
     {mime, Mime0} = proplists:lookup(mime, FileProps),
     Mime = z_convert:to_list(Mime0),
-    {orientation, Orientation} = proplists:lookup(orientation, FileProps),
+    Orientation = proplists:get_value(orientation, FileProps, 1),
     ReqWidth   = proplists:get_value(width, Filters),
     ReqHeight  = proplists:get_value(height, Filters),
     {CropPar,Filters1} = fetch_crop(Filters),
@@ -183,13 +241,13 @@ cmd_args(FileProps, Filters, OutMime) ->
                     _ -> Filters4
                end,
     Filters6 = add_optional_quality(Filters5, is_lossless(OutMime), ResizeWidth, ResizeHeight),
-
+    Filters7 = move_pre_post_filters(Filters6),
     {EndWidth,EndHeight,Args} = lists:foldl(fun (Filter, {W,H,Acc}) -> 
                                                 {NewW,NewH,Arg} = filter2arg(Filter, W, H, Filters6),
                                                 {NewW,NewH,[Arg|Acc]} 
                                             end,
                                             {ImageWidth,ImageHeight,[]},
-                                            Filters6),
+                                            Filters7),
     {EndWidth, EndHeight, lists:reverse(Args)}.
 
 
@@ -212,6 +270,16 @@ is_enabled(F, [F|_]) -> true;
 is_enabled(F, [{F, Val}|_]) -> z_convert:to_bool(Val);
 is_enabled(F, [_|R]) -> is_enabled(F, R).
 
+move_pre_post_filters(Fs) ->
+    lists:filter(fun is_pre_filter/1, Fs) 
+        ++ lists:filter(fun(F) -> not is_pre_filter(F) andalso not is_post_filter(F) end, Fs)
+        ++ lists:filter(fun is_post_filter/1, Fs).
+
+is_pre_filter({pre_magick, _}) -> true;
+is_pre_filter(_) -> false.
+
+is_post_filter({post_magick, _}) -> true;
+is_post_filter(_) -> false.
 
 add_optional_quality(Fs, true, _W, _H) ->
     Fs;
@@ -230,17 +298,35 @@ add_optional_quality_1(Fs, Pixels) ->
     Q = 99 - round(50 * (Pixels - ?PIX_Q99) / (?PIX_Q50 - ?PIX_Q99)),
     Fs ++ [{quality, Q}].
 
+
+%% @doc Determine the output mime type, after expanding optional mediaclass arguments.
+out_mime(Mime, Options, Context) ->
+    {ok, Options1} = z_mediaclass:expand_mediaclass(Options, Context),
+    out_mime(Mime, Options1).
+
 %% @spec out_mime(Mime, Options) -> {Mime, Extension}
 %% @doc Return the preferred mime type of the image generated by resizing an image of a certain type and size.
-out_mime("image/gif", _) ->
-    %% gif is gif, daar kan je gif op innemen
-    {"image/gif", ".gif"};
-out_mime(_Mime, Options) ->
-    case lists:member("lossless", Options) orelse proplists:is_defined(lossless, Options) of
-        false -> {"image/jpeg", ".jpg"};
-        true  -> {"image/png", ".png"}
-    end.
+out_mime(Mime, Options) ->
+    out_mime1(get_lossless_value(Options), Mime).
 
+out_mime1(_, "image/gif") -> {"image/gif", ".gif"};
+out_mime1(false, _Mime) -> {"image/jpeg", ".jpg"};
+out_mime1(true, _Mime) -> {"image/png", ".png"};
+out_mime1(auto, "image/png") -> {"image/png", ".png"};
+out_mime1(auto, _) -> {"image/jpeg", ".jpg"}.
+
+
+get_lossless_value(Options) ->
+    ValueOpt = lists:foldl(fun({K, V}, Acc) ->
+                                   case lists:member(K, Options) of true -> V; false -> Acc end
+                           end,
+                           undefined,
+                           [{"lossless", true}, {"lossless-true", true}, {"lossless-auto", auto},
+                            {"lossless-false", false}]),
+    case ValueOpt of
+        undefined -> z_convert:to_atom(proplists:get_value(lossless, Options, auto));
+        V -> V
+    end.
 
 %% @spec filter2arg(Filter, Width, Height, AllFilters) -> {NewWidth, NewHeight, Filter::string}
 %% @doc Map filters to an ImageMagick argument
@@ -276,12 +362,8 @@ filter2arg({resize, Width, Height, _}, Width, Height, _AllFilters) ->
     {Width, Height, []};
 filter2arg({resize, EndWidth, EndHeight, false}, Width, Height, _AllFilters) 
   when Width =< EndWidth andalso Height =< EndHeight ->
-    % Prevent scaling up, perform an extent instead
-    GArg = "-gravity West",
-    EArg = ["-extent ", integer_to_list(EndWidth),$x,integer_to_list(EndHeight)],
-    % Still thumbnail to remove extra info from the image
-    RArg = ["-thumbnail ", z_utils:os_escape([integer_to_list(EndWidth),$x,integer_to_list(EndHeight),$!])],
-    {EndWidth, EndHeight, [GArg, 32, EArg, 32, RArg]};
+    %% No scaling up, keep original image dimensions
+    {Width, Height, []};
 filter2arg({resize, EndWidth, EndHeight, true}, Width, Height, _AllFilters) 
   when Width < EndWidth andalso Height < EndHeight ->
     % Scale up
@@ -304,8 +386,9 @@ filter2arg({crop, {CropL, CropT, CropWidth, CropHeight}}, _Width, _Height, _AllF
     GArg = "-gravity NorthWest",
     CArg = ["-crop ",   integer_to_list(CropWidth),$x,integer_to_list(CropHeight), 
                         $+,integer_to_list(CropL),$+,integer_to_list(CropT)],
+    EArg = ["-extent ",   integer_to_list(CropWidth),$x,integer_to_list(CropHeight)],
     RArg = "+repage",
-    {CropWidth, CropHeight, [GArg,32,CArg,32,RArg]};
+    {CropWidth, CropHeight, [GArg,32,CArg,32,EArg,32,RArg]};
 filter2arg(grey, Width, Height, _AllFilters) ->
     {Width, Height, "-colorspace Gray"};
 filter2arg(mono, Width, Height, _AllFilters) ->
@@ -351,6 +434,13 @@ filter2arg({removebg, Fuzz}, Width, Height, AllFilters) ->
                      ]
              end,
     {Width, Height, Filter};
+% Custom ImageMagick command line arguments -- only available from a mediaclass file
+filter2arg({magick, Arg}, Width, Height, _AllFilters) ->
+    {Width, Height, z_convert:to_list(Arg)};
+filter2arg({pre_magick, Arg}, Width, Height, _AllFilters) ->
+    {Width, Height, z_convert:to_list(Arg)};
+filter2arg({post_magick, Arg}, Width, Height, _AllFilters) ->
+    {Width, Height, z_convert:to_list(Arg)};
 % Ignore these (are already handled as other filter args)
 filter2arg(extent, Width, Height, _AllFilters) ->
     {Width, Height, []};
@@ -380,6 +470,15 @@ fetch_crop(Filters) ->
 
 
 %%@doc Calculate the size of the resulting image, depends on the crop and the original image size
+calc_size(0, Height, ImageWidth, ImageHeight, CropPar, Orientation, IsUpscale) ->
+    calc_size(1, Height, ImageWidth, ImageHeight, CropPar, Orientation, IsUpscale);
+calc_size(Width, 0, ImageWidth, ImageHeight, CropPar, Orientation, IsUpscale) ->
+    calc_size(Width, 1, ImageWidth, ImageHeight, CropPar, Orientation, IsUpscale);
+calc_size(Width, Height, 0, ImageHeight, CropPar, Orientation, IsUpscale) ->
+    calc_size(Width, Height, 1, ImageHeight, CropPar, Orientation, IsUpscale);
+calc_size(Width, Height, ImageWidth, 0, CropPar, Orientation, IsUpscale) ->
+    calc_size(Width, Height, ImageWidth, 1, CropPar, Orientation, IsUpscale);
+
 calc_size(Width, Height, ImageWidth, ImageHeight, CropPar, Orientation, IsUpscale) when Orientation >= 5 ->
     calc_size(Width, Height, ImageHeight, ImageWidth, CropPar, 1, IsUpscale);
 
@@ -433,18 +532,19 @@ calc_size(Width, Height, ImageWidth, ImageHeight, CropPar, _Orientation, _IsUpsc
         false -> {ImageAspect * Height, Height}
         end,
 
+        Scale = ImageWidth / W,
             
         CropL = case CropPar of
         X when X == north_west; X == west; X == south_west -> 0;
         X when X == north_east; X == east; X == south_east -> ceil(W - Width);
-        [X,_] when is_integer(X) -> X;
+        [X,_] when is_integer(X) -> ceil(erlang:max(0, erlang:min(W-Width, X / Scale - Width/2)));
         _ -> ceil((W - Width) / 2)
         end,
 
             CropT = case CropPar of
         Y when Y == north_west; Y == north; Y == north_east -> 0;
         Y when Y == south_west; Y == south; Y == south_east -> ceil(H - Height);
-        [_,Y] when is_integer(Y) -> Y;
+        [_,Y] when is_integer(Y) -> ceil(erlang:max(0, erlang:min(H-Height, Y / Scale - Height/2)));
         _ -> ceil((H - Height) / 2)
         end,
 
@@ -456,6 +556,8 @@ calc_size(Width, Height, ImageWidth, ImageHeight, CropPar, _Orientation, _IsUpsc
 
 %% @spec string2filter(Filter, Arg) -> FilterTuple
 %% @doc Map the list of known filters and known args to atoms.  Used when mapping preview urls back to filter args.
+string2filter("crop", "none") ->
+    {crop,none};
 string2filter("crop", []) ->
     {crop,center};
 string2filter("crop", Where) -> 
@@ -469,12 +571,14 @@ string2filter("crop", Where) ->
             "west"       -> west;
             "north_west" -> north_west;
             "center"     -> center;
-        [C|_] = CropLT when C == $+ orelse C == $- ->
-        {match, [[CropL], [CropT]]} = re:run(CropLT, "[+-][0-9]+", [global, {capture, first, list}]),
-        [list_to_integer(CropL), list_to_integer(CropT)]
+            [C|_] = CropLT when C =:= $+ orelse C =:= $- ->
+                {match, [[CropL], [CropT]]} = re:run(CropLT, "[+-][0-9]+", [global, {capture, first, list}]),
+                [list_to_integer(CropL), list_to_integer(CropT)]
           end,
     {crop,Dir};
 string2filter("grey",[]) ->
+    grey;
+string2filter("gray",[]) ->
     grey;
 string2filter("mono",[]) ->
     mono;
@@ -494,7 +598,7 @@ string2filter("quality", Arg) ->
     {quality, list_to_integer(Arg)};
 string2filter("background", Arg) ->
     {background,Arg};
-string2filter("lossless", []) ->
+string2filter("lossless", _) ->
     lossless;
 string2filter("removebg", []) ->
     {removebg, 5};

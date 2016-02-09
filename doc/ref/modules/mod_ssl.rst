@@ -1,10 +1,10 @@
 
 .. include:: meta-mod_ssl.rst
 
-The mod_ssl module adds https support. After enabling mod_ssl the logon window 
+The mod_ssl module adds https support. After enabling mod_ssl the logon window
 and other secure pages will be served using https.
 
-SSL support can be switched on for each site separately. Because of the nature of 
+SSL support can be switched on for each site separately. Because of the nature of
 SSL, each site will listen on its own port or IP address. Virtual hosting of sites via
 https is not possible.
 
@@ -12,7 +12,7 @@ https is not possible.
 Configuration
 -------------
 
-There are three configurarion options. They can be set in the admin. All three are optional
+There are four configurarion options. They can be set in the admin. All four are optional
 and will be either set or replaced with a default when not set.
 
 ``mod_ssl.listen_port``
@@ -22,7 +22,7 @@ and will be either set or replaced with a default when not set.
     Note that on Unix and BSD it is not possible to use ports
     below 1024. You need to map ports below 1024 to the
     ``mod_ssl.listen_port``.  See :ref:`How to bind Zotonic to Port 80
-    and Port 443 <manual-deployment-privilegedports>`.
+    and Port 443 <guide-deployment-privilegedports>`.
 
 ``mod_ssl.port``
     This is the *outside* port, as seen by a visitor of the site. When this is set to 443 then
@@ -68,7 +68,7 @@ Certificate and key files
 -------------------------
 
 The files with the certificates and key are placed into the ``ssl`` directory inside the site
-directory :file:`zotonic/priv/sites/sitename/ssl/`.
+directory :file:`user/sites/sitename/ssl/`.
 
 Where *sitename* must be replaced with the name of your site.
 
@@ -76,11 +76,11 @@ The files all have the name of the site in them (*sitename* in the filenames bel
 This is to prevent mixing them up with other sites:
 
 :file:`sitename.pem`
-    This holds the private key for the encryption. The key must be unlocked and in 
+    This holds the private key for the encryption. The key must be unlocked and in
     PKCS#1 format (see below).
 
 :file:`sitename.crt`
-    This is the certificate. Usually it is supplied by the certificate authority where you 
+    This is the certificate. Usually it is supplied by the certificate authority where you
     bought it. It can also be a self signed certificate, see below.
 
 :file:`sitename.ca.crt`
@@ -100,7 +100,7 @@ This is to prevent mixing them up with other sites:
 Serving a page via SSL
 ----------------------
 
-The :ref:`dispatch rule argument <manual-dispatch>` ``ssl`` defines if a page will be 
+The :ref:`dispatch rule argument <guide-dispatch>` ``ssl`` defines if a page will be
 served over https or http.
 
 There are three variations:
@@ -130,7 +130,7 @@ And of a dispatch rule that should keep the protocol, in this case the lib contr
 used for serving css, javascript and other static lib files::
 
     {lib, ["lib",'*'], controller_lib, [{ssl, any}]}
- 
+
 
 
 Dependencies
@@ -165,6 +165,26 @@ Note that the resulting key file *must* be named :file:`sitename.pem` where *sit
 the site the key is placed in.
 
 
+Using SSL certificates
+----------------------
+
+If you order a SSL certificate, the signing authority will ask you which kind of web server you are using and a CSR file.
+For the web server, select *other*. For the CSR, use the following command (replace ``sitename`` with
+the name of your site)::
+
+    openssl req -out sitename.csr -new -newkey rsa:2048 -nodes -keyout sitename.key
+
+When OpenSSL asks for the *Common Name* then fill in the site’s hostname (e.g. *www.example.com*).
+
+The resulting ``.key`` file can be converted to a ``.pem`` file::
+
+    openssl rsa -in sitename.key -out sitename.pem
+
+From the SSL certificate authority you will receive a signed ``.crt`` file.
+
+See the section *Certificate and key files* above for instructions how to use the ``.crt`` and ``.pem`` files.
+
+
 Generating the self signed certificate
 --------------------------------------
 
@@ -183,5 +203,5 @@ Optionally, when the key turns out to be in PKCS#8 format, mod_ssl will run the 
 When the key is already in PKCS#1 format (with older openssl installs) then mod_ssl will rename
 the :file:`sitename.key` file to :file:`sitename.pem`.
 
-
 .. todo:: Add SSL/certificate problem solving.
+

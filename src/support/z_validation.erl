@@ -64,6 +64,8 @@ rename_args([{only_on_submit, Value}|T], Acc) ->
     rename_args(T, [{onlyOnSubmit, Value}|Acc]);
 rename_args([{only_on_blur, Value}|T], Acc) ->
     rename_args(T, [{onlyOnBlur, Value}|Acc]);
+rename_args([{message_after, Value}|T], Acc) ->
+    rename_args(T, [{insertAfterWhatNode, Value}|Acc]);
 rename_args([H|T], Acc) ->
     rename_args(T, [H|Acc]).
 
@@ -95,7 +97,8 @@ validate_query_args(Context) ->
                        end,
             GetValue = fun
                             ({Id, {ok, Value}}) when is_tuple(Value) -> {Id, Value};
-                            ({Id, {ok, Value}}) -> {Id, lists:flatten(Value)}
+                            ({Id, {ok, Value}}) when is_list(Value) -> {Id, lists:flatten(Value)};
+                            ({Id, {ok, Value}}) when is_binary(Value) -> {Id, z_convert:to_list(Value)}
                        end,
 
             {Errors,Values} = lists:partition(IsError, Validated),

@@ -1,7 +1,7 @@
 %% This is the MIT license.
 %% 
 %% Copyright (c) 2008-2009 Rusty Klophaus
-%% Copyright (c) 2009-2012 Marc Worrell
+%% Copyright (c) 2009-2014 Marc Worrell
 %% 
 %% Permission is hereby granted, free of charge, to any person obtaining a copy 
 %% of this software and associated documentation files (the "Software"), to deal 
@@ -28,6 +28,7 @@
     get_script/1,
     javascript_ast/2,
     get_page_startup_script/1,
+    get_stream_start_script/1,
     add_content_script/2,
     clean/1
 ]).
@@ -61,19 +62,18 @@ add_script(Script, Context) ->
 
 get_page_startup_script(Context) ->
     UAScript = [ ?SESSION_UA_CLASS_Q, $=, $", ua_class_to_script(z_user_agent:get_class(Context)), $", $;],
-    PageIdUAScript = case Context#context.page_id of
+    case Context#context.page_id of
         undefined ->
             %% No page id, so no comet loop started and generated random page id for postback loop
-            [ ?SESSION_PAGE_Q, $=, $", z_ids:id(), $", $;, UAScript ];
+            [ <<"z_set_page_id(\"\",">>, str_user_id(z_acl:user(Context)), <<");">>, UAScript ];
         PageId ->
-            [ ?SESSION_PAGE_Q, $=, $", PageId, $", $;, UAScript ]
-    end,
-    case z_context:document_domain(Context) of
-        undefined ->
-            PageIdUAScript;
-        DocumentDomain ->
-            [ PageIdUAScript, <<"document.domain=\"">>, DocumentDomain, $", $; ]
+            [ <<"z_set_page_id(\"">>, PageId, $", $,, str_user_id(z_acl:user(Context)), $), $;, UAScript ]
     end.
+
+str_user_id(undefined) ->
+    <<"undefined">>;
+str_user_id(UserId) ->
+    [ $", z_convert:to_binary(UserId), $" ].
 
 %%
 ua_class_to_script(desktop) ->
@@ -137,4 +137,20 @@ get_script(Context) ->
                     get_script1(Context4)
                 ]
         end.
+
+get_stream_start_script(Context) ->
+    get_stream_start_script(z_context:has_websockethost(Context), Context).
+
+% Make the call of the start script.
+get_stream_start_script(false, Context) ->
+    [<<"z_stream_start(">>, js_domain(z_context:streamhost(Context)), ");"];
+get_stream_start_script(true, Context) ->
+    [<<"z_stream_start(">>, js_domain(z_context:streamhost(Context)), $,,
+        $', z_context:websockethost(Context), $', ");"].
     
+% special case for the zotonic_status site
+js_domain(none) -> "window.location.host";
+js_domain(<<>>) -> "window.location.host";
+js_domain(undefined) ->"window.location.host";
+% Just connect to the hostname itself
+js_domain(Hostname) -> [$', Hostname, $'].

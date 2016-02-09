@@ -24,7 +24,7 @@
 
 -compile([{parse_transform, lager_transform}]).
 
--define(MIN_OTP_VERSION, "R14B03").
+-define(MIN_OTP_VERSION, "15B03"). %% note -- *without* the initial R (since OTP 17.0 the R is dropped)
 
 
 ensure_started(App) ->
@@ -41,10 +41,10 @@ ensure_started(App) ->
         {error, {already_started, App}} ->
             ok;
         {error, {Tag, Msg}} when is_list(Tag), is_list(Msg) ->
-                io_lib:format("~s: ~s", [Tag, Msg]);
+            io_lib:format("~s: ~s", [Tag, Msg]);
         {error, {bad_return, {{M, F, Args}, Return}}} ->
-                A = string:join([io_lib:format("~p", [A])|| A <- Args], ", "),
-                io_lib:format("~s failed to start due to a bad return value from call ~s:~s(~s):~n~p", [App, M, F, A, Return]);
+            A = string:join([io_lib:format("~p", [A])|| A <- Args], ", "),
+            io_lib:format("~s failed to start due to a bad return value from call ~s:~s(~s):~n~p", [App, M, F, A, Return]);
         {error, Reason} ->
             io_lib:format("~p", [Reason])
     end.
@@ -52,15 +52,17 @@ ensure_started(App) ->
 %% @spec start() -> ok
 %% @doc Start the zotonic server.
 start() -> start([]).
-	
+    
 %% @spec start(_Args) -> ok
 %% @doc Start the zotonic server.
 start(_Args) ->
     test_erlang_version(),
+    ensure_mnesia_schema(),
     zotonic_deps:ensure(),    
     case ensure_started(zotonic) of
-        ok -> ok;
-	Message ->
+        ok ->
+            ok;
+        Message ->
             lager:error("Zotonic start error: ~s~n", [Message]),
             init:stop()
     end.
@@ -69,6 +71,7 @@ start(_Args) ->
 %% @doc Stop the zotonic server.
 stop() ->
     Res = application:stop(zotonic),
+    application:stop(emqtt),
     application:stop(eiconv),
     application:stop(mnesia),
     application:stop(lager),
@@ -82,8 +85,8 @@ stop() ->
 stop([Node]) ->
     io:format("Stopping:~p~n",[Node]),
     case net_adm:ping(Node) of
-    	pong -> rpc:cast(Node, init, stop, []);
-    	pang -> io:format("There is no node with this name~n")
+        pong -> rpc:cast(Node, init, stop, []);
+        pang -> io:format("There is no node with this name~n")
     end,
     init:stop().
 
@@ -99,8 +102,8 @@ status() ->
 %% @spec status([node()]) -> ok
 %% @doc Get server status.  Prints the state of sites running.
 status([Node]) ->
-	[io:format("~-20s- ~s~n", [Site, Status]) || [Site,Status|_] <- rpc:call(Node, z_sites_manager, get_sites_status, [])],
-	ok.
+    [io:format("~-20s- ~s~n", [Site, Status]) || [Site,Status|_] <- rpc:call(Node, z_sites_manager, get_sites_status, [])],
+    ok.
 
 %% @spec update() -> ok
 %% @doc Update the server.  Compiles and loads any new code, flushes caches and rescans all modules.
@@ -108,27 +111,50 @@ update() ->
     z:m(),
     ok.
 
+%% @doc Ensure that mnesia has created its schema in the configured mnesia directory.
+ensure_mnesia_schema() ->
+    application:load(mnesia),
+    case application:get_env(mnesia, dir) of
+        undefined ->
+            error_logger:info_msg("No mnesia directory defined, running without persistent email queue and filezcache.~n"
+                                  "To enable persistency, add to erlang.config: {mnesia,[{dir,\"priv/mnesia\"}]}~n~n"),
+            ok;
+        {ok, Dir} ->
+            case filelib:is_dir(Dir) andalso filelib:is_regular(filename:join(Dir,"schema.DAT")) of
+                true ->
+                    ok;
+                false ->
+                    ok = mnesia:create_schema([node()])
+            end
+    end.
 
 %% @spec update([Node]) -> ok
 %% @doc Update the server on a specific node with new code on disk and flush the caches.
 update([Node]) ->
     io:format("Update:~p~n",[Node]),
     case net_adm:ping(Node) of
-    	pong -> rpc:cast(Node, zotonic, update, []);
-    	pang -> io:format("There is no node with this name~n")
+        pong -> rpc:cast(Node, zotonic, update, []);
+        pang -> io:format("There is no node with this name~n")
     end,
     init:stop().
 
 
 test_erlang_version() ->
-    Version = erlang:system_info(otp_release),
-    if
-        Version < ?MIN_OTP_VERSION ->
-            lager:error("Zotonic needs at least Erlang release ~p; this is ~p", [?MIN_OTP_VERSION, Version]),
+    case otp_version() of
+        Version when Version < ?MIN_OTP_VERSION ->
+            io:format("Zotonic needs at least Erlang release ~p; this is ~p~n", [?MIN_OTP_VERSION, erlang:system_info(otp_release)]),
             erlang:exit({minimal_otp_version, ?MIN_OTP_VERSION});
-        true ->
+        _ ->
             ok
+    end.
+
+%% @doc Strip the optional "R" from the OTP release because from 17.0 onwards it is unused
+otp_version() ->
+    case erlang:system_info(otp_release) of
+        [$R | V] -> V;
+        V -> V
     end.
 
 run_tests() ->
     z_media_preview_tests:test().
+

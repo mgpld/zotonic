@@ -52,7 +52,7 @@ event(#postback{message={set_username_password, Id, OnDelete}}, Context) ->
         {password, Password},
         {on_delete, OnDelete}
     ],
-    z_render:dialog(?__("Set username/ password", Context), "_action_dialog_set_username_password.tpl", Vars, Context);
+    z_render:dialog(?__("Set username / password", Context), "_action_dialog_set_username_password.tpl", Vars, Context);
 
 event(#submit{message=set_username_password}, Context) ->
     Id = z_convert:to_integer(z_context:get_q("id", Context)),
@@ -79,6 +79,15 @@ event(#submit{message=set_username_password}, Context) ->
                             %% Assume duplicate key violation, user needs to pick another username.
                             z_render:growl_error(?__("The username is already in use, please try another.", Context), Context);
                         ok ->
+                            case z_convert:to_bool(z_context:get_q("send_welcome", Context)) of
+                            true ->
+                                Vars = [{id, Id},
+                                        {username, Username},
+                                        {password, Password}],
+                                z_email:send_render(m_rsc:p(Id, email_raw, Context), "email_admin_new_user.tpl", Vars, Context);
+                            false ->
+                                nop
+                            end,
                             z_render:wire([
                                 {dialog_close, []},
                                 {growl, [{text, ?__("The new username/ password has been set.", Context)}]}

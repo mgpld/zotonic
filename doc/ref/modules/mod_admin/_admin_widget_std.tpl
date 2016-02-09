@@ -7,7 +7,10 @@
 
 
 {# Title data for widget headline. #}
-{% block widget_title %}{_ Edit title _}{% endblock %}
+{% block widget_title %}
+{_ Edit title _}
+<div class="widget-header-tools"></div>
+{% endblock %}
 
 
 {# Widget may be displayed to user as minimized by default
@@ -24,9 +27,9 @@
 {% block widget_content %}
     {% with m.rsc[id] as r %}
 	<fieldset class="admin-form">
-	    <div class="form-item clearfix">
+	    <div>
 		<label for="title">{_ Title _}</label>
-		<input id="title" type="text" name="title" value="{{ r.title }}" />
+		<input class="form-control" id="title" type="text" name="title" value="{{ r.title }}" />
 	    </div>
 	</fieldset>
     {% endwith %}

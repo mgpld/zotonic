@@ -306,7 +306,7 @@ insert_recipients(ListId, Recipients, IsTruncate, Context) ->
     end.
     
     insert_recipients1(ListId, Recipients, Context) ->
-        Now = erlang:localtime(),
+        Now = erlang:universaltime(),
         [ replace_recipient(ListId, R, Now, Context) || R <- Recipients ],
         {ok, Now}.
         
@@ -327,7 +327,7 @@ replace_recipient(ListId, Recipient, Now, Context) ->
 
 replace_recipient(ListId, Email, Props, Now, Context) ->
     case z_string:trim(z_string:to_lower(Email)) of
-        "" ->
+        Empty when Empty =:= ""; Empty =:= <<>>; Empty =:= undefined ->
             skip;
         Email1 ->
             case z_db:q1("select id from mailinglist_recipient where mailinglist_id = $1 and email = $2", 
@@ -396,13 +396,16 @@ get_scheduled(Id, Context) ->
 %% @doc Fetch the next scheduled mailing that is publicly visible, published and in the publication date range.
 check_scheduled(Context) ->
 	z_db:q_row("
-		select m.mailinglist_id, m.page_id 
+		select m.mailinglist_id, m.page_id  
 		from mailinglist_scheduled m
-			join rsc r on m.page_id = r.id
-		where r.is_published
-		  and r.visible_for = 0
-		  and r.publication_start <= now()
-		  and r.publication_end >= now()
+		where (
+		    select r.is_published 
+		          and r.visible_for = 0 
+		          and r.publication_start <= now()
+		          and r.publication_end >= now()
+		    from rsc r
+		    where r.id = m.mailinglist_id
+		)
 		limit 1", Context).
 
 
@@ -459,7 +462,7 @@ recipient_set_operation(Op, IdA, IdB, Context) when Op =:= union; Op =:= subtrac
 
 
 get_email_set(ListId, Context) ->
-    sets:from_list([list_to_binary(z_string:trim(z_string:to_lower(Email)))
+    sets:from_list([z_convert:to_binary(z_string:trim(z_string:to_lower(Email)))
                     || {Email} <- z_db:q("SELECT email FROM mailinglist_recipient WHERE mailinglist_id = $1", [ListId], Context)]).
 
 bounce_reason(Email, Context) ->

@@ -48,13 +48,14 @@ is_bulk_precedence({_, S}) ->
 %% @doc Check if an e-mail message is an automatic reply or another kind of message.
 %%      This uses heuristics on the precedence and the subject of the e-mail.
 -spec is_auto(#email_received{}) -> boolean().
-is_auto(#email_received{headers=Headers, email=Email}) ->
+is_auto(#email_received{headers=Headers, email=Email, from=EnvelopFrom}) ->
            lists:keymember(<<"x-auto-response-suppress">>, 1, Headers)
     orelse lists:keymember(<<"x-autorespond">>, 1, Headers)
     orelse is_auto_precedence(lists:keyfind(<<"x-precedence">>, 1, Headers))
     orelse is_auto_precedence(lists:keyfind(<<"precedence">>, 1, Headers))
     orelse is_auto_submitted(lists:keyfind(<<"auto-submitted">>, 1, Headers))
-    orelse is_auto_subject(Email#email.subject).
+    orelse is_auto_subject(Email#email.subject)
+    orelse is_auto_from(EnvelopFrom).
 
 is_auto_precedence(false) -> 
     false;
@@ -66,22 +67,28 @@ is_auto_submitted(false) ->
 is_auto_submitted({_, S}) -> 
     z_convert:to_binary(z_string:to_lower(S)) =/= <<"no">>.
 
+is_auto_from(undefined) -> false;
+is_auto_from(EnvelopFrom) -> is_auto_from_1(z_convert:to_binary(z_string:to_lower(EnvelopFrom))).
+
+is_auto_from_1(<<"mailer-daemon@", _/binary>>) -> true;
+is_auto_from_1(_) -> false.
+
 is_auto_subject(undefined) -> false;
 is_auto_subject(Subject) -> is_auto_subject_1(z_convert:to_binary(z_string:to_lower(Subject))).
 
-is_auto_subject_1(<<"auto:">>) -> true;
-is_auto_subject_1(<<"automatic reply">>) -> true;
-is_auto_subject_1(<<"autosvar">>) -> true;
-is_auto_subject_1(<<"automatisk svar">>) -> true;
-is_auto_subject_1(<<"automatisch antwoord">>) -> true;
-is_auto_subject_1(<<"abwesenheitsnotiz">>) -> true;
-is_auto_subject_1(<<"risposta non al computer">>) -> true;
-is_auto_subject_1(<<"auto response">>) -> true;
-is_auto_subject_1(<<"eespuesta automática">>) -> true;
-is_auto_subject_1(<<"fuori sede">>) -> true;
-is_auto_subject_1(<<"out of Office">>) -> true;
-is_auto_subject_1(<<"frånvaro">>) -> true;
-is_auto_subject_1(<<"réponse automatique">>) -> true;
+is_auto_subject_1(<<"auto:"/utf8, _/binary>>) -> true;
+is_auto_subject_1(<<"automatic reply"/utf8>>) -> true;
+is_auto_subject_1(<<"autosvar"/utf8>>) -> true;
+is_auto_subject_1(<<"automatisk svar"/utf8>>) -> true;
+is_auto_subject_1(<<"automatisch antwoord"/utf8>>) -> true;
+is_auto_subject_1(<<"abwesenheitsnotiz"/utf8>>) -> true;
+is_auto_subject_1(<<"risposta non al computer"/utf8>>) -> true;
+is_auto_subject_1(<<"auto response"/utf8>>) -> true;
+is_auto_subject_1(<<"eespuesta automática"/utf8>>) -> true;
+is_auto_subject_1(<<"fuori sede"/utf8>>) -> true;
+is_auto_subject_1(<<"out of office"/utf8>>) -> true;
+is_auto_subject_1(<<"frånvaro"/utf8>>) -> true;
+is_auto_subject_1(<<"réponse automatique"/utf8>>) -> true;
 is_auto_subject_1(_) -> false.
 
 

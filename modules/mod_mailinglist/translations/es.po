@@ -269,12 +269,12 @@ msgstr "Nombre de archivo en Dropbox (opcional)"
 #: modules/mod_mailinglist/templates/_dialog_mailing_testaddress.tpl:8
 #: modules/mod_mailinglist/templates/_dialog_mail_page.tpl:8
 #, fuzzy
-msgid "E-mail"
+msgid "Email"
 msgstr "Dirección de correo"
 
 #: modules/mod_mailinglist/templates/_mail_page_button.tpl:3
 #, fuzzy
-msgid "E-mail page"
+msgid "Email page"
 msgstr "Página de correo"
 
 #: modules/mod_mailinglist/actions/action_mailinglist_dialog_mail_page.erl:42
@@ -339,12 +339,12 @@ msgid "Hello,"
 msgstr "Hola,"
 
 #: modules/mod_mailinglist/templates/_admin_edit_sidebar.mailinglist.tpl:8
-msgid "Help about mailing lists."
-msgstr "Ayuda acerca de listas de correo."
+msgid "Help about mailing lists"
+msgstr "Ayuda acerca de listas de correo"
 
 #: modules/mod_mailinglist/templates/admin_mailing_status.tpl:19
-msgid "Help about the mailing page."
-msgstr "Ayuda acerca de listas de correo."
+msgid "Help about the mailing page"
+msgstr "Ayuda acerca de listas de correo"
 
 #: modules/mod_mailinglist/templates/email_mailinglist_goodbye.tpl:8
 msgid "Hope to see you again."

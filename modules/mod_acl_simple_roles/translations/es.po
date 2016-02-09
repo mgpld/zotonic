@@ -79,10 +79,10 @@ msgid "Categories"
 msgstr ""
 
 #: modules/mod_acl_simple_roles/templates/_admin_edit_content.acl_role.tpl:12
-msgid "Check below what people that are member of this role are allowed to do."
+msgid "Check below what people that are member of this role are allowed to do"
 msgstr ""
 "Marque abajo qué es lo que tienen permitido hacer las personas que tienen "
-"asignado este rol."
+"asignado este rol"
 
 #: modules/mod_acl_simple_roles/templates/_admin_edit_content.acl_role.tpl:38
 msgid "Community members"
@@ -101,8 +101,8 @@ msgid "Group members"
 msgstr "Miembros de grupo"
 
 #: modules/mod_acl_simple_roles/templates/_admin_edit_content.acl_role.tpl:8
-msgid "Help about ACL roles."
-msgstr "Ayuda acerca de roles en listas de control de acceso."
+msgid "Help about ACL roles"
+msgstr "Ayuda acerca de roles en listas de control de acceso"
 
 #: modules/mod_acl_simple_roles/templates/admin_acl.tpl:16
 msgid "Make new ACL role"

@@ -1,108 +1,130 @@
-/* Design for logon, password reminder etc. */
-
-div.logon_bottom {
-	text-align: center;
-	margin-top: 20px;
-        margin-bottom: 100px;
+.z-logon-box {
+  float: none;
+  margin: 15px auto;
+  /* Extra login options */
+  /* Supporting options */
+  /* Sign up specific*/
 }
-
-p#logon_reason {
-	margin-bottom: 30px;
+.z-logon-box ul {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
 }
-
-ul#logon_methods {
-	margin: 30px;
+.z-logon-box p {
+  margin-bottom: 10px;
 }
-
-div#logon_box {
-    text-align: left;
-    width: 380px;
-    margin: 0 auto;
-    padding: 30px;
-    padding-bottom: 10px;
-    margin-top: 100px;
-
-    border-radius: 8px;
-    -webkit-border-radius: 8px;
-    -moz-border-radius: 8px;
-
-    box-shadow: 0 0 6px #999;
-    -webkit-box-shadow: 0 0 6px #999;
-    -moz-box-shadow: 0 0 6px #999;
-
-    -ms-filter: "progid:DXImageTransform.Microsoft.Shadow(Strength=3, Direction=135, Color='#999999')";
-    filter: progid:DXImageTransform.Microsoft.Shadow(Strength=3, Direction=135, Color='#999999');
+.z-logon-box button[type="submit"],
+.z-logon-box input[type="submit"] {
+  width: 100%;
 }
-
-#logon_box form input[type="text"],
-#logon_box form input[type="password"] {
-    font-size: 18px;
-    height: 22px;
+.z-logon-box .z-logon-title:first-of-type,
+.z-logon-box h2:first-of-type,
+.z-logon-box h3:first-of-type,
+.z-logon-box h4:first-of-type {
+  margin-top: 0;
 }
-
-#logon_box form div.buttons {
-    margin-top: 30px;
+.z-logon-box .z-logon-form {
+  margin: 15px auto 0 auto;
 }
-
-#logon_box form div.buttons p {
-    margin-top: 9px;
+.z-logon-box .z-logon-extra li {
+  margin: 0 0 10px 0;
 }
-
-#logon_box form .z_validation_message {
-    position: absolute;
-    padding-left: 4px;
-    color: red;
+.z-logon-box .z-logon-extra .z-btn-social {
+  display: block;
+  text-align: center;
+  text-decoration: none;
 }
-
-#logon_box form .form-field-error,
-#logon_box form .form-field-error:focus {
-    border-color: red;
+.z-logon-box .z-logon-extra .z-logon-extra-separator {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  line-height: 16px;
+  margin: 15px 0;
 }
-
-
-div#logon_box.logon_error  {
-    width: 600px;
+.z-logon-box .z-logon-extra .z-logon-extra-separator:before {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 16px;
+  top: 8px;
+  width: 40px;
+  background-color: #ffffff;
+  content: "";
+  margin: -8px 0 0 -20px;
+  z-index: -1;
 }
-
-div#logon_error {
-    margin: 0 18px 18px 0px;
-    padding-right: 18px;
-    border-right: 1px solid #ccc;
-    width: 260px; 
-    float: left; 
-    text-align: left;
-    display: none;
+.z-logon-box .z-logon-extra .z-logon-extra-separator:after {
+  position: absolute;
+  left: 0;
+  top: 8px;
+  content: " ";
+  width: 100%;
+  border-bottom: 1px solid #dddddd;
+  z-index: -2;
 }
-
-h1.logon_header.error {
-    color: red;
+.z-logon-box .z-logon-extra .z-logon-extra-separator:first-child {
+  display: none;
 }
-
-div#logon_box.logon_error div#logon_error  {
-    display: block;
+.z-logon-box .z-logon-support {
+  margin: 15px 0 0 0;
+  padding: 15px 0 0 0;
 }
-div#logon_box.logon_error div#logon_form  {
-    margin-left: 300px;
+.z-logon-box .z-logon-support:empty {
+  display: none;
 }
-
-
-div#logon_error h2 {
-	color: #d80000;
+.z-logon-box .alert {
+  display: none;
 }
-
-div#logon_button {
-	text-align: center;
+.z-logon-box .alert :first-child {
+  margin-top: 0;
 }
-
-
-p.logon_link {
-	margin: 0;
+.z-logon-box .alert :last-child {
+  margin-bottom: 0;
 }
-
-#logon_methods {
-    list-style-type: none;
+.z-logon-box.z-logon-error .alert {
+  display: block;
 }
-
-#logon_methods img {
-	float: none;
+.z-logon-box.z-logon-box-boxed .z-logon-form {
+  margin: 15px 0;
+  padding: 15px 20px;
+  background-color: #f2f2f2;
+}
+.z-logon-box.z-logon-box-boxed .z-logon-extra .z-logon-extra-separator {
+  margin-left: -20px;
+  margin-right: -20px;
+}
+.z-logon-box.z-logon-box-boxed .z-logon-extra .z-logon-extra-separator:before {
+  background-color: #f2f2f2;
+}
+.z-logon-box.z-logon-box-boxed .z-logon-support {
+  margin-left: -20px;
+  margin-right: -20px;
+  padding-left: 20px;
+  padding-right: 20px;
+  border-top: 1px solid #dddddd;
+}
+.z-logon-box.z-logon-box-boxed .z-logon-support p:last-child {
+  margin-bottom: 0;
+}
+.z-logon-box #signup_verify {
+  display: none;
+}
+.z-logon-box input#surprefix {
+  width: 50px;
+}
+.z-logon-box #signup_error_tos_agree,
+.z-logon-box #signup_error_duplicate_username,
+.z-logon-box #signup_error_duplicate_identity {
+  display: none;
+}
+.z-logon-box .error_tos_agree #signup_error_tos_agree,
+.z-logon-box .error_duplicate_username #signup_error_duplicate_username,
+.z-logon-box .error_duplicate_identity #signup_error_duplicate_identity,
+.z-logon-box .error_custom_1 #signup_error_custom_1,
+.z-logon-box .error_custom_2 #signup_error_custom_2 {
+  display: block;
+}
+.z-logon-box .z_validation_message {
+  display: block;
+  margin: 5px 0 0 0;
 }

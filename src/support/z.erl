@@ -1,9 +1,9 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009-2013 Marc Worrell
+%% @copyright 2009-2015 Marc Worrell
 %%
 %% @doc Some easy shortcut functions.
 
-%% Copyright 2009-2013 Marc Worrell
+%% Copyright 2009-2015 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,35 +22,47 @@
 
 %% interface functions
 -export([
-    c/1,
-    
-    n/2,
-    n1/2,
-    m/0,
-    flush/0,
-    flush/1,
-    restart/0,
-    restart/1,
+         c/1,
 
-    ld/1,
+         n/2,
+         n1/2,
+         m/0,
+         m/1,
+         compile/0,
+         compile/1,
+         flush/0,
+         flush/1,
+         restart/0,
+         restart/1,
 
-    log_level/1,
-    
-    debug_msg/3,
+         ld/0,
+         ld/1,
 
-    debug/2,
-    debug/3,
-    debug/4,
-    info/2,
-    info/3,
-    info/4,
-    warning/2,
-    warning/3,
-    warning/4
-]).
+         log_level/1,
+
+         shell_stopsite/1,
+         shell_startsite/1,
+         shell_restartsite/1,
+
+         debug_msg/3,
+
+         log/3,
+
+         debug/2,
+         debug/3,
+         debug/4,
+         info/2,
+         info/3,
+         info/4,
+         warning/2,
+         warning/3,
+         warning/4,
+         error/2,
+         error/3,
+         error/4
+        ]).
 
 -include("zotonic.hrl").
--include("zotonic_log.hrl").
 
 % @doc Return a new context
 c(Site) ->
@@ -66,8 +78,23 @@ n1(Msg, Context) ->
 
 %% @doc (Re)make all erlang source modules and reset the caches.
 m() -> 
-    make:all([load]), 
-    flush().
+    m([]).
+
+%% @doc (Re)make all erlang source modules with the supplied compile 
+%% options and reset the caches.
+m(Options) ->
+    case compile(Options) of
+        ok -> flush();
+        error -> error
+    end.
+
+%% @doc (Re)make all erlang source modules with the supplied compile 
+%% options. Do not reset the caches.
+compile() ->
+    zotonic_compile:all().
+
+compile(Options) ->
+    zotonic_compile:all(Options).
 
 %% @doc Reset all caches, reload the dispatch rules and rescan all modules.
 flush() ->
@@ -94,10 +121,42 @@ restart(Site) ->
 log_level(Level) ->
     lager:set_loglevel(lager_console_backend, Level).
 
+
+%% @doc Reload all changed Erlang modules
+ld() ->
+    zotonic_compile:ld().
+
 %% @doc Reload an Erlang module
 ld(Module) ->
-    code:purge(Module),
-    code:load_file(Module). 
+    zotonic_compile:ld(Module).
+
+%% @doc Shell commands: start a site
+shell_startsite(Site) ->
+    case z_sites_manager:get_site_status(Site) of
+        {ok, stopped} ->
+            z_sites_manager:start(Site);
+        {ok, Status} ->
+            Status;
+        {error, notfound} ->
+            notfound
+    end.
+
+%% @doc Shell commands: stop a site
+shell_stopsite(Site) ->
+    case z_sites_manager:get_site_status(Site) of
+        {ok, stopped} ->
+            stopped;
+        {ok, _Status} ->
+            z_sites_manager:stop(Site);
+        {error, notfound} ->
+            notfound
+    end.
+
+%% @doc Shell commands: stop a site
+shell_restartsite(Site) ->
+    z_sites_manager:stop(Site),
+    shell_startsite(Site).
+
 
 %% @doc Echo and return a debugging value
 debug_msg(Module, Line, Msg) ->
@@ -119,7 +178,22 @@ warning(Msg, Context)         -> log(warning, Msg, [], Context).
 warning(Msg, Props, Context)  -> log(warning, Msg, Props, Context).
 warning(Msg, Args, Props, Context)  -> log(warning, Msg, Args, Props, Context).
 
+%% @doc Log a error.
+error(Msg, Context)         -> log(error, Msg, [], Context).
+error(Msg, Props, Context)  -> log(error, Msg, Props, Context).
+error(Msg, Args, Props, Context)  -> log(error, Msg, Args, Props, Context).
 
+
+log(Type, Props, Context) when is_atom(Type), is_list(Props) ->
+    z_notifier:notify(
+        #zlog{
+            type=Type,
+            user_id=z_acl:user(Context),
+            timestamp=os:timestamp(),
+            props=Props
+        }, 
+        Context).
+    
 log(Type, Msg, Args, Props, Context) ->
     Msg1 = lists:flatten(io_lib:format(Msg, Args)),
     log(Type, Msg1, Props, Context).
@@ -128,6 +202,14 @@ log(Type, Msg, Props, Context) ->
     Msg1 = erlang:iolist_to_binary(Msg),
     Line = proplists:get_value(line, Props, 0),
     Module = proplists:get_value(module, Props, unknown),
-    error_logger:info_msg("[~p] ~p @ ~p:~p  ~s~n", [Context#context.host, Type, Module, Line, binary_to_list(Msg1)]),
-    z_notifier:notify({log, #log_message{type=Type, message=Msg1, props=Props, user_id=z_acl:user(Context)}}, Context).
+    lager:log(Type, Props, "[~p] ~p @ ~p:~p  ~s~n", 
+             [z_context:site(Context), Type, Module, Line, binary_to_list(Msg1)]),
+    z_notifier:notify(
+        #zlog{
+            type=Type,
+            user_id=z_acl:user(Context),
+            timestamp=os:timestamp(),
+            props=#log_message{type=Type, message=Msg1, props=Props, user_id=z_acl:user(Context)}
+        }, 
+        Context).
 

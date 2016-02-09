@@ -23,7 +23,7 @@
     init/1,
     service_available/2,
     allowed_methods/2,
-    encodings_provided/2,
+    content_encodings_provided/2,
     resource_exists/2,
     forbidden/2,
     expires/2,
@@ -46,6 +46,7 @@ service_available(ReqData, DispatchArgs) when is_list(DispatchArgs) ->
     Context  = z_context:new(ReqData, ?MODULE),
     Context1 = z_context:set(DispatchArgs, Context),
     Context2 = z_context:ensure_all(Context1),
+    z_context:lager_md(Context2),
     ?WM_REPLY(true, Context2).
 
 
@@ -54,14 +55,11 @@ allowed_methods(ReqData, Context) ->
 
 
 charsets_provided(ReqData, Context) ->
-    {[{"utf-8", fun(X) -> X end}], ReqData, Context}.
+    {["utf-8"], ReqData, Context}.
 
 
-encodings_provided(ReqData, Context) ->
-    {[
-        {"identity", fun(X) -> X end}, 
-        {"gzip", fun(X) -> zlib:gzip(X) end}
-    ], ReqData, Context}.
+content_encodings_provided(ReqData, Context) ->
+    {["identity", "gzip"], ReqData, Context}.
 
 
 content_types_provided(ReqData, Context) ->
@@ -97,11 +95,12 @@ provide_content(ReqData, Context) ->
                     end,
                     ".csv"
                 ]),
-    RD1 = wrq:set_resp_header("Content-Disposition", "inline; filename="++Filename, ReqData),
+    RD1 = wrq:set_resp_header("Content-Disposition", "attachment; filename="++Filename, ReqData),
     Context1 = ?WM_REQ(RD1, Context),
     Data = m_survey:survey_results(Id, Context1),
     Content = to_csv(Data),
-    ?WM_REPLY(Content, Context1).
+    Content1 = wrq:encode_content(Content, RD1), 
+    ?WM_REPLY(Content1, Context1).
 
 
 

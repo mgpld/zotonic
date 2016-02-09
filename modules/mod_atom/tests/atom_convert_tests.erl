@@ -15,8 +15,8 @@ rsc1() ->
     %% here because we want the tests to be timezone independent.
     [{uri, <<"http://localhost/id/222">>},
      {rsc,  [{title, <<"Resource 1">>},
-             {publication_start, calendar:universal_time_to_local_time({{2010,1,1},{12,11,0}})},
-             {modified, calendar:universal_time_to_local_time({{2010,1,28},{12,14,4}})},
+             {publication_start, {{2010,1,1},{12,11,0}}},
+             {modified, {{2010,1,28},{12,14,4}}},
              {summary, <<"This is a summary.">>},
              {body, <<"This is the body.">>}
             ]
@@ -37,7 +37,8 @@ rsc1() ->
 -define(assertContent(Elem, Content), ?assertEqual((hd(Elem#xmlElement.content))#xmlText.value, Content)).
 
 resource_to_atom_test() ->
-    Xml = atom_convert:resource_to_atom(rsc1()),
+    C = z_context:new(testsandbox),
+    Xml = atom_convert:resource_to_atom(rsc1(), C),
     {Elem, _} = xmerl_scan:string(Xml),
 
     ?assertEqual(Elem#xmlElement.name, entry),
@@ -100,8 +101,8 @@ atom_to_resource_test() ->
     ?assertEqual(<<"http://www.mediamatic.net/id/22661">>, proplists:get_value(uri, ImportedRsc)),
 
     Rsc = proplists:get_value(rsc, ImportedRsc),
-    ?assertEqual(<<"Arjan  Scherpenisse ">>, proplists:get_value(title, Rsc)), %% note the strange spaces; z_html:strip gives use these..
-    ?assertEqual(calendar:universal_time_to_local_time({{2010,1,19},{17,29,39}}), proplists:get_value(modified, Rsc)),
+    ?assertEqual(<<"Arjan Scherpenisse">>, proplists:get_value(title, Rsc)),
+    ?assertEqual({{2010,1,19},{17,29,39}}, proplists:get_value(modified, Rsc)),
 
     Medium = proplists:get_value(medium, ImportedRsc),
     ?assertEqual(<<"image/jpeg">>, proplists:get_value(mime, Medium)),
@@ -123,8 +124,9 @@ filter_edges(Edges, PredicateName) ->
 
 
 resource_to_resource_test() ->
+    C = z_context:new(testsandbox),
     Rsc1 = rsc1(),
-    Rsc2 = atom_convert:atom_to_resource(atom_convert:resource_to_atom(rsc1())),
+    Rsc2 = atom_convert:atom_to_resource(atom_convert:resource_to_atom(rsc1(), C)),
 
     %% Verify the equality of base elements
     L = [uri],

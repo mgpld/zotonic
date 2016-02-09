@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -38,6 +38,7 @@
     observe_admin_menu/3,
     observe_rsc_update/3,
     start_backup/1,
+    start_backup/2,
     list_backups/1,
     backup_in_progress/1,
     file_exists/2,
@@ -64,7 +65,7 @@ observe_admin_menu(admin_menu, Acc, Context) ->
                 label=?__("Backup", Context),
                 url={admin_backup},
                 visiblecheck={acl, use, mod_backup}}
-     
+
      |Acc].
 
 
@@ -78,7 +79,7 @@ observe_rsc_update(_, Acc, _Context) ->
 %% @doc Callback for controller_file_readonly.  Check if the file exists.
 file_exists(File, Context) ->
     PathFile = filename:join([dir(Context), File]),
-    case filelib:is_regular(PathFile) of 
+    case filelib:is_regular(PathFile) of
     	true ->
     	    {true, PathFile};
     	false ->
@@ -93,13 +94,17 @@ file_forbidden(_File, Context) ->
 
 %% @doc Start a backup
 start_backup(Context) ->
-    gen_server:call(z_utils:name_for_host(?MODULE, z_context:site(Context)), start_backup).
-    
+    start_backup(true, Context).
+
+%% @doc Start a backup, either a full backup (including archived files) or a database only backup.
+start_backup(IsFullBackup, Context) ->
+    gen_server:call(z_utils:name_for_host(?MODULE, z_context:site(Context)), {start_backup, IsFullBackup}).
+
 %% @doc List all backups present.  Newest first.
 list_backups(Context) ->
     InProgress = gen_server:call(z_utils:name_for_host(?MODULE, z_context:site(Context)), in_progress_start),
-    [ {F, D, D =:= InProgress} || {F,D} <- list_backup_files(Context) ].
-    
+    [ {F, D, IsFull, D =:= InProgress} || {F,D,IsFull} <- list_backup_files(Context) ].
+
 
 %% @doc Check if there is a backup in progress.
 backup_in_progress(Context) ->
@@ -140,7 +145,7 @@ init(Args) ->
     {context, Context} = proplists:lookup(context, Args),
     {ok, TimerRef} = timer:send_interval(?BCK_POLL_INTERVAL, periodic_backup),
     {ok, #state{
-        context = z_context:new(Context),
+        context = z_acl:sudo(z_context:new(Context)),
         backup_pid = undefined,
         timer_ref = TimerRef
     }}.
@@ -153,13 +158,13 @@ init(Args) ->
 %%                                      {stop, Reason, Reply, State} |
 %%                                      {stop, Reason, State}
 %% @doc Start a backup
-handle_call(start_backup, _From, State) ->
+handle_call({start_backup, IsFullBackup}, _From, State) ->
     case State#state.backup_pid of
         undefined ->
             %% @doc Return the base name of the dump files. The base name is composed of the date and time.
             %% @todo keep the backup page updated with the state of the current backup.
-            Pid = do_backup(name(State#state.context), State),
-            {reply, ok, State#state{backup_pid=Pid, backup_start=calendar:local_time()}};
+            Pid = do_backup(name(State#state.context), IsFullBackup, State),
+            {reply, ok, State#state{backup_pid=Pid, backup_start=calendar:universal_time()}};
         _Pid ->
             {reply, {error, in_progress}, State}
     end;
@@ -190,7 +195,7 @@ handle_info(periodic_backup, #state{backup_pid=Pid} = State) when is_pid(Pid) ->
     {noreply, State};
 handle_info(periodic_backup, State) ->
     cleanup(State#state.context),
-    z_utils:flush_message(periodic_backup), 
+    z_utils:flush_message(periodic_backup),
     case z_convert:to_bool(m_config:get_value(mod_backup, daily_dump, State#state.context)) of
         true -> maybe_daily_dump(State);
         false -> {noreply, State}
@@ -199,7 +204,7 @@ handle_info(periodic_backup, State) ->
 handle_info({'EXIT', Pid, normal}, State) ->
     case State#state.backup_pid of
         Pid ->
-            %% @todo send an update to the page that started the backup
+            z_mqtt:publish(<<"~site/backup">>, [{msg, <<"backup_completed">>}], State#state.context),
             {noreply, State#state{backup_pid=undefined, backup_start=undefined}};
         _ ->
             %% when connected to the page, then this might be the page exiting
@@ -209,11 +214,11 @@ handle_info({'EXIT', Pid, normal}, State) ->
 handle_info({'EXIT', Pid, _Error}, State) ->
     case State#state.backup_pid of
         Pid ->
-            %% @todo send the error update to the page that started the backup
+            z_mqtt:publish(<<"~site/backup">>, [{msg, <<"backup_error">>}], State#state.context),
             %% @todo Log the error
             %% Remove all files of this backup
             Name = z_convert:to_list(erlydtl_dateformat:format(State#state.backup_start, "Ymd-His", State#state.context)),
-            [ file:delete(F) || F <- filelib:wildcard(filename:join(dir(State#state.context), Name++"*")) ],
+            [ file:delete(F) || F <- z_utils:wildcard(filename:join(dir(State#state.context), Name++"*")) ],
             {noreply, State#state{backup_pid=undefined, backup_start=undefined}};
         _ ->
             %% when connected to the page, then this might be the page exiting
@@ -246,7 +251,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Keep the last 10 backups, delete all others.
 cleanup(Context) ->
-    Files = filelib:wildcard(filename:join(dir(Context), "*.sql")),
+    Files = z_utils:wildcard(filename:join(dir(Context), "*.sql")),
     Backups = lists:sort([ filename:rootname(F) || F <- Files ]),
     case length(Backups) of
         N when N > 10 ->
@@ -257,20 +262,20 @@ cleanup(Context) ->
         _ ->
             nop
     end.
-    
+
 
 
 maybe_daily_dump(State) ->
-    {Date, Time} = calendar:local_time(),
+    {Date, Time} = calendar:universal_time(),
     case Time >= {3,0,0} andalso Time =< {7,0,0} of
         true ->
             DoStart = case list_backup_files(State#state.context) of
-                [{_, LastBackupDate}|_] -> LastBackupDate < {Date, {0,0,0}};
+                [{_, LastBackupDate, _IsFull}|_] -> LastBackupDate < {Date, {0,0,0}};
                 [] -> true
             end,
             case DoStart of
                 true ->
-                    Pid = do_backup(name(State#state.context), State),
+                    Pid = do_backup(name(State#state.context), true, State),
                     {noreply, State#state{backup_pid=Pid, backup_start={Date, Time}}};
                 false ->
                     {noreply, State}
@@ -281,17 +286,22 @@ maybe_daily_dump(State) ->
 
 
 %% @doc Start a backup and return the pid of the backup process, whilst linking to the process.
-do_backup(Name, State) ->
-    spawn_link(fun() -> do_backup_process(Name, State#state.context) end).
+do_backup(Name, IsFullBackup, State) ->
+    z_mqtt:publish(<<"~site/backup">>, [{msg, <<"backup_started">>}], State#state.context),
+    spawn_link(fun() -> do_backup_process(Name, IsFullBackup, State#state.context) end).
 
 
 %% @todo Add a tar of all files in the files/archive directory (excluding preview)
-do_backup_process(Name, Context) ->
+do_backup_process(Name, IsFullBackup, Context) ->
     Cfg = check_configuration(),
     case proplists:get_value(ok, Cfg) of
         true ->
             ok = pg_dump(Name, Context),
-            ok = archive(Name, Context);
+            case IsFullBackup of
+                true -> ok = archive(Name, Context);
+                false -> ok
+            end,
+            ok;
         false ->
             {error, not_configured}
     end.
@@ -303,7 +313,7 @@ dir(Context) ->
 
 %% @doc Return the base name of the backup files.
 name(Context) ->
-    Now = calendar:local_time(),
+    Now = calendar:universal_time(),
     iolist_to_binary(
       [atom_to_list(z_context:site(Context)), "-",
        erlydtl_dateformat:format(Now, "Ymd-His", Context)]).
@@ -311,12 +321,14 @@ name(Context) ->
 
 %% @doc Dump the sql database into the backup directory.  The Name is the basename of the dump.
 pg_dump(Name, Context) ->
-    {ok, Host} = pgsql_pool:get_database_opt(host, ?HOST(Context)),
-    {ok, Port} = pgsql_pool:get_database_opt(port, ?HOST(Context)),
-    {ok, User} = pgsql_pool:get_database_opt(username, ?HOST(Context)),
-    {ok, Password} = pgsql_pool:get_database_opt(password, ?HOST(Context)),
-    {ok, Database} = pgsql_pool:get_database_opt(database, ?HOST(Context)),
-    {ok, Schema} = pgsql_pool:get_database_opt(schema, ?HOST(Context)),
+    All = z_db_pool:get_database_options(Context),
+    Host = proplists:get_value(dbhost, All),
+    Port = proplists:get_value(dbport, All),
+    User = proplists:get_value(dbuser, All),
+    Password = proplists:get_value(dbpassword, All),
+    Database = proplists:get_value(dbdatabase, All),
+    Schema = proplists:get_value(dbschema, All),
+
     DumpFile = filename:join([dir(Context), z_convert:to_list(Name) ++ ".sql"]),
     PgPass = filename:join([dir(Context), ".pgpass"]),
     ok = file:write_file(PgPass, z_convert:to_list(Host)
@@ -330,7 +342,7 @@ pg_dump(Name, Context) ->
                db_dump_cmd(),
                "' -h ", Host,
                " -p ", z_convert:to_list(Port),
-               " -w ", 
+               " -w ",
                " -f '", DumpFile, "' ",
                " -U '", User, "' ",
                case z_utils:is_empty(Schema) of
@@ -338,12 +350,19 @@ pg_dump(Name, Context) ->
                    false -> [" -n '", Schema, "' "]
                end,
                Database],
+
+    erlang:spawn(
+            fun() ->
+                timer:sleep(1000),
+                z_mqtt:publish(<<"~site/backup">>, [{msg, <<"sql_backup_started">>}], Context)
+            end),
     Result = case os:cmd(binary_to_list(iolist_to_binary(Command))) of
                  [] ->
                      ok;
-                 _Output ->
-                     ?zWarning(_Output, Context),
-                     {error, _Output}
+                 Output ->
+                     ?zWarning(Output, Context),
+                     z_session_manager:broadcast(#broadcast{type="error", message=Output, title="mod_backup", stay=false}, Context),
+                     {error, Output}
              end,
     ok = file:delete(PgPass),
     Result.
@@ -361,6 +380,11 @@ archive(Name, Context) ->
                                      "-f '", DumpFile, "' ",
                                      "-C '", ArchiveDir, "' ",
                                      " ."]),
+            erlang:spawn(
+                    fun() ->
+                        timer:sleep(1000),
+                        z_mqtt:publish(<<"~site/backup">>, [{msg, <<"archive_backup_started">>}], Context)
+                    end),
             [] = os:cmd(Command),
             ok;
         false ->
@@ -371,8 +395,13 @@ archive(Name, Context) ->
 
 %% @doc List all backups in the backup directory.
 list_backup_files(Context) ->
-    Files = filelib:wildcard(filename:join(dir(Context), "*.sql")),
-    lists:reverse(lists:sort([ {filename:rootname(filename:basename(F), ".sql"), filename_to_date(F)} || F <- Files ])).
+    Files = z_utils:wildcard(filename:join(dir(Context), "*.sql")),
+    lists:reverse(
+        lists:sort(
+            [ {filename:rootname(filename:basename(F), ".sql"), filename_to_date(F), is_full_backup(F)} || F <- Files ])).
+
+is_full_backup(SQLFilename) ->
+    filelib:is_regular(filename:rootname(SQLFilename, ".sql") ++ ".tar.gz").
 
 filename_to_date(File) ->
     R = re:run(filename:basename(File), "([0-9]{4})([0-9]{2})([0-9]{2})-([0-9]{2})([0-9]{2})([0-9]{2})", [{capture, all, list}]),
@@ -392,13 +421,10 @@ archive_cmd() ->
 db_dump_cmd() ->
     z_convert:to_list(z_config:get(pg_dump, "pg_dump")).
 
-
 %% @doc Check if we can make backups, the configuration is ok
 check_configuration() ->
-    Which = fun(Cmd) -> filelib:is_regular(z_string:trim_right(os:cmd("which " ++ z_utils:os_escape(Cmd)))) end,
-    Db = Which(db_dump_cmd()),
-    Tar = Which(archive_cmd()),
-    [{ok, Db and Tar},
+    Db = os:find_executable(db_dump_cmd()),
+    Tar = os:find_executable(archive_cmd()),
+    [{ok, is_list(Db) and is_list(Tar)},
      {db_dump, Db},
      {archive, Tar}].
-

@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -40,13 +40,13 @@ generate1([{ModDir, Labels}|ModLabs]) ->
             generate_po_files(ModuleName, Dir, Labels),
             generate1(ModLabs);
         {error, Reason} ->
-            ?LOG("Could not create directory for extracted translations: ~p ~p", [{error, Reason}, Dir]),
+            lager:warning("Could not create directory for extracted translations: ~p ~p", [{error, Reason}, Dir]),
             generate1(ModLabs)
     end.
 
 %% Delete all existing po files in a directory
 delete_po_files(Dir) ->
-    Files = filelib:wildcard(filename:join(Dir, "[a-z][a-z].{po,pot}")),
+    Files = z_utils:wildcard(filename:join(Dir, "[a-z][a-z].{po,pot}")),
     [ file:delete(F) || F <- Files ].
 
 %% Generate po files for all languages found in the labels.

@@ -32,42 +32,46 @@
 -export([
     observe_media_stillimage/2,
     observe_scomp_script_render/2,
-    observe_dispatch/2,
-    observe_postback_notify/2
+    observe_dispatch/2
 ]).
 
 %% @doc Return the filename of a still image to be used for image tags.
 %% @spec observe_media_stillimage(Notification, _Context) -> undefined | {ok, Filename} | {ok, {filepath, Filename, Path}}
 observe_media_stillimage(#media_stillimage{props=Props}, Context) ->
-    case proplists:get_value(mime, Props) of
-        undefined -> undefined;
-        [] -> undefined;
-        Mime ->
-            case z_media_preview:can_generate_preview(Mime) of
-                true ->
-                    %% Let media preview handle this.
-                    undefined;
-                false ->
-                    %% Serve an icon representing the mime type.
-                    [A,B] = string:tokens(z_convert:to_list(Mime), "/"),
-                    Files = [
-                        "images/mimeicons/"++A++[$-|B]++".png",
-                        "images/mimeicons/"++A++".png",
-                        "images/mimeicons/application-octet-stream.png"
-                    ],
+    case proplists:get_value(preview_filename, Props) of
+        None when None =:= <<>>; None =:= undefined ->
+            case proplists:get_value(mime, Props) of
+                undefined -> undefined;
+                [] -> undefined;
+                Mime ->
+                    case z_media_preview:can_generate_preview(Mime) of
+                        true ->
+                            %% Let media preview handle this.
+                            undefined;
+                        false ->
+                            %% Serve an icon representing the mime type.
+                            [A,B] = string:tokens(z_convert:to_list(Mime), "/"),
+                            Files = [
+                                "images/mimeicons/"++A++[$-|B]++".png",
+                                "images/mimeicons/"++A++".png",
+                                "images/mimeicons/application-octet-stream.png"
+                            ],
 
-                    lists:foldl(
-                        fun(F, undefined) ->
-                                case z_module_indexer:find(lib, F, Context) of
-                                    {ok, #module_index{filepath=_File}} -> {ok, "lib/"++F};
-                                    {error, enoent} -> undefined
-                                end;
-                           (_F, Result) ->
-                               Result
-                        end,
-                        undefined,
-                        Files)
-            end
+                            lists:foldl(
+                                fun(F, undefined) ->
+                                        case z_module_indexer:find(lib, F, Context) of
+                                            {ok, #module_index{filepath=_File}} -> {ok, "lib/"++F};
+                                            {error, enoent} -> undefined
+                                        end;
+                                   (_F, Result) ->
+                                       Result
+                                end,
+                                undefined,
+                                Files)
+                    end
+            end;
+        PreviewFilename ->
+            {ok, z_convert:to_list(PreviewFilename)}
     end.
 
 
@@ -80,9 +84,13 @@ observe_scomp_script_render(#scomp_script_render{is_nostartup=true}, _Context) -
 
 %% @doc Check if there is a controller or template matching the path.
 observe_dispatch(#dispatch{path=Path}, Context) ->
-    case m_rsc:page_path_to_id(Path, Context) of
+    case m_rsc:page_path_to_id(z_utils:url_path_encode(Path), Context) of
         {ok, Id} ->
             {ok, Id};
+        {redirect, Id} ->
+            {ok, #dispatch_match{
+                    mod=controller_redirect,
+                    mod_opts=[{id, Id}, {is_permanent, true}]}};
         {error, _} ->
             Last = last(Path),
             Template= case Last of
@@ -119,23 +127,8 @@ observe_dispatch(#dispatch{path=Path}, Context) ->
             end
     end.
 
-    last([]) -> $/;
-    last(Path) -> lists:last(Path).
-
-
-observe_postback_notify(#postback_notify{message="render-update", target=TargetId}, Context) ->
-    Id = m_rsc:rid(z_context:get_q("id", Context), Context),
-    case z_context:get_q("template", Context) of
-        undefined ->
-            undefined;
-        Template -> 
-            case Id of
-                undefined -> z_render:update(TargetId, #render{template=Template, vars=[]}, Context);
-                _ -> z_render:update(TargetId, #render{template={cat, Template}, vars=[{id, Id}]}, Context)
-            end
-    end;
-observe_postback_notify(#postback_notify{}, _Context) ->
-    undefined.
+last([]) -> $/;
+last(Path) -> lists:last(Path).
 
 
 %%====================================================================

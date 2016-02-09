@@ -32,6 +32,8 @@
     logoff/1,
     logon_from_session/1,
 
+    switch_user/2,
+         
     user_from_page/1,
     user_from_session/1,
 
@@ -67,8 +69,7 @@ logon_pw(Username, Password, Context) ->
     case m_identity:check_username_pw(Username, Password, Context) of
         {ok, Id} ->
             case logon(Id, Context) of
-                {ok, Context1} ->
-                                    Context1;
+                {ok, Context1} -> Context1;
                 {error, _Reason} -> {false, Context}
             end;
         {error, _Reason} -> {false, Context}
@@ -87,20 +88,33 @@ confirm(UserId, Context) ->
     end.
     
 
-%% @doc Logon an user whose id we know
+%% @doc Logon an user whose id we know, invalidate the current session id.
+%%      This sets a cookie with the new session id in the Context.
 logon(UserId, Context) ->
     case is_enabled(UserId, Context) of
         true ->
-            Context1 = z_acl:logon(UserId, Context),
+            Context1 = z_acl:logon_prefs(UserId, Context),
             {ok, Context2} = z_session_manager:rename_session(Context1),
-            z_context:set_session(auth_user_id, UserId, Context2),
             z_context:set_session(auth_timestamp, calendar:universal_time(), Context2),
-            Context3 = z_notifier:foldl(auth_logon, Context2, Context2),
-            z_notifier:notify(auth_logon_done, Context3),
-            {ok, Context3};
+            z_context:set_session(auth_user_id, UserId, Context2),
+            Context3 = z_session:ensure_page_session(Context2),
+            Context4 = z_notifier:foldl(auth_logon, Context3, Context3),
+            z_notifier:notify(auth_logon_done, Context4),
+            {ok, Context4};
         false ->
             {error, user_not_enabled}
     end.
+
+
+%% @doc Continue the current session as a different user.
+switch_user(UserId, Context) ->
+    Context1 = z_acl:logon_prefs(UserId, Context),
+    z_context:set_session(auth_timestamp, calendar:universal_time(), Context1),
+    z_context:set_session(auth_user_id, UserId, Context1),
+    Context2 = z_session:ensure_page_session(Context1#context{page_pid=undefined, page_id=undefined}),
+    Context3 = z_notifier:foldl(auth_logon, Context2, Context2),
+    z_notifier:notify(auth_logon_done, Context3),
+    {ok, Context3}.
 
 
 %% @doc Forget about the user being logged on.
@@ -109,7 +123,8 @@ logoff(Context) ->
     ContextLogOff = z_notifier:foldl(auth_logoff, Context, Context),
     z_context:set_session(auth_user_id, none, ContextLogOff),
     z_notifier:notify(auth_logoff_done, ContextLogOff),
-    z_acl:logoff(ContextLogOff).
+    ContextUser = z_acl:logoff(ContextLogOff),
+    z_session:ensure_page_session(ContextUser#context{page_pid=undefined, page_id=undefined}).
 
 %% @doc Return the user_id from the session
 user_from_session(SessionPid) ->
@@ -128,7 +143,7 @@ logon_from_session(Context) ->
     case z_context:get_session(auth_user_id, Context) of
         none ->
             z_memo:set_userid(undefined),
-            Context;
+            z_acl:logoff(Context);
         undefined ->
             % New session, check if some module wants to log on
             case z_notifier:first(auth_autologon, Context) of
@@ -142,12 +157,12 @@ logon_from_session(Context) ->
                             ContextLogon;
                         {error, _Reason} -> 
                             z_memo:set_userid(undefined),
-                            Context
+                            z_acl:logoff(Context)
                     end
             end;
         UserId ->
             z_memo:set_userid(UserId),
-            z_acl:logon(UserId, Context)
+            z_acl:logon_prefs(UserId, Context)
     end.
 
 
@@ -160,7 +175,7 @@ is_enabled(UserId, Context) ->
                 false -> 
                     false;
                 true ->
-                    Date = calendar:local_time(),
+                    Date = calendar:universal_time(),
                     Acl#acl_props.publication_start =< Date andalso Acl#acl_props.publication_end >= Date
             end;
         Other when is_boolean(Other) ->

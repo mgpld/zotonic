@@ -21,19 +21,20 @@ rebar
 ebin/
 deps/
 
+/src/erlydtl_parser.erl
 /src/erlydtl/erlydtl_parser.erl
 /src/tests/erlydtl/rendered_output/
 
-/priv/config
-/priv/erlang.config
-/priv/sites/*/config
+/priv/*.config
 
 /priv/log/
+/priv/mnesia/
 /priv/sites/default/files/
-/priv/sites/*/files/dropbox/
-/priv/sites/*/files/preview/
-/priv/sites/*/files/processing/
-/priv/sites/*/files/unhandled/
 /priv/modules/
 
 /modules/*/translations/template/*.pot
+
+/user
+/user/*
+
+.rebar

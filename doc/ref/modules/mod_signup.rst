@@ -40,7 +40,7 @@ Set the configuration value ``mod_signup.request_confirm`` to
 ``false`` to disable the signup confirmation process.
 
 
-Config: Using the user's e-mail address as username
+Config: Using the user’s e-mail address as username
 ---------------------------------------------------
 
 By setting a configuration value, it is possible to use the entered
@@ -63,11 +63,21 @@ By default, users created through the signup process will become
 changed by setting the configuration value
 ``mod_signup.member_category`` to the name of a different category.
 
+.. _mod-signup-new-users-content-group:
+
+Config: setting the content group for new users
+-----------------------------------------------
+
+By default, users created through the signup process will become
+:term:`resources <resource>` in the content group `default_content_group `. This can be
+changed by setting the configuration value
+``mod_signup.content_group`` to the name of a different content group.
+
 
 Config: setting the visibility of new users
 -------------------------------------------
 
-By default, the ``visible_for`` property of the new users's
+By default, the ``visible_for`` property of the new users’s
 :term:`resource` will be set to 0, meaning world-viewable. To control
 the value of the ``visible_for`` flag on signup, set the configuration
 value ``mod_signup.member_visible_for`` to either 1 (visible for other

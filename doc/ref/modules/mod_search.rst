@@ -19,7 +19,11 @@ implemented in `mod_search`:
 +------------------------+---------------------------------------------------------------+-------------------+
 |latest                  |The newest pages within in a category.                         |cat                |
 +------------------------+---------------------------------------------------------------+-------------------+
-|upcoming                |Pages with future date_end, sorted on ascending date_start.    |cat                |
+|upcoming                |Selects pages with future date_end.                            |                   |
++------------------------+---------------------------------------------------------------+-------------------+
+|finished                |Selects pages with a past date_end.                            |                   |
++------------------------+---------------------------------------------------------------+-------------------+
+|ongoing                 |Pages with past date_start and future date_end.                |                   |
 +------------------------+---------------------------------------------------------------+-------------------+
 |autocomplete            |Full text search where the last word gets a wildcard.          |text               |
 +------------------------+---------------------------------------------------------------+-------------------+
@@ -64,7 +68,7 @@ implemented in `mod_search`:
 +------------------------+---------------------------------------------------------------+-------------------+
 |query                   |Very powerful search with which you can implement almost all of|                   |
 |                        |the other search functionality. See:                           |                   |
-|                        |:ref:`manual-datamodel-query-model`                            |                   |
+|                        |:ref:`guide-datamodel-query-model`                             |                   |
 +------------------------+---------------------------------------------------------------+-------------------+
 |archive_year            |Returns an overview on publication year basis, for a specified |cat                |
 |                        |category. Every row returned has parts: "as_date", "year" and  |                   |
@@ -76,8 +80,11 @@ implemented in `mod_search`:
 |                        |month, and includes counts. The order is descending, newest    |                   |
 |                        |year first.                                                    |                   |
 +------------------------+---------------------------------------------------------------+-------------------+
-|keyword_cloud           |Return a list of ``{keyword_id, count}`` for all resources     |cat                |
-|                        |within a given category. The list is ordered on keyword title. |                   |
+|keyword_cloud           |Return a list of ``{keyword_id, count}`` for all resources     |cat, keywordpred,  |
+|                        |within a given category. The list is ordered on keyword title. |keywordcat         |
+|                        |Default predicate is ``subject``, default category is          |                   |
+|                        |``keyword``. Change optional ``keywordpred`` and ``keywordcat``|                   |
+|                        |to create a different cloud.                                   |                   |
 +------------------------+---------------------------------------------------------------+-------------------+
 |previous                |Given an id, return a list of "previous" ids in the given      |id, cat            |
 |                        |category. This list is ordered by publication date, latest     |                   |
@@ -89,6 +96,6 @@ implemented in `mod_search`:
 +------------------------+---------------------------------------------------------------+-------------------+
 
 
-.. seealso:: :ref:`manual-datamodel-query-model`
+.. seealso:: :ref:`guide-datamodel-query-model`
 
 

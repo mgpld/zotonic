@@ -1,0 +1,113 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+# NB: Consider using poEdit <http://poedit.sourceforge.net>
+#
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\n"
+"POT-Creation-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"PO-Revision-Date: 2015-03-09 16:50+0100\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:23
+msgid "Test ACL"
+msgstr "Test ACL"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:3
+msgid "ACL rules"
+msgstr "ACL regels"
+
+#: modules/mod_acl_user_groups/templates/_admin_acl_rule_header.tpl:4
+msgid "ACL user group"
+msgstr "Gebruikersgroepen"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:19
+#: modules/mod_acl_user_groups/mod_acl_user_groups.erl:49
+msgid "Access control rules"
+msgstr "Toegangsregels"
+
+#: modules/mod_acl_user_groups/templates/_admin_acl_rule_row.tpl:44
+msgid "Add"
+msgstr "Toevoegen"
+
+#: modules/mod_acl_user_groups/templates/_admin_acl_rule_row.tpl:20
+#: modules/mod_acl_user_groups/templates/_admin_acl_rule_row.tpl:31
+msgid "All"
+msgstr "Alles"
+
+#: modules/mod_acl_user_groups/templates/_admin_acl_rule_header.tpl:12
+msgid "Category"
+msgstr "Categorie"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:21
+msgid "Content"
+msgstr "Inhoud"
+
+#: modules/mod_acl_user_groups/templates/_admin_acl_rule_header.tpl:8
+msgid "Content group"
+msgstr "Paginagroep"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:22
+msgid "Modules"
+msgstr "Modules"
+
+#: modules/mod_acl_user_groups/templates/_acl_rules_list.tpl:5
+msgid "No ACL rules"
+msgstr "Geen toegangsregels gedefinieerd"
+
+#: modules/mod_acl_user_groups/templates/_admin_acl_rule_header.tpl:16
+msgid "Permissions"
+msgstr "Toestemming"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules.tpl:23
+msgid "Publish"
+msgstr "Publiceer"
+
+#: modules/mod_acl_user_groups/templates/_admin_acl_rule_row.tpl:50
+msgid "Remove"
+msgstr "Verwijder"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules.tpl:31
+msgid "Revert back to published"
+msgstr "Terug naar gepubliceerde versie"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules.tpl:35
+msgid "Save edit version"
+msgstr "Bewaar edit versie"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules.tpl:27
+msgid "Try rules..."
+msgstr "Regels uitproberen..."
+
+#: modules/mod_acl_user_groups/mod_acl_user_groups.erl:44
+msgid "User groups"
+msgstr "Gebruikersgroepen"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:32
+msgid "delete (acl action)"
+msgstr "verwijder"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:32
+msgid "edit (acl action)"
+msgstr "bewerk"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:32
+msgid "insert (acl action)"
+msgstr "voeg&nbsp;toe"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:32
+msgid "link (acl action)"
+msgstr "koppel"
+
+#: modules/mod_acl_user_groups/templates/admin_acl_rules_base.tpl:32
+msgid "view (acl action)"
+msgstr "bekijk"

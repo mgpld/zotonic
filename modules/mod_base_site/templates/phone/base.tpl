@@ -14,11 +14,11 @@
 	{% all include "_html_head.tpl" %}
 	{% lib 
 	        "bootstrap/css/bootstrap.css" 
-	        "bootstrap/css/bootstrap-responsive.css" 
 	        "bootstrap/css/bootstrap-base-site.css" 
 	        "css/jquery.loadmask.css" 
 	        "css/z.growl.css" 
 	        "css/z.modal.css" 
+	        "css/z.icons.css" 
 	        "css/site.css" 
 	%}
 	{% block html_head_extra %}{% endblock %}
@@ -28,10 +28,22 @@
 {% block navbar %}
 	{% include "_navbar.tpl" %}
 {% endblock %}
-<div class="container-fluid">
+<div class="container">
 	{% block content_area %}
 		<div class="content" {% include "_language_attrs.tpl" language=z_language %}>
-		{% block content %}{% endblock %}
+		    {% block content %}
+ 		    <div class="row">
+		    	<div class="main">
+                    		{% block main %}{% endblock %}
+		    	</div>
+		    	<div class="subnavbar">
+                    		{% block subnavbar %}
+                        		{% include "_subnav.tpl" %}
+                    		{% endblock %}
+                    	</div>
+	            </div>
+                    {% endblock %}
+		    {% block below %}{% endblock %}
 		</div>
 	{% endblock %}
 	{% include "_footer.tpl" %}

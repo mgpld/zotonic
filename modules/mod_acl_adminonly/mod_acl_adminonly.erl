@@ -32,6 +32,7 @@
     observe_acl_can_see/2,
     observe_acl_logon/2,
     observe_acl_logoff/2,
+    observe_acl_context_authenticated/2,
     observe_acl_rsc_update_check/3
 ]).
 
@@ -50,7 +51,7 @@ observe_acl_is_allowed(#acl_is_allowed{action=view, object=Id}, #context{user_id
                 false ->
                     false;
                 true ->
-                    Date = calendar:local_time(),
+                    Date = calendar:universal_time(),
                     Acl#acl_props.publication_start =< Date andalso Acl#acl_props.publication_end >= Date
             end
     end;	
@@ -77,6 +78,12 @@ observe_acl_logon(#acl_logon{id=UserId}, Context) ->
 %% @doc Let the user log off, clean up any cached information.
 observe_acl_logoff(#acl_logoff{}, Context) ->
 	Context#context{acl=undefined, user_id=undefined}.
+
+%% @doc Set the context to the typical user
+observe_acl_context_authenticated(#acl_context_authenticated{}, #context{user_id=undefined} = Context) ->
+    Context#context{acl=?MODULE, user_id=authenticated};
+observe_acl_context_authenticated(#acl_context_authenticated{}, #context{} = Context) ->
+	Context.
 
 %% @doc Filter the properties before an update. Return filtered/updated resource proplist or
 %% the tuple {error, Reason}

@@ -48,12 +48,22 @@ find_value(Name, [[{A,_}|_]|_] = Blocks, _Context ) when is_atom(A), not is_inte
     end;
 
 %% Regular proplist lookup
+find_value(Key, [{B,_}|_] = L, _Context) when is_list(B) ->
+    proplists:get_value(z_convert:to_list(Key), L);
 find_value(Key, [{B,_}|_] = L, _Context) when is_binary(B) ->
     proplists:get_value(z_convert:to_binary(Key), L);
 find_value(Key, [T|_] = L, _Context) when is_tuple(T), size(T) > 2 ->
-    case lists:keyfind(Key, 1, L) of
-        false -> undefined;
-        Found -> Found
+    case is_list(element(1,T)) of
+        true ->
+            case lists:keyfind(z_convert:to_list(Key), 1, L) of
+                false -> undefined;
+                Found -> Found
+            end;
+        false ->
+            case lists:keyfind(Key, 1, L) of
+                false -> undefined;
+                Found -> Found
+            end
     end;
 find_value(Key, L, _Context) when is_list(L) ->
     proplists:get_value(Key, L);
@@ -82,25 +92,41 @@ find_value(IsoAtom, Text, _Context) when is_atom(IsoAtom), is_binary(Text) ->
     end;
 
 %% JSON-decoded proplist structure
-find_value(Key, {obj, Props}, _Context) ->
+find_value(Key, {obj, Props}, _Context) when is_list(Props) ->
     proplists:get_value(z_convert:to_list(Key), Props);
 
-% Index of tuple with an integer like "a[2]"
-find_value(Key, T, _Context) when is_integer(Key) andalso is_tuple(T) ->
-    case element(1,T) of
-        dict ->
-            case dict:find(Key, T) of
-                {ok, Val} ->
-                    Val;
-                _ ->
-                    undefined
+%% JSON-decoded proplist structure (mochiweb2)
+find_value(Key, {struct, Props}, _Context) when is_list(Props) ->
+    case proplists:get_value(z_convert:to_binary(Key), Props) of
+        null -> undefined;
+        V -> V
+    end;
+
+% gbtree lookup
+find_value(Key, {GBSize, GBData} = GB, _Context) when is_integer(GBSize), is_tuple(GBData), size(GBData) =:= 4 ->
+    case gb_trees:lookup(Key, GB) of
+        {value, Val} -> Val;
+        _ -> undefined
+    end;
+
+%% Other cases: context or dict module lookup.
+find_value(Key, Tuple, _Context) when is_tuple(Tuple) ->
+    case element(1, Tuple) of
+        context -> 
+            z_context:get_value(Key, Tuple);
+        dict -> 
+            case dict:find(Key, Tuple) of
+                {ok, Val} -> Val;
+                _ -> undefined
             end;
-        _ ->
+        _ when is_integer(Key) ->
             try
-                element(Key, T)
+                element(Key, Tuple)
             catch 
                 _:_ -> undefined
-            end
+            end;
+        _ ->
+            undefined
     end;
 
 % Search results
@@ -110,35 +136,30 @@ find_value(Key, #search_result{} = S, _Context) when is_integer(Key) ->
     catch
         _:_ -> undefined
     end;
-find_value(Key, #search_result{} = S, _Context) ->
+find_value(Key, #m_search_result{} = S, Context) when is_integer(Key) ->
+    find_value(Key, S#m_search_result.result, Context);
+
+find_value(Key, #search_result{} = S, _Context) when is_atom(Key) ->
     case Key of
         result -> S#search_result.result;
         all -> S#search_result.all;
         total -> S#search_result.total;
         page -> S#search_result.page;
-        pages -> S#search_result.pages
+        pages -> S#search_result.pages;
+        next -> S#search_result.next;
+        prev -> S#search_result.prev
     end;
-
-% gbtree lookup
-find_value(Key, {GBSize, GBData}, _Context) when is_integer(GBSize) ->
-    case gb_trees:lookup(Key, {GBSize, GBData}) of
-        {value, Val} -> Val;
-        _ -> undefined
-    end;
-
-%% Other cases: context or dict module lookup.
-find_value(Key, Tuple, _Context) when is_tuple(Tuple) ->
-    Module = element(1, Tuple),
-    case Module of
-        context -> 
-            z_context:get_value(Key, Tuple);
-        dict -> 
-            case dict:find(Key, Tuple) of
-                {ok, Val} -> Val;
-                _ -> undefined
-            end;
-        _ ->
-            undefined
+find_value(Key, #m_search_result{} = S, _Context) when is_atom(Key) ->
+    case Key of
+        search -> {S#m_search_result.search_name, S#m_search_result.search_props};
+        search_name -> S#m_search_result.search_name;
+        search_props -> S#m_search_result.search_props;
+        result -> S#m_search_result.result;
+        page -> S#m_search_result.page;
+        pages -> S#m_search_result.pages;
+        pagelen -> S#m_search_result.pagelen;
+        next -> S#m_search_result.next;
+        prev -> S#m_search_result.prev
     end;
 
 %% When the current value lookup is a function, the context can be passed to F
@@ -150,7 +171,7 @@ find_value(Key, F, _Context) when is_function(F, 1) ->
 %% Any subvalue of a non-existant value is undefined
 find_value(_Key, undefined, _Context) ->
     undefined;
-find_value(_Key, <<>>, _Context) ->
+find_value(_Key, _Other, _Context) ->
     undefined.
 
 %% This used to translate undefined into <<>>, this translation is now done by z_render:render/2
@@ -176,7 +197,7 @@ is_true(#rsc_list{list=[]}) -> false;
 is_true(#m_search_result{result=V}) -> is_true(V);
 is_true(#search_result{result=[]}) -> false;
 is_true(A) ->
-    z_convert:to_bool(A).
+    z_convert:to_bool_strict(A).
 
 init_counter_stats(List) ->
     init_counter_stats(List, undefined).

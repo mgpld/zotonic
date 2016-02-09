@@ -36,7 +36,10 @@
     observe_search_query/2,
     observe_module_activate/2,
     to_tsquery/2,
-    find_by_id/2
+    rank_weight/0,
+    rank_behaviour/1,
+    find_by_id/2,
+    find_by_id/3
 ]).
 
 -include("zotonic.hrl").
@@ -73,6 +76,10 @@ start_link(Args) when is_list(Args) ->
 init(Args) ->
     process_flag(trap_exit, true),
     {context, Context} = proplists:lookup(context, Args),
+    lager:md([
+        {site, z_context:site(Context)},
+        {module, ?MODULE}
+      ]),
 
     %% Watch for changes to resources
     z_notifier:observe(rsc_update_done, self(), Context),
@@ -93,9 +100,9 @@ handle_call(Message, _From, State) ->
 %%                                  {noreply, State, Timeout} |
 %%                                  {stop, Reason, State}
 %% @doc Casts for updates to resources
-handle_cast({{rsc_delete, Id}, _Ctx}, State=#state{context=Context,query_watches=Watches}) ->
-    Watches1 = case proplists:get_value('query', m_rsc:p(Id, is_a, Context)) of
-                   undefined -> Watches;
+handle_cast({#rsc_delete{id=Id, is_a=IsA}, _Ctx}, State=#state{context=Context,query_watches=Watches}) ->
+    Watches1 = case lists:member('query', IsA) of
+                   false -> Watches;
                    true -> search_query_notify:watches_remove(Id, Watches, Context)
                end,
     {noreply, State#state{query_watches=Watches1}};
@@ -194,7 +201,7 @@ search_prevnext(Type, Args, Context) ->
                  where="(" ++ MapField(Field) ++ " " ++ Operator(Type) ++ " $1) and r.id <> $2",
                  tables=[{rsc, "r"}],
                  cats=[{"r", Cat}],
-                 args=[FieldValue, Id, Limit],
+                 args=[FieldValue, z_convert:to_integer(Id), Limit],
                  order=MapField(Field) ++ " " ++ Order(Type) ++ ", id " ++ Order(Type),
                  limit="limit $3"
                }.
@@ -206,14 +213,18 @@ search({previous, Args}, _OffsetLimit, Context) ->
 search({next, Args}, _OffsetLimit, Context) ->
     search_prevnext(next, Args, Context);
 
-search({keyword_cloud, [{cat, Cat}]}, _OffsetLimit, Context) ->
-    Subject = m_predicate:name_to_id_check(subject, Context),
+search({keyword_cloud, Props}, _OffsetLimit, Context) ->
+    Cat = proplists:get_value(cat, Props),
+    KeywordCatName = proplists:get_value(keywordcat, Props, "keyword"),
+    KeywordCat = list_to_atom(KeywordCatName),    
+    KeywordPredName = proplists:get_value(keywordpred, Props, "subject"),
+    Subject = m_predicate:name_to_id_check(KeywordPredName, Context),
     #search_sql{
         select="kw.id as id, count(*) as count",
         from="rsc kw, edge e, rsc r",
         where="kw.id = e.object_id AND e.predicate_id = $1 AND e.subject_id = r.id",
         tables=[{rsc, "kw"}, {edge, "e"}, {rsc, "r"}],
-        cats=[{"kw", keyword}, {"r", Cat}],
+        cats=[{"kw", KeywordCat}, {"r", Cat}],
         args=[Subject],
         group_by="kw.id, kw.pivot_title",
         order="kw.pivot_title"
@@ -264,7 +275,7 @@ search({match_objects, [{id,Id}]}, _OffsetLimit, Context) ->
 		        from="rsc r, to_tsquery($1) query",
 		        where=" query @@ pivot_rtsv and id <> $2",
 		        order="rank desc",
-		        args=[TsQuery, Id],
+		        args=[TsQuery, z_convert:to_integer(Id)],
 		        tables=[{rsc,"r"}]
 		    }
 	end;
@@ -290,7 +301,7 @@ search({match_objects_cats, [{id,Id}]}, _OffsetLimit, Context) ->
 		        from="rsc r, to_tsquery($1) query",
 		        where=" query @@ pivot_rtsv and id <> $2",
 		        order="rank desc",
-		        args=[TsQuery, Id],
+		        args=[TsQuery, z_convert:to_integer(Id)],
 		        tables=[{rsc,"r"}]
 		    }
 	end;
@@ -303,12 +314,12 @@ search({match_objects_cats, [{cat,Cat},{id,Id}]}, OffsetLimit, Context) ->
 %% @doc Return a list of resource ids, featured ones first
 %% @spec search(SearchSpec, Range, Context) -> #search_sql{}
 search({featured, []}, OffsetLimit, Context) -> 
-   search({'query', [{sort, '-rsc.is_featured'}]}, OffsetLimit, Context);
+   search({'query', [{sort, "-rsc.is_featured"}, {sort, "-rsc.publication_start"}]}, OffsetLimit, Context);
 
 %% @doc Return a list of resource ids inside a category, featured ones first
 %% @spec search(SearchSpec, Range, Context) -> IdList | {error, Reason}
 search({featured, [{cat, Cat}]}, OffsetLimit, Context) ->
-    search({'query', [{cat, Cat}, {sort, '-rsc.is_featured'}]}, OffsetLimit, Context);
+    search({'query', [{cat, Cat}, {sort, "-rsc.is_featured"}, {sort, "-rsc.publication_start"}]}, OffsetLimit, Context);
 
 %% @doc Return the list of resource ids, on descending id
 %% @spec search(SearchSpec, Range, Context) -> IdList | {error, Reason}
@@ -326,16 +337,16 @@ search({featured, [{cat,Cat},{object,ObjectId},{predicate,Predicate}]}, OffsetLi
     search({'query', [{cat, Cat}, {hassubject, [ObjectId, Predicate]}]}, OffsetLimit, Context);
 
 search({published, []}, OffsetLimit, Context) ->
-    search({'query', [{sort, '-rsc.publication_start'}]}, OffsetLimit, Context);
+    search({'query', [{sort, "-rsc.publication_start"}]}, OffsetLimit, Context);
 
 search({published, [{cat, Cat}]}, OffsetLimit, Context) ->
-    search({'query', [{cat, Cat}, {sort, '-rsc.publication_start'}]}, OffsetLimit, Context);
+    search({'query', [{cat, Cat}, {sort, "-rsc.publication_start"}]}, OffsetLimit, Context);
 
 search({latest, []}, OffsetLimit, Context) ->
-    search({'query', [{sort, '-rsc.modified'}]}, OffsetLimit, Context);
+    search({'query', [{sort, "-rsc.modified"}]}, OffsetLimit, Context);
 
 search({latest, [{cat, Cat}]}, OffsetLimit, Context) ->
-    search({'query', [{cat, Cat}, {sort, '-rsc.modified'}]}, OffsetLimit, Context);
+    search({'query', [{cat, Cat}, {sort, "-rsc.modified"}]}, OffsetLimit, Context);
 
 search({latest, [{creator_id,CreatorId}]}, _OffsetLimit, _Context) ->
     #search_sql{
@@ -343,7 +354,7 @@ search({latest, [{creator_id,CreatorId}]}, _OffsetLimit, _Context) ->
         from="rsc r",
         where="r.creator_id = $1",
         order="r.modified desc",
-        args=[CreatorId],
+        args=[z_convert:to_integer(CreatorId)],
         tables=[{rsc,"r"}]
     };
 
@@ -353,20 +364,23 @@ search({latest, [{cat, Cat}, {creator_id,CreatorId}]}, _OffsetLimit, _Context) -
         from="rsc r",
         where="r.creator_id = $1",
         order="r.modified desc",
-        args=[CreatorId],
+        args=[z_convert:to_integer(CreatorId)],
         cats=[{"r", Cat}],
         tables=[{rsc,"r"}]
     };
 
 search({upcoming, [{cat, Cat}]}, OffsetLimit, Context) ->
-    search({'query', [{upcoming, true}, {cat, Cat}, {sort, 'rsc.pivot_date_start'}]}, OffsetLimit, Context);
+    search({'query', [{upcoming, true}, {cat, Cat}, {sort, "rsc.pivot_date_start"}]}, OffsetLimit, Context);
+
+search({finished, [{cat, Cat}]}, OffsetLimit, Context) ->
+    search({'query', [{finished, true}, {cat, Cat}, {sort, '-rsc.pivot_date_start'}]}, OffsetLimit, Context);
 
 search({autocomplete, [{text,QueryText}]}, OffsetLimit, Context) ->
     search({autocomplete, [{cat,[]}, {text,QueryText}]}, OffsetLimit, Context);
 search({autocomplete, [{cat,Cat}, {text,QueryText}]}, _OffsetLimit, Context) ->
     case z_string:trim(QueryText) of
         "id:" ++ S ->
-            find_by_id(S, Context);
+            find_by_id(S, true, Context);
         _ ->
             TsQuery = to_tsquery(QueryText, Context),
             case TsQuery of
@@ -374,11 +388,11 @@ search({autocomplete, [{cat,Cat}, {text,QueryText}]}, _OffsetLimit, Context) ->
                     #search_result{};
                 _ ->
                     #search_sql{
-                        select="r.id, ts_rank_cd(pivot_tsv, query, 32) AS rank",
-                        from="rsc r, to_tsquery($2, $1) query",
-                        where=" query @@ pivot_tsv",
+                        select="r.id, ts_rank_cd("++rank_weight()++", pivot_tsv, $1, $2) AS rank",
+                        from="rsc r",
+                        where=" $1 @@ r.pivot_tsv",
                         order="rank desc",
-                        args=[TsQuery, z_pivot_rsc:pg_lang(Context#context.language)],
+                        args=[TsQuery, rank_behaviour(Context)],
                         cats=[{"r", Cat}],
                         tables=[{rsc,"r"}]
                     }
@@ -399,15 +413,15 @@ search({fulltext, [{text,QueryText}]}, _OffsetLimit, Context) ->
                 tables=[{rsc,"r"}]
             };
         "id:" ++ S ->
-            find_by_id(S, Context);
+            find_by_id(S, true, Context);
         _ ->
             TsQuery = to_tsquery(QueryText, Context),
             #search_sql{
-                select="r.id, ts_rank_cd(pivot_tsv, query, 32) AS rank",
-                from="rsc r, to_tsquery($2, $1) query",
-                where=" query @@ pivot_tsv",
+                select="r.id, ts_rank_cd("++rank_weight()++", pivot_tsv, $1, $2) AS rank",
+                from="rsc r",
+                where=" $1 @@ r.pivot_tsv",
                 order="rank desc",
-                args=[TsQuery, z_pivot_rsc:pg_lang(Context#context.language)],
+                args=[TsQuery, rank_behaviour(Context)],
                 tables=[{rsc,"r"}]
             }
     end;
@@ -423,15 +437,15 @@ search({fulltext, [{cat,Cat},{text,QueryText}]}, _OffsetLimit, Context) ->
                 tables=[{rsc,"r"}]
             };
         "id:" ++ S ->
-            find_by_id(S, Context);
+            find_by_id(S, true, Context);
         _ ->
             TsQuery = to_tsquery(QueryText, Context),
             #search_sql{
-                select="r.id, ts_rank_cd(pivot_tsv, query, 32) AS rank",
-                from="rsc r, to_tsquery($2, $1) query",
-                where=" query @@ pivot_tsv",
+                select="r.id, ts_rank_cd("++rank_weight()++", pivot_tsv, $1, $2) AS rank",
+                from="rsc r",
+                where=" $1 @@ pivot_tsv",
                 order="rank desc",
-                args=[TsQuery, z_pivot_rsc:pg_lang(Context#context.language)],
+                args=[TsQuery, rank_behaviour(Context)],
                 cats=[{"r", Cat}],
                 tables=[{rsc,"r"}]
             }
@@ -443,7 +457,7 @@ search({referrers, [{id,Id}]}, _OffsetLimit, _Context) ->
         from="edge e join rsc o on o.id = e.subject_id",
         where="e.object_id = $1",
         order="e.id desc",
-        args=[Id],
+        args=[z_convert:to_integer(Id)],
         tables=[{rsc,"o"}]
     };
 
@@ -512,41 +526,123 @@ search(_, _, _) ->
 
 
 
-
-%% @doc Expand a search string like "hello wor" to a posgres search query.
+%% @doc Expand a search string like "hello wor" to a PostgreSQL tsquery string.
+%%      If the search string ends in a word character then a wildcard is appended
+%%      to the last search term.
+-spec to_tsquery(binary()|string(), #context{}) -> binary().
 to_tsquery(undefined, _Context) ->
-    [];
+    <<>>;
+to_tsquery(Text, Context) when is_list(Text) ->
+    to_tsquery(z_convert:to_binary(Text), Context);
+to_tsquery(<<>>, _Context) ->
+    <<>>;
 to_tsquery(Text, Context) when is_binary(Text) ->
-    to_tsquery(binary_to_list(Text), Context);
-to_tsquery(Text, Context) ->
-    [{TsQuery, Version}] = z_db:q("
-        select plainto_tsquery($2, $1) , version()
-    ", [Text ++ "xcvvcx", z_pivot_rsc:pg_lang(z_context:language(Context))], Context),
-    % Version is something like "PostgreSQL 8.3.5 on i386-apple-darwin8.11.1, compiled by ..."
-    case z_convert:to_list(TsQuery) of
-        [] -> 
-            [];
-        TsQ ->
-            TsQ1 = re:replace(TsQ, "&? *'xcvvcx", ""),
-            TsQ2 = case Version < <<"PostgreSQL 8.4">> of
+    case to_tsquery_1(Text, Context) of
+        <<>> ->
+            % Check if the wildcard prefix was a stopword like the dutch "de"
+            case is_separator(binary:last(Text)) of
                 true ->
-                    re:replace(TsQ1, "&? *xcvvcx", "", [global]);
+                    <<>>;
                 false ->
-                    re:replace(TsQ1, "xcvvcx'", ":*'", [global])
-            end,
-            re:replace(TsQ2, "'", "", [global])
+                    Text1 = <<(z_convert:to_binary(Text))/binary, "xcvvcx">>,
+                    TsQuery = to_tsquery_1(Text1, Context),
+                    binary:replace(TsQuery, <<"xcvvcx">>, <<>>)
+            end;
+        TsQuery ->
+            TsQuery
     end.
 
+to_tsquery_1(Text, Context) when is_binary(Text) ->
+    Stemmer = z_pivot_rsc:stemmer_language(Context),
+    [{TsQuery, Version}] = z_db:q("select plainto_tsquery($2, $1), version()",
+                                  [z_pivot_rsc:cleanup_tsv_text(Text), Stemmer], 
+                                  Context),
+    % Version is something like "PostgreSQL 8.3.5 on i386-apple-darwin8.11.1, compiled by ..."
+    fixup_tsquery(z_convert:to_list(Stemmer), append_wildcard(Text, TsQuery, Version)).
 
-%% @doc Find a resource by id or name
+is_separator(C) when C < $0 -> true;
+is_separator(C) when C >= $0, C =< $9 -> false;
+is_separator(C) when C >= $A, C =< $Z -> false;
+is_separator(C) when C >= $a, C =< $z -> false;
+is_separator(C) when C >= 128 -> false;
+is_separator(_) -> true.
+
+append_wildcard(_Text, <<>>, _Version) ->
+    <<>>;
+append_wildcard(_Text, TsQ, Version) when Version < <<"PostgreSQL 8.4">> ->
+    TsQ;
+append_wildcard(Text, TsQ, _Version) ->
+    case is_wordchar(z_string:last_char(Text)) of
+        true -> <<TsQ/binary, ":*">>;
+        false -> TsQ
+    end.
+
+is_wordchar(C) when C >= 0, C =< 9 -> true;
+is_wordchar(C) when C >= $a, C =< $z -> true;
+is_wordchar(C) when C >= $A, C =< $Z -> true;
+is_wordchar(C) when C > 255 -> true;
+is_wordchar(_) -> false.
+
+% There are some problems with the stemming of prefixes.
+% For now we fix this up by removing the one case we found.
+%
+% to_tsquery('dutch', 'overstee') -> 'overstee'
+% to_tsquery('dutch', 'oversteek') -> 'overstek'
+fixup_tsquery(_Stemmer, <<>>) ->
+    <<>>;
+fixup_tsquery("dutch", TsQ) ->
+    iolist_to_binary(re:replace(TsQ, <<"([a-z]([aieou]))\\2':\\*">>, <<"\\1':\\*">>));
+fixup_tsquery(_Stemmer, TsQ) ->
+    TsQ.
+
+
+%% @doc Find one more more resources by id or name, when the resources exists.
+%% Input may be a single token or a comma-separated string.
+%% Search results contain a list of ids.
+-spec find_by_id(string(), #context{}) -> #search_result{}.
 find_by_id(S, Context) ->
-    case m_rsc:rid(S, Context) of
-        undefined ->
+    find_by_id(S, false, Context).
+
+%% @doc As find_by_id/2, but when Rank is true, results contain a list of tuples: {id, 1}.
+-spec find_by_id(string(), boolean(), #context{}) -> #search_result{}.
+find_by_id(S, Rank, Context) ->
+    Ids = lists:foldl(fun(Id, Acc) ->
+        case m_rsc:exists(Id, Context) of
+            false -> Acc;
+            true -> [m_rsc:rid(Id, Context)|Acc]
+        end
+    end, [], string:tokens(S, ", ")),
+    Ids1 = lists:sort(sets:to_list(sets:from_list(Ids))),
+    Ids2 = case Rank of 
+        false -> Ids1;
+        true ->
+            lists:map(fun(Id) ->
+                {Id, 1}
+            end, Ids1)
+    end,
+    case length(Ids2) of
+        0 ->
             #search_result{};
-        RscId ->
+        L ->
             #search_result{
-                result=[RscId],
-                page=1,
-                total=1
+                result=Ids2,
+                total=L
             }
     end.
+
+
+%% @doc The ranking behaviour for scoring words in a full text search
+%% See also: http://www.postgresql.org/docs/9.3/static/textsearch-controls.html
+-spec rank_behaviour(#context{}) -> integer().
+rank_behaviour(Context) ->
+    case m_config:get_value(mod_search, rank_behaviour, Context) of
+        Empty when Empty =:= undefined; Empty =:= <<>> -> 1 bor 4 bor 32;
+        Rank -> z_convert:to_integer(Rank)
+    end.
+
+%% @doc The weights for the ranking of the ABCD indexing categories.
+%% See also: http://www.postgresql.org/docs/9.3/static/textsearch-controls.html
+-spec rank_weight() -> string().
+rank_weight() ->
+    "'{0.05, 0.25, 0.5, 1.0}'".
+

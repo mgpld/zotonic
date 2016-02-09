@@ -1,13 +1,39 @@
 %% -*- mode: erlang -*-
-[{lager,
+[
+
+ {exometer, [{predefined, [
+    {[erlang, memory], {function, erlang, memory, [], value, []}, []},
+    {[erlang, system_info], {function, erlang, system_info, ['$dp'], value, [process_count]}, []},
+    {[erlang, statistics], {function, erlang, statistics, ['$dp'], value, [run_queue]}, []},
+    {[erlang, io], {function, erlang, statistics, [io], match, {{'_', input}, {'_', output}}}, []}
+   ]}
+ ]},
+
+ {mnesia, [
+    {dir, "priv/mnesia"}
+ ]},
+
+ {emqtt, [
+    {auth, {zotonic, []}},
+    {access_control, {zotonic, []}},
+    {listeners, [
+        %%% Unescape to enable MQTT on the given port
+        % {1883,  [
+        %     binary,
+        %     {packet,        raw},
+        %     {reuseaddr,     true},
+        %     {backlog,       128},
+        %     {nodelay,       true}
+        % ]}
+    ]}
+ ]},
+
+ {lager,
   [{handlers,
-    [{lager_console_backend, info},
-     {lager_file_backend,
-      [{file, "priv/log/error.log"},
-       {level, error}, {size, 10485760}, {date, "$D0"}, {count, 5}]},
-     {lager_file_backend,
-      [{file, "priv/log/console.log"},
-       {level, info}, {size, 10485760}, {date, "$D0"}, {count, 5}]}
+    [
+      {lager_console_backend, info},
+      {lager_file_backend, [{file, "priv/log/error.log"},   {level, error}]},
+      {lager_file_backend, [{file, "priv/log/console.log"}, {level, info}]}
     ]},
    {crash_log, "priv/log/crash.log"}
   ]},
@@ -33,7 +59,11 @@
    %% {perf_log_dir, "priv/log/perf/"},
 
 %%% Location of wmtrace logs (defaults to "priv/wmtrace" if not specified).
-   {wmtrace_dir, "priv/log/wmtrace/"}
+   {wmtrace_dir, "priv/log/wmtrace/"},
+
+%%% Which sendfile command to use: disable, yaws, erlang;
+%%% disabled by default because both erlang and yaws implementations are buggy
+   {use_sendfile, disable}
 
   ]}
 ].

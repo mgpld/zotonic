@@ -27,13 +27,12 @@
 -include_lib("controller_html_helper.hrl").
 
 is_authorized(ReqData, Context) ->
-    z_acl:wm_is_authorized(use, mod_backup, ReqData, Context).
+    z_admin_controller_helper:is_authorized(mod_backup, ReqData, Context).
 
 
 html(Context) ->
     Vars = [
         {page_admin_backup, true},
-        {backups, mod_backup:list_backups(Context)},
         {backup_config, mod_backup:check_configuration()},
         {backup_in_progress, mod_backup:backup_in_progress(Context)}
     ],
@@ -52,7 +51,7 @@ event(#submit{message={restore, Args}}, Context) ->
         true ->
             #upload{filename=_Filename, tmpfile=Tmpfile} = z_context:get_q_validated("file", Context),
             {ok, Data} = file:read_file(Tmpfile), 
-            case z_notifier:first(#rsc_upload{id=Id, format=bert, data=Data}, Context) of
+            case catch z_notifier:first(#rsc_upload{id=Id, format=bert, data=Data}, Context) of
                 {ok, NewId} ->
                     z_render:wire([{dialog_close, []}, 
                                    {redirect, [{dispatch, admin_edit_rsc}, {id,NewId}]}], Context);

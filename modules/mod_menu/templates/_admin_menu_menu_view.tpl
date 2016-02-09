@@ -5,7 +5,7 @@
 	<div class="widget-content">
 
         <span class="btn-group pull-right">
-            <a href="#" class="btn dropdown-toggle" data-toggle="dropdown">{_ Add menu item _} <span class="caret"></span></a>
+            <a href="#" class="btn btn-default dropdown-toggle" data-toggle="dropdown">{_ Add menu item _} <span class="caret"></span></a>
             <ul class="dropdown-menu">
                 <!-- dropdown menu links -->
                 <li><a href="#" data-where="top">&uarr; {_ Add top _}</a></li>
@@ -18,13 +18,13 @@
             <br/>{_ Drag menu items in the menu up, down, left or right to structure the menu. _}
         </p>
 
-		<ul class="tree-list do_menuedit" id="menu-{{ id }}">
+        {% block menu_tree %}
+		<ul class="tree-list tree-list-menu do_menuedit" id="menu-{{ id }}" data-menuedit="item_template: '_menu_edit_item.tpl'">
 			{% for mid, path, action in id.menu|menu_flat %}
-			{% with forloop.counter as c %}
 				{% include "_menu_edit_item.tpl" c=forloop.counter id=mid %}
-			{% endwith %}
 			{% endfor %}
 		</ul>
+		{% endblock %}
 	</div>
 </div>
 

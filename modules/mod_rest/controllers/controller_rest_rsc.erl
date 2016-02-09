@@ -45,6 +45,7 @@ service_available(ReqData, DispatchArgs) when is_list(DispatchArgs) ->
     Context  = z_context:new(ReqData, ?MODULE),
     Context1 = z_context:ensure_qs(z_context:set(DispatchArgs, Context)),
     Context2 = z_context:set_noindex_header(z_context:continue_session(Context1)),
+    z_context:lager_md(Context2),
     ?WM_REPLY(true, Context2).
 
 
@@ -185,23 +186,25 @@ get_id(Context) ->
 %% @doc Make sure that we do an ACL check for all props before pushing them out.
 %% @todo Move this to the m_rsc module
 get_rsc(Id, Context) ->
-    Props = m_rsc:get(Id, Context),
-    Filtered = lists:filter(fun({K,_}) -> z_acl:rsc_prop_visible(Id, K, Context) end, Props),
+    Props = m_rsc:get_visible(Id, Context),
     IsA = m_rsc:is_a(Id, Context),
     Complete = [
         {category, hd(IsA)},
+        {content_group, content_group(Id, Context)},
         {page_url, z_convert:to_binary(z_context:abs_url(m_rsc:p(Id, page_url, Context), Context))},
         {computed_category, IsA},
         {computed_site_name, z_context:site(Context)},
         {computed_address_country, m_l10n:country_name(proplists:get_value(address_country, Props), Context)},
         {computed_mail_country, m_l10n:country_name(proplists:get_value(mail_country, Props), Context)},
         {medium, medium(Id, Context)}
-        | Filtered
+        | Props
     ],
     lists:filter(
         fun({_, ?ST_JUTTEMIS}) -> false;
            ({computed_address_country, <<>>}) -> false;
            ({computed_mail_country, <<>>}) -> false;
+           ({category_id, _}) -> false;
+           ({content_group_id, _}) -> false;
            (_) -> true
         end,
         Complete).
@@ -218,5 +221,12 @@ medium(Id, Context) ->
                                     Context))} 
                 | M
             ]
+    end.
+
+content_group(Id, Context) ->
+    CGId = m_rsc:p_no_acl(Id, content_group_id, Context),
+    case m_rsc:p_no_acl(CGId, name, Context) of
+        undefined -> CGId;
+        Name -> Name
     end.
 

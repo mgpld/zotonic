@@ -17,18 +17,18 @@
 %% limitations under the License.
 
 %% @doc Try to find the site for the request z_notifier:first/2
-%%		Called when the request Host doesn't match any active site.
-%%		Result:   {ok, #dispatch_redirect{}}
-%%				| undefined.
+%%      Called when the request Host doesn't match any active site.
+%%      Result:   {ok, #dispatch_redirect{}}
+%%              | undefined.
 -record(dispatch_host, {host, path=[], method='GET', protocol=http}).
 
 %% @doc Final try for dispatch, try to match the request. Called with z_notifier:first/2
-%%		Called when the site is known, but no match is found for the path
+%%      Called when the site is known, but no match is found for the path
 %%      Result:   {ok, RscId::integer()} 
 %%              | {ok, #dispatch_match{}} 
 %%              | {ok, #dispatch_redirect{}}
 %%              | undefined.
--record(dispatch, {host, path="", method='GET', protocol=http}).
+-record(dispatch, {host, path="", method='GET', protocol=http, tracer_pid}).
     
     -record(dispatch_redirect, {location, is_permanent=false}).
     -record(dispatch_match, {dispatch_name, mod, mod_opts=[], path_tokens=[], bindings=[], app_root="", string_path=""}).
@@ -57,6 +57,10 @@
 % @doc Check where to go after a user logs on. Return an URL or undefined (first)
 -record(logon_ready_page, {request_page=[]}).
 
+%% @doc Determine post-logon actions; args are the arguments passed to the logon
+%% submit wire
+-record(logon_actions, {args=[]}).
+
 %% @doc Handle an user logon. The posted query args are included. Return {ok, UserId} or {error, Reason} (first)
 -record(logon_submit, {query_args=[]}).
 
@@ -76,6 +80,15 @@
 %% 'signup_props' is a proplist with 'identity' definitions and optional follow on url 'ready_page'
 %% An identity definition is {Kind, Identifier, IsUnique, IsVerified}
 -record(signup_url, {props=[], signup_props=[]}).
+
+%% @doc Request a signup of a new or existing user. Arguments are similar to #signup_url{}
+%% Returns {ok, UserId} or {error, Reason}
+-record(signup, {
+        id :: integer(),
+        props = [] :: list(),
+        signup_props = [] :: list(),
+        request_confirm = false :: boolean()
+    }).
 
 %% @doc Signup failed, give the error page URL. Return {ok, Url} or undefined. (first)
 %% Reason is returned by the signup handler for the particular signup method (username, facebook etc)
@@ -100,7 +113,11 @@
 %% the request. (first), 'trigger' the id of the element which triggered the postback, and 'target' the 
 %% id of the element which should receive possible updates. Note: postback_notify is also used as an event.
 %% Return either 'undefined' or a #context with the result of the postback
--record(postback_notify, {message, trigger, target}).
+-record(postback_notify, {message, trigger, target, data}).
+
+%% @doc Message sent by an user-agent on a postback event. Encapsulates the encoded postback and any
+%% additional data. This is handled by z_transport.erl, which will call the correct event/2 functions.
+-record(postback_event, {postback, trigger, target, triggervalue, data}).
 
 %% @doc Notification to signal an inserted comment. (notify)
 %% 'comment_id' is the id of the inserted comment, 'id' is the id of the resource commented on.
@@ -123,6 +140,9 @@
 
 %% @doc Used in the admin to fetch the possible blocks for display (foldl)
 -record(admin_edit_blocks, {id}).
+
+%% @doc Used in the admin to process a submitted resource form
+-record(admin_rscform, {id, is_a}).
 
 %% Used for fetching the menu in the admin (foldl)
 % admin_menu
@@ -148,22 +168,45 @@
 
 %% @doc Notification sent to a site when e-mail for that site is received
 -record(email_received, {to, from, localpart, localtags, domain, reference, email, 
-						 headers, is_bulk=false, is_auto=false, decoded, raw}).
+                         headers, is_bulk=false, is_auto=false, decoded, raw}).
 
 % E-mail received notification:
 % {z_convert:to_atom(Notification), received, UserId, ResourceId, Received}
 % The {Notification, UserId, ResourceId} comes from m_email_receive_recipient:get_by_recipient/2.
 
+%% @doc Email status notification, sent when the validity of an email recipient changes (notify)
+-record(email_status, {
+        recipient :: binary(),
+        is_valid :: boolean(),
+        is_final :: boolean()
+    }).
+
 %% @doc Bounced e-mail notification.  The recipient is the e-mail that is bouncing. When the
-%% the message_nr is unknown the it is set to 'undefined'. This can happen when it is a "late bounce".
+%% the message_nr is unknown the it is set to 'undefined'. This can happen if it is a "late bounce".
+%% If the recipient is defined then the Context is the depickled z_email:send/2 context.
 %% (notify)
--record(email_bounced, {message_nr, recipient}).
+-record(email_bounced, {
+            message_nr :: binary(),
+            recipient :: undefined | binary()
+        }).
 
-%% @doc Notify that we could send an e-mail (there might be a bounce later...)  (first)
--record(email_sent, {message_nr, recipient}).
+%% @doc Notify that we could send an e-mail (there might be a bounce later...)  (notify)
+%% The Context is the depickled z_email:send/2 context.
+-record(email_sent, {
+            message_nr :: binary(),
+            recipient :: binary(),
+            is_final :: boolean()   % Set to true after waiting 4 hours for bounces
+        }).
 
-%% @doc Notify that we could NOT send an e-mail (there might be a bounce later...)  (first)
--record(email_failed, {message_nr, recipient}).
+%% @doc Notify that we could NOT send an e-mail (there might be a bounce later...)  (notify)
+%% The Context is the depickled z_email:send/2 context.
+-record(email_failed, {
+            message_nr :: binary(),
+            recipient :: binary(), 
+            is_final :: boolean(),
+            reason :: retry | illegal_address | smtphost | error,
+            status :: binary()
+        }).
 
 
 %% @doc Add a handler for receiving e-mail notifications (first)
@@ -192,7 +235,12 @@
 -record(menu_save, {id, tree}).
 
 %% @doc Signal that the hierarchy underneath a resource has been changed by mod_menu (notify)
--record(hierarchy_updated, {root_id, predicate}).
+-record(hierarchy_updated, {
+            root_id :: binary() | integer(),
+            predicate :: atom(),
+            inserted_ids=[] :: list(integer()),
+            deleted_ids=[] :: list(integer())
+        }).
 
 %% @doc Resource is read, opportunity to add computed fields
 %%      Used in a foldr with the read properties as accumulator.
@@ -201,10 +249,17 @@
 %% @doc Resource will be deleted. (notify)
 %% This notification is part of the delete transaction, it's purpose is to clean up
 %% associated data.
--record(rsc_delete, {id}).
+-record(rsc_delete, {id, is_a}).
 
 %% @doc Foldr for an resource insert, modify the insertion properties.
 -record(rsc_insert, {}).
+
+%% @doc Map to signal merging two resources. Move any information from the looser to the
+%%      winner. The looser will be deleted.
+-record(rsc_merge, {
+        winner_id :: integer(),
+        looser_id :: integer()
+    }).
 
 %% @doc Foldr for an resource update, modify the insertion properties.
 %% The props are the resource's props _before_ the update.
@@ -217,9 +272,8 @@
 -record(rsc_update_done, {action, id, pre_is_a, post_is_a, pre_props, post_props}).
 
 %% @doc Upload and replace the the resource with the given data. The data is in the given format.
-%%		Return {ok, Id} or {error, Reason}, return {error, badarg} when the data is corrupt.
+%%      Return {ok, Id} or {error, Reason}, return {error, badarg} when the data is corrupt.
 -record(rsc_upload, {id, format :: json|bert, data}).
-
 
 %% @doc Add custom pivot fields to a resource's search index (map)
 %% Result is a list of {module, props} pairs.
@@ -253,6 +307,19 @@
 -record(rsc_pivot_done, {id, is_a=[]}).
 
 
+%% @doc Sanitize an HTML element. This is applied using a foldl.
+-record(sanitize_element, {
+        element :: {binary(), list(), list()},
+        stack :: list()
+    }).
+
+%% @doc Sanitize an embed url. The hostpart is of the format: <<"youtube.com/v...">>.
+%%      Return 'undefined', 'false' or a binary with a acceptable hostpath
+-record(sanitize_embed_url, {
+        hostpath :: binary()
+    }).
+
+
 %% @doc Check if an action is allowed (first).
 %% Should return undefined, true or false.
 %% action :: view|update|delete
@@ -268,6 +335,9 @@
 
 %% @doc Return the maximum visible_for value an user can see. Used for optimizing queries. (first)
 -record(acl_can_see, {}).
+
+%% @doc Set the context to a 'typical' authenticated uses. Used by m_acl.erl (first)
+-record(acl_context_authenticated, {}).
 
 %% @doc Log an user on, fill the acl fields of the context (first)
 %% Either return an updated #context or undefined
@@ -288,15 +358,27 @@
 % 'auth_autologon' - (first) check if there is an automatic log on enabled for this session/user-agent
 %                    returns {ok, UserId} when an user should be logged on.
 %                    Called for every single request!
+% 'request_context' - Called after parsing the query arguments (by z_context:ensure_qs/1) (foldl)
 % 'session_context' - Initialize a context from the current session (foldl).
-%                     Called on every request.
+%                     Called on every request with a session.
 % 'session_init'    - Notification that a new session has been initialized (session_pid is in the context)
 % 'session_init_fold' - foldl over the context containing a new session (after session_init)
+
+%% @doc Authentication against some (external or internal) service was validated
+-record(auth_validated, {
+        service :: atom(),
+        service_uid :: binary(),
+        service_props = [] :: list(),
+        props  = []:: list({atom(), any()}),
+        is_connect = false :: boolean()
+    }).
 
 %% @doc Check if an user is enabled (first)
 %% Return true, false or undefined
 -record(user_is_enabled, {id}).
 
+%% @doc Set #context fields depending on the user and/or the preferences of the user. (foldl)
+-record(user_context, {id}).
 
 %% @doc Request API logon
 -record(service_authorize, {service_module}).
@@ -312,14 +394,17 @@
 %% otherwise, return a #search_sql{} or #search_result{} record.
 -record(search_query, {search, offsetlimit}).
 
-
 %% @doc An edge has been inserted. (notify)
 %% The predicate is an atom.
--record(edge_insert, {subject_id, predicate, object_id}).
+-record(edge_insert, {subject_id, predicate, object_id, edge_id}).
 
 %% @doc An edge has been deleted. (notify)
 %% The predicate is an atom.
--record(edge_delete, {subject_id, predicate, object_id}).
+-record(edge_delete, {subject_id, predicate, object_id, edge_id}).
+
+%% @doc An edge has been updated. (notify)
+%% The predicate is an atom.
+-record(edge_update, {subject_id, predicate, object_id, edge_id}).
 
 
 %% @doc Notification that a site configuration is changed (notify)
@@ -328,14 +413,53 @@
 %% @doc Notification that a site configuration's property is changed (notify)
 -record(m_config_update_prop, {module, key, prop, value}).
 
+%% @doc Notification for fetching #media_import_props{} from different modules.
+%% This is used by z_media_import.erl for fetching properties and medium information
+%% about resources.
+-record(media_import, {
+        url :: binary(),
+        host_rev :: list(binary()),
+        mime :: binary,
+        metadata :: tuple()
+    }).
+
+-record(media_import_props, {
+        prio = 5 :: pos_integer(),      % 1 for perfect match (ie. host specific importer)
+        category :: atom(),
+        module :: atom(),
+        description :: binary() | {trans, list()},
+        rsc_props :: list(),
+        medium_props :: list(),
+        medium_url :: binary(),
+        preview_url :: binary()
+    }).
+
+%% @doc Notification to translate or map a file after upload, before insertion into the database (first)
+%% Used in mod_video to queue movies for conversion to mp4.
+%% Your handler should return a modified version of this record.
+%% You can set the post_insert_fun to something like fun(Id, Medium, Context) to receive the 
+%% medium record as it is inserted.
+-record(media_upload_preprocess, {
+            id :: integer() | 'insert_rsc', 
+            mime :: binary(), 
+            file :: file:filename(), 
+            original_filename :: file:filename(),
+            medium :: list(),
+            post_insert_fun :: function()
+        }).
+
 %% @doc Notification that a medium file has been uploaded.
 %%      This is the moment to change properties, modify the file etc. 
-%%		The medium record properties are folded over all observers. (foldl)
+%%      The medium record properties are folded over all observers. (foldl)
 -record(media_upload_props, {id, mime, archive_file, options}).
 
 %% @doc Notification that a medium file has been changed (notify)
 %% The id is the resource id, medium contains the medium's property list.
 -record(media_replace_file, {id, medium}).
+
+%% @doc Media update done notification.
+%% action is 'insert', 'update' or 'delete'
+-record(media_update_done, {action, id, pre_is_a, post_is_a, pre_props, post_props}).
 
 
 %% @doc Send a notification that the resource 'id' is added to the query query_id. (notify)
@@ -347,6 +471,19 @@
 %% Must return an iolist()
 -record(scomp_script_render, {is_nostartup=false, args=[]}).
 
+
+%% @doc Render the javascript for a custom action event type.
+%% The custom event type must be a tuple, for example:
+%% <code>{% wire type={live id=myid} action={...} %}</code>
+%% Must return {ok, Javascript, Context}
+-record(action_event_type, {
+            event :: tuple(),
+            trigger_id :: string(),
+            trigger :: string(),
+            postback_js :: iolist(),
+            postback_pickled :: string()|binary(),
+            action_js :: iolist()
+}).
 
 %% @doc Find an import definition for a CSV file by checking the filename of the to be imported file. (first)
 %% Should return the #import_csv_definition or undefined (in which case the column headers are used as property names).
@@ -363,7 +500,13 @@
 -record(dropbox_file, {filename}).
 
 %% @doc Try to identify a file, returning a list of file properties. (first)
--record(media_identify_file, {filename}).
+-record(media_identify_file, {filename, original_filename, extension}).
+
+%% @doc Try to find a filename extension for a mime type (example: ".jpg") (first)
+-record(media_identify_extension, {
+                mime :: binary(), 
+                preferred :: undefined | binary()
+            }).
 
 %% @doc Request to generate a HTML media viewer for a resource (first)
 % Return {ok, Html} or undefined
@@ -397,6 +540,25 @@
 -record(tkvstore_delete, {type, key}).
 
 
+%% @doc Subscribe a function to a QMTT topic.
+%%      The function will be called from a temporary process, and must be of the form:
+%%      m:f(#emqtt_msg{}, A, Context)
+-record(mqtt_subscribe, {topic, qos=0, mfa}).
+
+%% @doc Unsubscribe a function from a QMTT topic.
+%%      The MFA _must_ match the one supplied with #qmtt_subscribe{}
+-record(mqtt_unsubscribe, {topic, mfa}).
+
+%% @doc MQTT acl check, called via the normal acl notifications.
+%%      Actions for these checks: subscribe, publish
+-record(acl_mqtt, {
+        type :: 'wildcard' | 'direct',
+        topic :: binary(),
+        words :: list(binary() | integer()),
+        site :: binary(),
+        page_id :: 'undefined' | binary()   
+    }).
+
 %% @doc Broadcast notification.
 -record(broadcast, {title=[], message=[], is_html=false, stay=true, type="error"}).
 
@@ -409,63 +571,78 @@
 % Will be displayed with io_lib:format("~p: ~p~n", [What, Arg]), be careful with escaping information!
 -record(debug, {what, arg=[]}).
 
+%% @doc An external feed delivered a resource. First handler can import it.
+-record(import_resource, {
+        source :: atom() | binary(),
+        source_id :: integer() | binary(),
+        source_url :: binary(),
+        source_user_id :: binary() | integer(),
+        user_id :: integer(),
+        name :: binary(),
+        props :: list(),
+        urls :: list(),
+        media_urls :: list(),
+        data :: any()
+    }).
+
+%% @doc mod_export - Check if the resource or dispatch is visible for export.
+-record(export_resource_visible, {
+            dispatch :: atom(),
+            id :: integer()
+        }).
 
 %% @doc mod_export - return the content type (like {ok, "text/csv"}) for the dispatch rule/id export.
 -record(export_resource_content_type, {
-		dispatch :: atom(),
-		id :: integer()
-	}).
+        dispatch :: atom(),
+        id :: integer()
+    }).
 
 %% @doc mod_export - return the {ok, Filename} for the content disposition.
 -record(export_resource_filename, {
-		dispatch :: atom(),
-		id :: integer(),
-		content_type :: string()
-	}).
+        dispatch :: atom(),
+        id :: integer(),
+        content_type :: string()
+    }).
 
 %% @doc mod_export - Fetch the header for the export.
-%% The 'first' notification should return: {ok, binary()} | {ok, binary(), ContinuationState} | {error, Reason}.
+%% The 'first' notification should return: {ok, list()|binary()} | {ok, list()|binary(), ContinuationState} | {error, Reason}.
 -record(export_resource_header, {
-		dispatch :: atom(),
-		id :: integer(),
-		content_type :: string()
-	}).
+        dispatch :: atom(),
+        id :: integer(),
+        content_type :: string()
+    }).
 
 %% @doc mod_export - fetch a row for the export, can return a list of rows, a binary, and optionally a continuation state.
 %% The 'first' notification should return: {ok, Values|binary()} | {ok, Values|binary(), ContinuationState} | {error, Reason}.
 %% Where Values is [ term() ], i.e. a list of opaque values, to be formatted with #export_resource_format.
 %% Return the empty list of values to signify the end of the data stream.
 -record(export_resource_data, {
-		dispatch :: atom(),
-		id :: integer(),
-		content_type :: string(),
-		state :: term()
-	}).
+        dispatch :: atom(),
+        id :: integer(),
+        content_type :: string(),
+        state :: term()
+    }).
 
 %% @doc mod_export - Encode a single data element.
 %% The 'first' notification should return: {ok, binary()} | {ok, binary(), ContinuationState} | {error, Reason}.
 -record(export_resource_encode, {
-		dispatch :: atom(),
-		id :: integer(),
-		content_type :: string(),
-		data :: term(),
-		state :: term()
-	}).
+        dispatch :: atom(),
+        id :: integer(),
+        content_type :: string(),
+        data :: term(),
+        state :: term()
+    }).
 
 %% @doc mod_export - Fetch the footer for the export. Should cleanup the continuation state, if needed.
 %% The 'first' notification should return: {ok, binary()} | {error, Reason}.
 -record(export_resource_footer, {
-		dispatch :: atom(),
-		id :: integer(),
-		content_type :: string(),
-		state :: term()
-	}).
+        dispatch :: atom(),
+        id :: integer(),
+        content_type :: string(),
+        state :: term()
+    }).
 
 
 % Simple mod_development notifications:
 % development_reload - Reload all template, modules etc
 % development_make - Perform a 'make' on Zotonic, reload all new beam files
-
-
-
-

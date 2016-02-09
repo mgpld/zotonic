@@ -31,6 +31,7 @@
 %% interface functions
 -export([
     reindex/1,
+    index_ref/1,
     translations/1,
     find/3,
     find_ua_class/4,
@@ -54,6 +55,8 @@
 
 -include("zotonic.hrl").
 
+-define(TIMEOUT, infinity).
+
 %%====================================================================
 %% API
 %%====================================================================
@@ -68,6 +71,9 @@ start_link(SiteProps) ->
 %% @doc Reindex the list of all scomps, etc for the site in the context.
 reindex(Context) ->
     gen_server:cast(Context#context.module_indexer, {module_ready, Context}).
+
+index_ref(#context{} = Context) ->
+    z_depcache:get(module_index_ref, Context).
 
 
 %% @doc Find all .po files in all modules and the active site.
@@ -89,8 +95,19 @@ find_ua_class(template, Class, Name, Context) ->
                     #module_index_key{
                         site=z_context:site(Context),
                         type=template,
-                        name=z_convert:to_list(Name),
+                        name=z_convert:to_binary(Name),
                         ua_class=Class
+                    })
+    of
+        [] -> {error, enoent};
+        [#module_index{} = M|_] -> {ok, M}
+    end;
+find_ua_class(lib, _Class, Name, Context) ->
+    case ets:lookup(?MODULE_INDEX,
+                    #module_index_key{
+                        site=z_context:site(Context),
+                        type=lib,
+                        name=z_convert:to_binary(Name)
                     })
     of
         [] -> {error, enoent};
@@ -112,12 +129,12 @@ find_ua_class(What, _Class, Name, Context) ->
 %% @doc Find a scomp, validator etc.
 %% @spec find_all(What, Name, Context) -> list()
 find_all(template, Name, Context) ->
-    find_ua_class_all(template, z_user_agent:get_class(Context), Name, Context);
+    find_ua_class_all(template, z_user_agent:get_class(Context), z_convert:to_binary(Name), Context);
 find_all(What, Name, Context) ->
     find_ua_class_all(What, generic, Name, Context).
 
 find_ua_class_all(What, Class, Name, Context) ->
-    gen_server:call(Context#context.module_indexer, {find_all, What, Name, Class}).
+    gen_server:call(Context#context.module_indexer, {find_all, What, Name, Class}, ?TIMEOUT).
 
 %% @doc Return a list of all templates, scomps etc per module
 all(What, Context) ->
@@ -144,7 +161,12 @@ all(What, Context) ->
 %% @doc Initiates the server.
 init(SiteProps) ->
     process_flag(trap_exit, true),
-    Context = z_context:new(proplists:get_value(host, SiteProps)),
+    {host, Host} = proplists:lookup(host, SiteProps),
+    lager:md([
+        {site, Host},
+        {module, ?MODULE}
+      ]),
+    Context = z_context:new(Host),
     z_notifier:observe(module_ready, self(), Context),
     {ok, #state{context=Context}}.
 
@@ -217,7 +239,9 @@ handle_cast({scanned_items, Scanned}, State) ->
             reindex_ets_lookup(NewState),
 
             % Reset the template server (and others) when there the index is changed.
+            z_depcache:set(module_index_ref, erlang:make_ref(), NewState#state.context),
             z_notifier:notify(module_reindexed, NewState#state.context),
+            z_depcache:flush(module_index, NewState#state.context), 
             {noreply, NewState};
         false ->
             {noreply, State1}
@@ -405,8 +429,8 @@ scan_subdir_class_files(Subdir, ActiveDirs) ->
                                     {UAClass, RelPath} = z_user_agent:filename_split_class(F),
                                     Filepath = filename:join([Dir, Subdir, F]),
                                     #mfile{
-                                        filepath=Filepath,
-                                        name=RelPath,
+                                        filepath=z_convert:to_binary(Filepath),
+                                        name=z_convert:to_binary(RelPath),
                                         module=Module,
                                         erlang_module=undefined,
                                         prio=Prio,
@@ -509,6 +533,21 @@ to_ets(List, Type, Tag, Site) ->
 
     to_ets([], _Type, _Tag, _Site, _Acc) ->
         ok;
+    to_ets([#mfile{name=Name, module=Mod, erlang_module=ErlMod, filepath=FP}|T], service, Tag, Site, Acc) ->
+        K = #module_index{
+            key=#module_index_key{
+                site=Site,
+                type=service,
+                name=service_key(z_convert:to_binary(Mod), Name),
+                ua_class=generic
+            },
+            module=Mod,
+            erlang_module=ErlMod,
+            filepath=FP,
+            tag=Tag
+        },
+        ets:insert(?MODULE_INDEX, K),
+        to_ets(T, service, Tag, Site, [Name|Acc]);
     to_ets([#mfile{name=Name, module=Mod, erlang_module=ErlMod, filepath=FP}|T], Type, Tag, Site, Acc) ->
         case lists:member(Name, Acc) of
             true ->
@@ -530,6 +569,10 @@ to_ets(List, Type, Tag, Site) ->
                 to_ets(T, Type, Tag, Site, [Name|Acc])
         end.
 
+service_key(<<"mod_", Mod/binary>>, Name) ->
+    {Mod, z_convert:to_binary(Name)};
+service_key(Site, Name) ->
+    {Site, z_convert:to_binary(Name)}.
 
 % Place all templates in the ets table, indexed per device type
 templates_to_ets(List, Tag, Site) ->

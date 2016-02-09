@@ -55,44 +55,60 @@ prep_chart(Block, [{Name, {text, Vals0}}], Context) ->
     prep_chart(Block, [{Name, Vals0}], Context);
 prep_chart(Block, [{_, Vals}], Context) ->
     Props = filter_survey_prepare_thurstone:survey_prepare_thurstone(Block, Context),
-    Labels = [ Lab || {Lab,_} <- proplists:get_value(answers, Props) ],
+    Answers = proplists:get_value(answers, Props),
+    Labels = [ Lab || {Lab,_} <- Answers ],
     Values = [ proplists:get_value(C, Vals, 0) || C <- Labels ],
     Sum = case lists:sum(Values) of 0 -> 1; N -> N end,
     Perc = [ round(V*100/Sum) || V <- Values ],
     [
-        {question, z_html:escape(proplists:get_value(prompt, Block), Context)},
+        {question, proplists:get_value(prompt, Block)},
         {values, lists:zip(Labels, Values)},
         {type, "pie"},
-        {data, [{L,P} || {L,P} <- lists:zip(Labels, Perc), P /= 0]}
+        {data, [{L,P} || {L,P} <- lists:zip(Labels, Perc), P /= 0]},
+        {answers, Answers}
     ].
 
 prep_answer_header(Q, _Context) ->
     Name = proplists:get_value(name, Q),
-    case z_convert:to_bool(proplists:get_value(is_multiple, Q)) of
+    case is_multiple(Q) of
         true -> [ <<Name/binary, $:, K/binary>> || {K,_} <- proplists:get_value(answers, Q) ];
         false -> Name
     end.
 
 prep_answer(Q, [], _Context) ->
     prep(Q, []);
-prep_answer(Q, [{_Name, {undefined, Text}}], _Context) ->
+prep_answer(Q, [{_Name, {undefined, Text}}|_], _Context) ->
     prep(Q, binary:split(Text, <<$#>>, [global]));
-prep_answer(Q, [{_Name, {Value, _Text}}], _Context) ->
+prep_answer(Q, [{_Name, {Value, _Text}}|_], _Context) ->
     prep(Q, [Value]).
 
-    prep(Q, Vs) ->
-        case z_convert:to_bool(proplists:get_value(is_multiple, Q)) of
-            false ->
-                hd(Vs);
-            true ->
-                [
-                    case lists:member(K, Vs) of
-                        true -> K;
-                        false -> <<>>
-                    end
-                    || {K, _} <- proplists:get_value(answers, Q)
-                ]
-        end.
+prep(Q, Vs) ->
+    case is_multiple(Q) of
+        false ->
+            case Vs of 
+                [V|_] -> V;
+                [] -> undefined
+            end;
+        true ->
+            [
+                case lists:member(K, Vs) of
+                    true -> K;
+                    false -> <<>>
+                end
+                || {K, _} <- proplists:get_value(answers, Q)
+            ]
+    end.
+
+is_multiple(Q) ->
+    case proplists:get_value(input_type, Q) of
+        <<"multi">> -> 
+            true;
+        undefined ->
+            % Older surveys had the is_multiple property
+            z_convert:to_bool(proplists:get_value(is_multiple, Q));
+        _ ->    
+            false
+    end.
     
     
 prep_block(Block, Context) ->

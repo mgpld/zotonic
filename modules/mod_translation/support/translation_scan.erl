@@ -1,8 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2010-2012 Marc Worrell
+%% @copyright 2010-2015 Marc Worrell
 %% @doc Parse templates / erlang files in modules, extract all translations.
 
-%% Copyright 2010-2012 Marc Worrell
+%% Copyright 2010-2015 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -68,36 +68,34 @@ merge_args([{Lang,Text}|Rest], Args) ->
 
 
 %% @doc Parse the Erlang module. Extract all translation tags.
-scan_file(".erl", File) ->
+scan_file(<<".erl">>, File) ->
     case epp:open(File, [z_utils:lib_dir(include)]) of
         {ok, Epp} ->
             parse_erl(File, Epp);
         {error, Reason} ->
-            ?ERROR("POT generation, erlang error in ~p: ~p~n", [File, Reason]),
+            lager:error("POT generation, erlang error in ~p: ~p~n", [File, Reason]),
             []
     end;
 
-
 %% @doc Parse the template in the file. Extract all translation tags.
-scan_file(".tpl", File) ->
-    case parse(File) of
+scan_file(<<".tpl">>, File) ->
+    case parse_file(File) of
         {ok, ParseTree} ->
             extract(ParseTree, [], File);
         {error, Reason} ->
-            ?ERROR("POT generation, template error in ~p: ~p~n", [File, Reason]),
+            lager:error("POT generation, template error in ~p: ~p~n", [File, Reason]),
             []
     end;
-
 
 %% Skip unknown extensions (like ".config")
 scan_file(_Ext, _File) ->
     [].
 
 
-parse(File) when is_list(File) ->  
+parse_file(File) ->  
     case catch file:read_file(File) of
         {ok, Data} ->
-            case parse(Data) of
+            case parse_data(Data) of
                 {ok, Val} ->
                     {ok, Val};
                 Err ->
@@ -105,9 +103,10 @@ parse(File) when is_list(File) ->
             end;
         Error ->
             {error, io_lib:format("reading ~p failed (~p)", [File, Error])}  
-    end;
-parse(Data) when is_binary(Data) ->
-    case erlydtl_scanner:scan(binary_to_list(Data)) of
+    end.
+
+parse_data(Data) when is_binary(Data) ->
+    case erlydtl_scanner:scan(Data) of
         {ok, Tokens} ->
             erlydtl_parser:parse(Tokens);
         Err ->
@@ -132,7 +131,7 @@ extract({auto_id, _}, Acc, _F) -> Acc;
 extract({variable, _}, Acc, _F) -> Acc;
 extract(T, Acc, F) when is_tuple(T) ->
     extract(tl(tuple_to_list(T)), Acc, F);
-extract(N, Acc, _F) when is_integer(N); is_atom(N) ->
+extract(N, Acc, _F) when is_integer(N); is_atom(N); is_binary(N) ->
     Acc.
 
 trans_ext_args([], Acc) ->
@@ -164,6 +163,8 @@ parse_erl_form_part({match, _, X, Y}, File, Acc) ->
     parse_erl_form_part(X, File, []) ++ parse_erl_form_part(Y, File, []) ++ Acc;
 parse_erl_form_part({cons, _, X, Y}, File, Acc) ->
     parse_erl_form_part(X, File, []) ++ parse_erl_form_part(Y, File, []) ++ Acc;
+parse_erl_form_part({op, _, '++', X, Y}, File, Acc) ->
+    parse_erl_form_part(X, File, []) ++ parse_erl_form_part(Y, File, []) ++ Acc;
 parse_erl_form_part({'case', _, Expr, Exprs}, File, Acc) ->
     parse_erl_form_part(Expr, File, []) ++ 
         lists:foldl(fun(Part,A) -> parse_erl_form_part(Part, File, A) end, Acc, Exprs);
@@ -179,7 +180,7 @@ parse_erl_form_part({call, _, _, Expressions}, File, Acc) ->
     lists:foldl(fun(Part,A) -> parse_erl_form_part(Part, File, A) end, Acc, Expressions);
 parse_erl_form_part({record, _, _, Fields}, File, Acc) ->
     lists:foldl(fun({record_field, _, _, Part}, A) ->
-                        parse_erl_form_part(Part, File, A)
-                end, Acc, Fields);
+            parse_erl_form_part(Part, File, A)
+    end, Acc, Fields);
 parse_erl_form_part(_Part, _File, Acc) ->
     Acc. %% ignore

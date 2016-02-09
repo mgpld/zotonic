@@ -21,24 +21,69 @@
 -module(z_site_startup).
 -author("Marc Worrell <marc@worrell.nl>").
 
+-behaviour(gen_server).
+
+%% gen_server exports
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 -export([start_link/1]).
 
 -include_lib("zotonic.hrl").
+
+-record(state, {context}).
 
 %% @spec start_link(SiteProps::proplist()) -> ignore
 %% @doc Perform all site startup routines.
 start_link(SiteProps) ->
     {host, Host} = proplists:lookup(host, SiteProps),
+    Name = z_utils:name_for_host(?MODULE, Host),
+    gen_server:start_link({local, Name}, ?MODULE, SiteProps, []).
+
+
+init(SiteProps) ->
+    {host, Host} = proplists:lookup(host, SiteProps),
+    lager:md([
+        {site, Host},
+        {module, ?MODULE}
+      ]),
     Context = z_context:new(Host),
+    {ok, #state{context=Context}, 0}.
 
-    % Make sure all modules are started
-    z_module_manager:upgrade(Context),
+handle_call(_Msg, _From, State) ->
+    {noreply, State}.
 
-    % Put software version in database
-    % @todo Check if current version != database version and run upgrader (and downgrader?)
-    case m_site:get(dbdatabase, Context) of
-        none -> ok;
-        _ -> m_config:set_value(zotonic, version, ?ZOTONIC_VERSION, Context)
-    end,
-    
-    ignore.
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+handle_info(timeout, State) ->
+    do_startup(State#state.context),
+    {noreply, State};
+handle_info(_Msg, State) ->
+    {noreply, State}.
+
+
+terminate(_Reason, _State) ->
+    ok.
+
+%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
+%% @doc Convert process state when code is changed
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+        
+
+do_startup(Context) ->
+
+    case z_db:has_connection(Context) of
+        true ->
+            z_install_data:install_modules(Context),
+
+            %% Make sure all modules are started
+            z_module_manager:upgrade(Context),
+
+            m_config:set_value(zotonic, version, ?ZOTONIC_VERSION, Context);
+
+        false ->
+
+            %% Make sure all modules are started
+            z_module_manager:upgrade(Context)
+    end.

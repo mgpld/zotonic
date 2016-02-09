@@ -21,6 +21,7 @@
 
 -export([
     answer/3,
+    prep_chart/3,
     prep_answer_header/2,
     prep_answer/3,
     prep_block/2,
@@ -41,12 +42,15 @@ answer(Block, Answers, _Context) ->
             end
     end.
 
+prep_chart(_Block, _Ans, _Context) ->
+    undefined.
+
 prep_answer_header(Q, _Context) ->
     proplists:get_value(name, Q).
 
 prep_answer(_Q, [], _Context) ->
     <<>>;
-prep_answer(_Q, [{_Name, {_Value, Text}}], _Context) ->
+prep_answer(_Q, [{_Name, {_Value, Text}}|_], _Context) ->
     z_convert:to_binary(Text).
 
 prep_block(B, _Context) ->

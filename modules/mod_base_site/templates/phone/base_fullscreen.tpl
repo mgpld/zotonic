@@ -16,6 +16,7 @@
 			"bootstrap/css/bootstrap.css" 
 			"bootstrap/css/bootstrap-responsive.css" 
 			"bootstrap/css/bootstrap-base-site.css" 
+			"css/z.icons.css" 
 	        "css/site.css" 
 	%}
 	{% block html_head_extra %}{% endblock %}
@@ -43,11 +44,11 @@
 </head>
 
 <body class="{% block page_class %}{% endblock %} fullscreen">
-<div class="container-fluid" {% include "_language_attrs.tpl" language=z_language %}>
+<div class="container" {% include "_language_attrs.tpl" language=z_language %}>
 	{% block navbar %}
 		{% include "_navbar.tpl" %}
 	{% endblock %}
-	<div class="row-fluid">
+	<div class="row">
 	{% block content %}
 	{% endblock %}
 	</div>

@@ -35,6 +35,7 @@
     delete/2,
     toggle/2,
     gravatar_code/1,
+    merge/3,
     
     search/3
 ]).
@@ -110,11 +111,11 @@ insert(RscId, Name, Email, Message, Is_visible, Context) ->
         true ->
             Email = z_string:trim(Email),
             Name1 = z_html:escape(z_string:trim(Name)),
-            Message1 = z_html:escape_link(z_string:trim(Message)),
+            Message1 = z_sanitize:escape_link(z_string:trim(Message), Context),
             KeepInformed = z_convert:to_bool(z_context:get_q("keep_informed", Context, false)),
-	    UserAgent = z_context:get_q("user_agent", Context, <<"">>),
-	    IPAddress = wrq:peer(z_context:get_reqdata(Context)),
-	    Props = [
+            UserAgent = z_context:get_q("user_agent", Context, <<"">>),
+            IPAddress = peer(z_context:get_reqdata(Context)),
+            Props = [
                 {rsc_id, z_convert:to_integer(RscId)},
                 {is_visible, Is_visible},
                 {user_id, z_acl:user(Context)},
@@ -139,6 +140,10 @@ insert(RscId, Name, Email, Message, Is_visible, Context) ->
             {error, eacces}
     end.
 
+peer(undefined) ->
+    <<>>;
+peer(RD) ->
+    wrq:peer(RD).
 
 %% @doc Delete a comment.  Only possible if the user has edit permission on the page.
 delete(CommentId, Context) ->
@@ -187,6 +192,17 @@ check_editable(CommentId, Context) ->
 gravatar_code(Email) ->
     z_string:to_lower(z_utils:hex_encode(erlang:md5(z_string:to_lower(Email)))).
 
+
+%% @doc Move all comments from one resource to another
+merge(WinnerId, LooserId, Context) ->
+    z_db:q("update comment
+            set rsc_id = $1
+            where rsc_id = $2",
+           [WinnerId, LooserId],
+           Context),
+    z_depcache:flush({comment_rsc, LooserId}, Context),
+    z_depcache:flush({comment_rsc, WinnerId}, Context),
+    ok.
 
 
 %% @doc Return the search as used by z_search and the search model.

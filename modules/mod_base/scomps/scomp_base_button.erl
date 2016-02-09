@@ -33,12 +33,18 @@ render(Params, _Vars, Context) ->
     Class     = proplists:get_all_values(class, Params),
     Icon      = proplists:get_all_values(icon, Params),
     Style     = proplists:get_value(style, Params),
-    Type      = proplists:get_value(type, Params),
+    TabIndex  = proplists:get_value(tabindex, Params),
+    Type      = proplists:get_value(type, Params, "button"),
     Title     = proplists:get_value(title, Params),
     Disabled  = proplists:get_value(disabled, Params, false),
     Actions   = proplists:get_all_values(action, Params),
     Tag       = proplists:get_value(tag, Params, <<"button">>),
 
+    Class1 = case Class of
+        [] -> "btn btn-default";
+        _ -> Class
+    end,
+    
     Options   = [{action,X} || X <- Actions],
     Options1  = case Postback of
                 	undefined -> Options;
@@ -60,12 +66,13 @@ render(Params, _Vars, Context) ->
         {<<"id">>,    Id},
         {<<"name">>,  case proplists:is_defined(id, Params) of true -> Id; false -> "" end},
         {<<"style">>, Style},
-        {<<"title">>, Title}
+        {<<"title">>, Title},
+        {<<"tabindex">>, TabIndex}
     ],
     
-    {Class1, Attrs1} = case z_convert:to_bool(Disabled) of
-        false -> {Class, Attrs};
-        true -> { ["disabled"|Class], [ {<<"disabled">>,"disabled"}|Attrs] }
+    {Class2, Attrs1} = case z_convert:to_bool(Disabled) of
+        false -> {Class1, Attrs};
+        true -> { ["disabled"|Class1], [ {<<"disabled">>,"disabled"}|Attrs] }
     end,
     
     Attrs2 = case Type of
@@ -81,7 +88,7 @@ render(Params, _Vars, Context) ->
             end,
     Context2 = z_tags:render_tag(
                         Tag,
-                        [{<<"class">>,Class1}|Attrs2],
+                        [{<<"class">>,Class2}|Attrs2],
                     	Text1,
                     	Context1),
     {ok, Context2}.
