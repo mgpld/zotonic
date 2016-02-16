@@ -310,6 +310,8 @@ Note that when a site start, its modules are started up in order of
 module dependency, in such a way that a module's dependencies are
 always started before the module itsef starts.
 
+.. _guide-modules-versioning:
+
 Module versioning
 -----------------
 
@@ -349,6 +351,14 @@ according to the latest schema version. When you install a module for
 the first time, no upgrade functions are called, but only the
 ``install`` clause. The upgrade functions exist for migrating old
 data, not for newly installing a module.
+
+Data model notification
+^^^^^^^^^^^^^^^^^^^^^^^
+
+In the ``#datamodel`` record you can manage categories, predicates, resources,
+media and edges. You can also set the ``data`` property, which will send out
+a first ref:`notification <guide-notification>`_. To subscribe to that
+notification, export ``observe_manage_data/2`` in your site or module.
 
 Using categories defined by other modules
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
