@@ -159,12 +159,15 @@ import_def_rsc_1_cat(Row, Callbacks, State, Context) ->
     {"category", CategoryName} = proplists:lookup("category", Row),
     {CatId, State1} = name_lookup_exists(CategoryName, State, Context),
     Row1 = [{"category_id", CatId} | proplists:delete("category", Row)],
-    Name = case proplists:get_value("name", Row1) of
-               undefined -> throw({import_error, {definition_without_unique_name}});
-               N -> N
-           end,
-    {OptRscId, State2} = name_lookup(Name, State1, Context),
-    RscId = case OptRscId of undefined -> insert_rsc; _ -> OptRscId end,
+    %  Name = case proplists:get_value("name", Row1) of
+    %             undefined -> throw({import_error, {definition_without_unique_name}});
+    %             N -> N
+    %         end,
+    %  {OptRscId, State2} = name_lookup(Name, State1, Context),
+    % RscId = case OptRscId of undefined -> insert_rsc; _ -> OptRscId end,
+    State2 = State1,
+    RscId = insert_rsc,
+    Name = "imported",
     NormalizedRow = sort_props(m_rsc_update:normalize_props(RscId, Row1, [is_import], Context)),
     case has_required_rsc_props(NormalizedRow) of
         true ->
@@ -407,8 +410,8 @@ name_lookup_exists(Name, State, Context) ->
 %% @doc Maps fields from the given mapping into a new row, filtering out undefined values.
 map_fields(Mapping, Row, State) ->
     Defaults = [
-        {"is_protected", true},
-        {"is_published", true},
+        {"is_protected", false},
+        {"is_published", false},
         {"visible_for", 0}
     ],
     Mapped = [map_def(MapOne, Row, State) || MapOne <- Mapping],
@@ -532,7 +535,7 @@ concat_spaces([H|T], Acc) ->
 
 has_required_rsc_props(Props) ->
             not(prop_empty(proplists:get_value(category_id, Props)))
-    andalso not(prop_empty(proplists:get_value(name, Props)))
+%    andalso not(prop_empty(proplists:get_value(name, Props)))
     andalso not(prop_empty(proplists:get_value(title, Props))).
 
 

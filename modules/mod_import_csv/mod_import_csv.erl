@@ -141,11 +141,11 @@ can_handle(OriginalFilename, DataFile, Context) ->
         undefined ->
             case inspect_file(DataFile) of
                 {ok, #filedef{columns=Cols} = FD} ->
-                    case lists:member("name", Cols) andalso lists:member("category", Cols) of
+                    case lists:member("category", Cols) of
                         true -> 
                             {ok, FD};
                         false ->
-                            lager:info("Invalid CSV file, missing 'name' and/or 'category' columns: ~p", [Cols]),
+                            lager:info("Invalid CSV file, missing 'category' column: ~p", [Cols]),
                             {error, invalid_csv_file}
                     end;
                 {error, _} = Error ->
