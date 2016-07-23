@@ -20,11 +20,11 @@ msgstr ""
 
 #: modules/mod_admin/templates/_admin_edit_content_page_connections_list.tpl:37
 msgid "+ add"
-msgstr ""
+msgstr "+ ajouter"
 
 #: modules/mod_admin/templates/_admin_edit_block_addblock.tpl:5
 msgid "+ add block"
-msgstr ""
+msgstr "+ ajouter block"
 
 #: modules/mod_admin/templates/_admin_edit_content_person.tpl:8
 msgid ""
@@ -40,22 +40,22 @@ msgstr ""
 
 #: modules/mod_admin/templates/_action_dialog_change_category.tpl:9
 msgid "About categories"
-msgstr ""
+msgstr "A propos de categories"
 
 #: modules/mod_admin/templates/_action_dialog_edit_basics.tpl:21
 #: modules/mod_admin/templates/_admin_edit_content_acl.tpl:6
 #: modules/mod_admin/templates/_admin_edit_content_acl.tpl:8
 msgid "Access control"
-msgstr "Acceder au control"
+msgstr "Contrôle d'accès"
 
 #: modules/mod_admin/templates/_admin_edit_content_page_connections_list.tpl:43
 #: modules/mod_admin/templates/_admin_edit_depiction.tpl:23
 msgid "Add a connection: "
-msgstr ""
+msgstr "Ajouter une connexion"
 
 #: modules/mod_admin/actions/action_admin_dialog_media_upload.erl:59
 msgid "Add a new media file"
-msgstr ""
+msgstr "Ajouter un fichier media"
 
 #: modules/mod_admin/templates/_action_dialog_zmedia_choose.tpl:19
 msgid "Add a new media item"
@@ -63,7 +63,7 @@ msgstr "Ajouter un nouveau média"
 
 #: modules/mod_admin/templates/_admin_edit_body.tpl:34
 msgid "Add link"
-msgstr ""
+msgstr "Ajouter un lien"
 
 #: modules/mod_admin/templates/_admin_edit_body.tpl:14
 msgid "Add media to body"
@@ -72,7 +72,7 @@ msgstr "Ajouter un nouveau média au contenu"
 #: modules/mod_admin/actions/action_admin_link.erl:78
 #: modules/mod_admin/mod_admin.erl:371
 msgid "Added the connection to"
-msgstr ""
+msgstr "Ajouter une connexion à"
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:6
 msgid "Address"
@@ -84,7 +84,7 @@ msgstr "Admin"
 
 #: modules/mod_admin/templates/admin_logon.tpl:4
 msgid "Admin log on"
-msgstr ""
+msgstr "Connexion admin"
 
 #: modules/mod_admin/templates/_admin_edit_content_advanced.tpl:6
 msgid "Advanced"
@@ -97,47 +97,47 @@ msgstr "Toutes les catégories"
 
 #: modules/mod_admin/templates/admin_overview.tpl:27
 msgid "All Content"
-msgstr ""
+msgstr "Tout le contenu"
 
 #: modules/mod_admin/templates/_admin_edit_content_date_range.tpl:40
 msgid "All day"
-msgstr ""
+msgstr "Toute la journée"
 
 #: modules/mod_admin/templates/_admin_dashboard_buttons.tpl:14
 #: modules/mod_admin/templates/admin_media.tpl:25
 #: modules/mod_admin/templates/admin_overview.tpl:96
 msgid "All media"
-msgstr ""
+msgstr "Tous les médias"
 
 #: modules/mod_admin/templates/_admin_dashboard_buttons.tpl:13
 #: modules/mod_admin/templates/admin_media.tpl:24
 #: modules/mod_admin/templates/admin_overview.tpl:95
 msgid "All pages"
-msgstr ""
+msgstr "Toutes les pages"
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:33
 msgid "Alternative telephone"
-msgstr "Téléphone"
+msgstr "Autre téléphone"
 
 #: modules/mod_admin/templates/admin_media.tpl:13
 msgid "And media can also be viewed on their own page."
-msgstr ""
+msgstr "Un média peut être également vu dans sa propre page"
 
 #: modules/mod_admin/templates/_action_dialog_connect_tab_find.tpl:17
 msgid "Any category"
-msgstr ""
+msgstr "N'importe quelle catégorie"
 
 #: modules/mod_admin/templates/_action_dialog_delete_rsc.tpl:2
 msgid "Are you sure you want to delete the page"
-msgstr "Êtes vous sûr de vouloir effacer cette page"
+msgstr "Êtes vous sûr de vouloir supprimer cette page"
 
 #: modules/mod_admin/templates/_admin_menu.tpl:74
 msgid "Are you sure you want to exit the admin interface?"
-msgstr ""
+msgstr "Êtes vous sûr de vouloir quitter l'admin"
 
 #: modules/mod_admin/templates/_admin_edit_block_show_as.tpl:11
 msgid "Aside"
-msgstr ""
+msgstr "A côté"
 
 #: modules/mod_admin/templates/_admin_edit_content_seo.tpl:34
 msgid "Ask google to not index this page"
@@ -150,20 +150,20 @@ msgstr "Joindre un média"
 
 #: modules/mod_admin/templates/_admin_edit_basics.tpl:4
 msgid "Basic"
-msgstr ""
+msgstr "Eléments de base"
 
 #: modules/mod_admin/templates/blocks/_admin_edit_block_li_header.tpl:4
 #: modules/mod_admin/templates/blocks/_admin_edit_block_li_text.tpl:4
 msgid "Block"
-msgstr ""
+msgstr "Block"
 
 #: modules/mod_admin/templates/_admin_edit_block_li.tpl:9
 msgid "Block name"
-msgstr ""
+msgstr "Nom du block"
 
 #: modules/mod_admin/templates/_admin_edit_block_show_as.tpl:10
 msgid "Block quote"
-msgstr ""
+msgstr "Block de citation"
 
 #: modules/mod_admin/templates/_action_dialog_change_category.tpl:32
 #: modules/mod_admin/templates/_action_dialog_delete_rsc.tpl:6
@@ -175,7 +175,7 @@ msgstr ""
 #: modules/mod_admin/templates/_admin_edit_blocks.tpl:33
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:18
 msgid "Cancel"
-msgstr "Annulé"
+msgstr "Annuler"
 
 #: modules/mod_admin/templates/_action_dialog_new_rsc_tab.tpl:36
 #: modules/mod_admin/templates/_admin_overview_list.tpl:14
@@ -183,24 +183,24 @@ msgstr "Annulé"
 #: modules/mod_admin/templates/admin_widget_dashboard_latest.tpl:37
 #: modules/mod_admin/templates/admin_widget_dashboard_latest.tpl:40
 msgid "Category"
-msgstr "Categorie"
+msgstr "Catégorie"
 
 #: modules/mod_admin/templates/_action_dialog_change_category.tpl:7
 msgid "Category name:"
-msgstr ""
+msgstr "Nom de la catégorie:"
 
 #: modules/mod_admin/templates/_admin_edit_header.tpl:31
 #: modules/mod_admin/templates/_admin_edit_header.tpl:34
 msgid "Category:"
-msgstr ""
+msgstr "Catégorie:"
 
 #: modules/mod_admin/templates/_admin_edit_header.tpl:31
 msgid "Change category"
-msgstr ""
+msgstr "Changer de catégorie"
 
 #: modules/mod_admin/templates/_action_dialog_change_category.tpl:26
 msgid "Change the category of this page"
-msgstr ""
+msgstr "Changer la catégorie de cette page"
 
 #: modules/mod_admin/templates/_action_dialog_zmedia_choose.tpl:10
 msgid "Choose a media item from this page to insert in the body text."
@@ -213,7 +213,7 @@ msgstr "Ville"
 
 #: modules/mod_admin/templates/_admin_edit_media.tpl:30
 msgid "Click the image to set the cropping center."
-msgstr ""
+msgstr "Cliqeur sur l'image pour définir le centre du recadrage"
 
 #: modules/mod_admin/templates/_admin_edit_visible_for.tpl:8
 msgid "Community members"
@@ -221,23 +221,23 @@ msgstr "Membres de la communauté"
 
 #: modules/mod_admin/templates/_admin_edit_blocks.tpl:31
 msgid "Confirm block removal"
-msgstr ""
+msgstr "Confirmer la suppression du block"
 
 #: modules/mod_admin/actions/action_admin_dialog_delete_rsc.erl:48
 msgid "Confirm delete"
-msgstr ""
+msgstr "Confirmer la suppression"
 
 #: modules/mod_admin/templates/_admin_menu.tpl:74
 msgid "Confirm logoff"
-msgstr ""
+msgstr "Confirmer la déconnexion"
 
 #: modules/mod_admin/templates/blocks/_admin_edit_block_li_page.tpl:10
 msgid "Connect a page"
-msgstr ""
+msgstr "Connecter à une page"
 
 #: modules/mod_admin/templates/_admin_edit_body.tpl:4
 msgid "Content"
-msgstr ""
+msgstr "Contenu"
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:76
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:138
@@ -248,15 +248,15 @@ msgstr "Pays"
 #: modules/mod_admin/templates/_action_dialog_connect.tpl:43
 #: modules/mod_admin/templates/_action_dialog_new_rsc.tpl:9
 msgid "Create Page"
-msgstr ""
+msgstr "+ Créer une page"
 
 #: modules/mod_admin/templates/_admin_overview_list.tpl:17
 msgid "Created on"
-msgstr ""
+msgstr "Créé"
 
 #: modules/mod_admin/templates/_admin_edit_header.tpl:15
 msgid "Created:"
-msgstr ""
+msgstr "Créé:"
 
 #: modules/mod_admin/templates/_admin_edit_content_seo.tpl:23
 msgid "Customize page slug"
@@ -269,11 +269,11 @@ msgstr "Tableau de bord"
 
 #: modules/mod_admin/templates/admin_widget_dashboard_latest.tpl:36
 msgid "Date"
-msgstr ""
+msgstr "Date"
 
 #: modules/mod_admin/templates/_admin_edit_content_date_range.tpl:6
 msgid "Date range"
-msgstr "Date"
+msgstr "Interval de temps"
 
 #: modules/mod_admin/templates/_admin_edit_content_date_range.tpl:8
 msgid "Date ranges"
@@ -291,7 +291,7 @@ msgstr "Effacer"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:47
 msgid "Delete if no other page is connected to this page."
-msgstr ""
+msgstr "Supprimer si aucune page n'utilise celle-ci"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:81
 msgid "Delete this page."
@@ -299,11 +299,11 @@ msgstr "Effacer cette page"
 
 #: modules/mod_admin/templates/_admin_edit_js.tpl:20
 msgid "Deleted."
-msgstr ""
+msgstr "Supprimé"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:49
 msgid "Dependent"
-msgstr ""
+msgstr "Dépend"
 
 #: modules/mod_admin/templates/_admin_edit_block_li.tpl:6
 #: modules/mod_admin/templates/_rsc_edge.tpl:18
@@ -313,20 +313,20 @@ msgstr "Déconnecter"
 
 #: modules/mod_admin/templates/_admin_edit_blocks.tpl:32
 msgid "Do you want to remove this block?"
-msgstr ""
+msgstr "Voulez-vous supprimer ce block"
 
 #: modules/mod_admin/templates/_admin_edit_media.tpl:34
 msgid "Download"
-msgstr ""
+msgstr "Télécharger"
 
 #: modules/mod_admin/templates/_admin_edit_block_li.tpl:4
 msgid "Drag to change position"
-msgstr ""
+msgstr "Drag dropper pour déplacer"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:85
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:88
 msgid "Duplicate"
-msgstr "Faire une copie"
+msgstr "Dupliquer"
 
 #: modules/mod_admin/actions/action_admin_dialog_duplicate_rsc.erl:45
 #: modules/mod_admin/templates/_action_dialog_duplicate_rsc.tpl:30
@@ -340,7 +340,7 @@ msgstr "Faire une copie de cette page"
 
 #: modules/mod_admin/templates/_admin_edit_content_address_email.tpl:2
 msgid "E-mail address"
-msgstr ""
+msgstr "Adresse e-mail"
 
 #: modules/mod_admin/templates/_rsc_edge.tpl:15
 #: modules/mod_admin/templates/admin_edit.tpl:3
@@ -353,15 +353,15 @@ msgstr "Editer:"
 
 #: modules/mod_admin/mod_admin.erl:160
 msgid "Embed page"
-msgstr ""
+msgstr "Embarquer une page"
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:40
 msgid "Emergency telephone"
-msgstr "Telephone d'urgence"
+msgstr "Téléphone d'urgence"
 
 #: modules/mod_admin/actions/action_admin_dialog_media_upload.erl:181
 msgid "Error uploading the file."
-msgstr ""
+msgstr "Erreur lors de l'upload du fichier."
 
 #: modules/mod_admin/templates/_admin_edit_content_date_range.tpl:8
 msgid ""
@@ -378,7 +378,7 @@ msgid ""
 "categories are hierarchically defined. In that way you can have a vehicles "
 "category with subcategories car and bicycle."
 msgstr ""
-"Chaque page est catégorisée dans une catégorie. La catégorie définit ce que "
+"Chaque page dispose d'une catégorie. La catégorie définit ce que "
 "les pages représentent. Par exemple un évenement, un produit ou une "
 "personne. Les catégorie sont définient hierarchiquement. Par exemple; vous "
 "pouvez avoir une catégorie véhicules avec des sous catégories voiture et "
@@ -386,16 +386,16 @@ msgstr ""
 
 #: modules/mod_admin/actions/action_admin_dialog_media_upload.erl:178
 msgid "Failed to download the file."
-msgstr ""
+msgstr "Téléchargement du fichier a échoué."
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:39
 msgid "Featured"
-msgstr "Sommaire"
+msgstr "Mis en avant"
 
 #: modules/mod_admin/templates/_admin_edit_meta_features.tpl:4
 #: modules/mod_admin/templates/_admin_edit_meta_features.tpl:6
 msgid "Features"
-msgstr ""
+msgstr "Fonctionalités"
 
 #: modules/mod_admin/templates/_admin_edit_content_media.tpl:6
 msgid "File / media content"
@@ -403,23 +403,23 @@ msgstr "Dossier"
 
 #: modules/mod_admin/templates/admin_overview.tpl:47
 msgid "Filter on category"
-msgstr ""
+msgstr "Filtrer sur la catégorie"
 
 #: modules/mod_admin/templates/admin_overview.tpl:30
 msgid "Filter on content group"
-msgstr ""
+msgstr "Filtrer sur le groupe de contenu"
 
 #: modules/mod_admin/templates/_action_dialog_connect.tpl:37
 msgid "Find Page"
-msgstr ""
+msgstr "Rechercher une page"
 
 #: modules/mod_admin/templates/_admin_edit_blocks.tpl:98
 msgid "Find page"
-msgstr ""
+msgstr "Trouver une page"
 
 #: modules/mod_admin/templates/_admin_edit_content_person.tpl:20
 msgid "First"
-msgstr "Premier"
+msgstr "Prénom"
 
 #: modules/mod_admin/templates/admin_status.tpl:18
 msgid ""
@@ -429,7 +429,7 @@ msgstr "Rafraichir toutes les URL, maquettes, caches"
 
 #: modules/mod_admin/templates/admin_status.tpl:17
 msgid "Flush system caches"
-msgstr "Rafraichir le systeme cache"
+msgstr "Rafraichir le cache système"
 
 #: modules/mod_admin/templates/_admin_edit_content_date_range.tpl:58
 msgid "From"
@@ -437,7 +437,7 @@ msgstr "De"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:18
 msgid "Go back."
-msgstr "Revenir en arrière"
+msgstr "Retour"
 
 #: modules/mod_admin/templates/_admin_edit_visible_for.tpl:9
 msgid "Group members"
@@ -446,7 +446,7 @@ msgstr "Membres du groupe"
 #: modules/mod_admin/templates/blocks/_admin_edit_block_li_header.tpl:18
 #: modules/mod_admin/mod_admin.erl:158
 msgid "Header"
-msgstr ""
+msgstr "Entête"
 
 #: modules/mod_admin/templates/_admin_edit_content.query.tpl:18
 msgid ""
@@ -462,23 +462,23 @@ msgstr ""
 
 #: modules/mod_admin/templates/_admin_edit_block_show_as.tpl:8
 msgid "Info link with modal popup"
-msgstr ""
+msgstr "Informations du lien dans une popup"
 
 #: modules/mod_admin/templates/_admin_edit_block_show_as.tpl:6
 msgid "Inline block"
-msgstr ""
+msgstr "Block inséré"
 
 #: modules/mod_admin/templates/_admin_edit_body.tpl:20
 msgid "Insert image"
-msgstr ""
+msgstr "Insérer une image"
 
 #: modules/mod_admin/templates/admin_overview.tpl:60
 msgid "Items per page"
-msgstr ""
+msgstr "Eléments par page"
 
 #: modules/mod_admin/templates/_admin_dashboard_events.tpl:3
 msgid "Latest modified events"
-msgstr "Derniers évenements modifiés"
+msgstr "Derniers évènements modifiés"
 
 #: modules/mod_admin/templates/_admin_dashboard_locations.tpl:3
 msgid "Latest modified locations"
@@ -503,11 +503,11 @@ msgstr ""
 
 #: modules/mod_admin/templates/_admin_menu.tpl:73
 msgid "Log Off"
-msgstr ""
+msgstr "Déconnexion"
 
 #: modules/mod_admin/templates/admin_logon.tpl:19
 msgid "Log on to"
-msgstr ""
+msgstr "Connexion"
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:135
 msgid "Mailing address"
@@ -515,7 +515,7 @@ msgstr "Mailing address"
 
 #: modules/mod_admin/templates/_action_dialog_edit_basics.tpl:20
 msgid "Main"
-msgstr ""
+msgstr "Principal"
 
 #: modules/mod_admin/templates/_action_dialog_new_rsc_tab.tpl:84
 msgid "Make"
@@ -523,16 +523,16 @@ msgstr "Créer"
 
 #: modules/mod_admin/templates/admin_media.tpl:21
 msgid "Make a new media item"
-msgstr "Créer un nouveau média"
+msgstr "+ Créer un nouveau média"
 
 #: modules/mod_admin/actions/action_admin_dialog_new_rsc.erl:75
 msgid "Make a new page"
-msgstr "Créer une nouvelle page"
+msgstr "+ Créer une nouvelle page"
 
 #: modules/mod_admin/templates/_admin_dashboard_buttons.tpl:4
 #: modules/mod_admin/templates/admin_overview.tpl:85
 msgid "Make a new page or media"
-msgstr ""
+msgstr "+ Créer un nouvel élément"
 
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_url.tpl:35
 msgid "Make media item"
@@ -552,8 +552,8 @@ msgid ""
 "Media encompasses all uploaded images, movies and documents. Media can be "
 "attached to pages."
 msgstr ""
-"Media encompasses all uploaded images, movies and documents. Media can be "
-"attached to pages."
+"La notion de média comprends tous les images uploadées, les films et les documents."
+"Un média peut être attaché/lié à une page"
 
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_upload.tpl:26
 msgid "Media file"
@@ -562,11 +562,11 @@ msgstr "Fichier du média"
 #: modules/mod_admin/actions/action_admin_dialog_media_upload.erl:152
 #: modules/mod_admin/actions/action_admin_dialog_media_upload.erl:164
 msgid "Media item created."
-msgstr ""
+msgstr "Le média a été créé."
 
 #: modules/mod_admin/templates/_action_dialog_zmedia_choose.tpl:4
 msgid "Media on this page"
-msgstr "Média sur cette page"
+msgstr "Média de cette page"
 
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_upload.tpl:18
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_url.tpl:25
@@ -579,7 +579,7 @@ msgstr "Milieu"
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:24
 msgid "Mobile"
-msgstr ""
+msgstr "Téléphone mobile"
 
 #: modules/mod_admin/templates/_admin_overview_list.tpl:23
 #: modules/mod_admin/templates/admin_referrers.tpl:24
@@ -593,11 +593,11 @@ msgstr "Modifié le"
 
 #: modules/mod_admin/templates/_admin_edit_header.tpl:10
 msgid "Modified:"
-msgstr ""
+msgstr "Modifié:"
 
 #: modules/mod_admin/templates/_action_dialog_change_category.tpl:13
 msgid "More like this"
-msgstr ""
+msgstr "Plus dans le genre"
 
 #: modules/mod_admin/templates/_action_dialog_new_rsc_tab.tpl:64
 msgid "Name"
@@ -614,11 +614,11 @@ msgstr "Besoin de plus d’aide"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:71
 msgid "Next in category: "
-msgstr "Catégorie suivante"
+msgstr "Suivant dans la même catégorie:"
 
 #: modules/mod_admin/templates/_action_dialog_connect_tab_depictions.tpl:14
 msgid "No connected images."
-msgstr ""
+msgstr "Aucune image liée"
 
 #: modules/mod_admin/templates/_admin_edit_meta_features.tpl:18
 msgid "No features are enabled for this meta-resource."
@@ -626,7 +626,7 @@ msgstr ""
 
 #: modules/mod_admin/templates/admin_widget_dashboard_latest.tpl:86
 msgid "No items"
-msgstr ""
+msgstr "Pas d'éléments"
 
 #: modules/mod_admin/templates/admin_media.tpl:86
 msgid "No media found."
@@ -641,11 +641,11 @@ msgstr "Pas de pages trouvées"
 #: modules/mod_admin/templates/_admin_edit_content_page_connections.tpl:6
 #: modules/mod_admin/templates/_admin_edit_content_page_connections.tpl:8
 msgid "Page connections"
-msgstr ""
+msgstr "Connexion vers d'autres pages"
 
 #: modules/mod_admin/templates/_admin_edit_content_seo.tpl:54
 msgid "Page description"
-msgstr "Description de page"
+msgstr "Description de la page"
 
 #: modules/mod_admin/templates/_admin_edit_content_seo.tpl:47
 msgid "Page keywords"
@@ -653,11 +653,11 @@ msgstr "Mots clés de la page"
 
 #: modules/mod_admin/templates/_admin_edit_content_advanced.tpl:17
 msgid "Page path"
-msgstr ""
+msgstr "Chemin au sens url de la page"
 
 #: modules/mod_admin/templates/_admin_edit_content_seo.tpl:18
 msgid "Page slug"
-msgstr "Page slug"
+msgstr "Alias de la page"
 
 #: modules/mod_admin/templates/_action_dialog_duplicate_rsc.tpl:10
 #: modules/mod_admin/templates/_action_dialog_new_rsc_tab.tpl:27
@@ -676,11 +676,11 @@ msgstr "Ensemble des pages"
 #: modules/mod_admin/templates/_admin_edit_content_person.tpl:6
 #: modules/mod_admin/templates/_admin_edit_content_person.tpl:8
 msgid "Personal name"
-msgstr ""
+msgstr "Nom"
 
 #: modules/mod_admin/templates/_admin_status_update_pivot_count.tpl:8
 msgid "Pivot queue count size:"
-msgstr ""
+msgstr "Taille du pivot:"
 
 #: modules/mod_admin/templates/_action_dialog_duplicate_rsc.tpl:3
 msgid "Please fill in the title of the new page."
@@ -693,7 +693,7 @@ msgstr "Code postal"
 
 #: modules/mod_admin/templates/admin_referrers.tpl:22
 msgid "Predicate"
-msgstr "Predicate"
+msgstr "Prédicat"
 
 #: modules/mod_admin/templates/admin_media.tpl:36
 msgid "Preview"
@@ -701,11 +701,11 @@ msgstr "Prévisualisation"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:65
 msgid "Previous in category: "
-msgstr ""
+msgstr "Précédent dans la même catégorie:"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:44
 msgid "Protect"
-msgstr ""
+msgstr "Protéger"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:42
 msgid "Protect from deletion"
@@ -713,15 +713,15 @@ msgstr "Protéger contre l’effacement"
 
 #: modules/mod_admin/templates/_admin_edit_content_pub_period.tpl:38
 msgid "Publication date of original article"
-msgstr ""
+msgstr "Date originale de publication"
 
 #: modules/mod_admin/templates/_admin_edit_content_pub_period.tpl:8
 msgid "Publication date range"
-msgstr "La publication des dates"
+msgstr "Date de publication"
 
 #: modules/mod_admin/templates/_admin_edit_content_pub_period.tpl:6
 msgid "Publication period"
-msgstr "Periode de publication"
+msgstr "Période de publication"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:6
 msgid "Publish this page"
@@ -732,7 +732,7 @@ msgstr "Publier cette page"
 #: modules/mod_admin/templates/_action_dialog_new_rsc_tab.tpl:73
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:34
 msgid "Published"
-msgstr "Publié"
+msgstr "Publier!"
 
 #: modules/mod_admin/templates/_admin_edit_content.query.tpl:22
 msgid "Query"
@@ -752,29 +752,29 @@ msgstr ""
 
 #: modules/mod_admin/templates/admin_status.tpl:27
 msgid "Rebuild search indices"
-msgstr "Rebuild search indices"
+msgstr "Reconstruction des indexes de recherche"
 
 #: modules/mod_admin/templates/admin_status.tpl:52
 msgid ""
 "Recalculate the numbering of the category tree. This can take a long time."
-msgstr ""
+msgstr "Le recalcul des catégorie peut prendre un peu de temps..."
 
 #: modules/mod_admin/templates/_admin_edit_content_website.tpl:27
 msgid "Redirect to above website on page view"
-msgstr ""
+msgstr "Redirection vers ce site"
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:63
 msgid "Redirect to website on page view"
-msgstr ""
+msgstr "Redirection vers un site"
 
 #: modules/mod_admin/templates/admin_referrers.tpl:3
 #: modules/mod_admin/templates/admin_referrers.tpl:8
 msgid "Referrers to"
-msgstr "Référé à"
+msgstr "Tous les référés"
 
 #: modules/mod_admin/templates/admin_status.tpl:58
 msgid "Reinstall site datamodel"
-msgstr ""
+msgstr "Reinstallation du modèle de donnée"
 
 #: modules/mod_admin/templates/_admin_edit_content_date_range.tpl:19
 msgid "Remarks"
@@ -782,15 +782,15 @@ msgstr "Remarques"
 
 #: modules/mod_admin/templates/_admin_edit_media.tpl:28
 msgid "Remove crop center"
-msgstr ""
+msgstr "Suppresson du centre de recadrage"
 
 #: modules/mod_admin/templates/admin_status.tpl:51
 msgid "Renumber category tree"
-msgstr ""
+msgstr "Recalcul de l'arbre des catégorie"
 
 #: modules/mod_admin/actions/action_admin_dialog_media_upload.erl:59
 msgid "Replace current medium"
-msgstr ""
+msgstr "Remplace le média courant"
 
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_url.tpl:35
 msgid "Replace media item"
@@ -810,7 +810,7 @@ msgstr ""
 
 #: modules/mod_admin/templates/_admin_status_update_pivot_count.tpl:103
 msgid "Retrieving status..."
-msgstr ""
+msgstr "Récupération du statut..."
 
 #: modules/mod_admin/templates/admin_status.tpl:59
 msgid "Runs the schema install command from the site's module again."
@@ -818,24 +818,24 @@ msgstr ""
 
 #: modules/mod_admin/templates/_admin_edit_content_seo.tpl:6
 msgid "SEO Content"
-msgstr ""
+msgstr "Partie SEO"
 
 #: modules/mod_admin/templates/_action_dialog_change_category.tpl:33
 #: modules/mod_admin/templates/_action_dialog_edit_basics.tpl:69
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:20
 #: modules/mod_admin/templates/_admin_edit_floating_buttons.tpl:2
 msgid "Save"
-msgstr ""
+msgstr "Sauver !"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:23
 #: modules/mod_admin/templates/_admin_edit_floating_buttons.tpl:6
 msgid "Save and View"
-msgstr ""
+msgstr "Sauver et voir"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:23
 #: modules/mod_admin/templates/_admin_edit_floating_buttons.tpl:6
 msgid "Save and view the page."
-msgstr "Enregister et visualiser la page"
+msgstr "Enregister et voir la page"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:20
 #: modules/mod_admin/templates/_admin_edit_floating_buttons.tpl:2
@@ -844,7 +844,7 @@ msgstr "Enregistrer cette page"
 
 #: modules/mod_admin/templates/_admin_status_update_pivot_count.tpl:68
 msgid "Search indices rebuilt."
-msgstr ""
+msgstr "Les indexes sont à jour"
 
 #: modules/mod_admin/templates/_action_dialog_zmedia_choose.tpl:5
 msgid "Search other media"
@@ -856,15 +856,15 @@ msgstr "Chercher une autre question"
 
 #: modules/mod_admin/templates/_admin_menu.tpl:88
 msgid "Search..."
-msgstr ""
+msgstr "Recherche..."
 
 #: modules/mod_admin/templates/_action_dialog_connect_tab_depictions.tpl:2
 msgid "Select a connected image"
-msgstr ""
+msgstr "Selectionner une image liée"
 
 #: modules/mod_admin/templates/admin_overview.tpl:42
 msgid "Selected Categories"
-msgstr ""
+msgstr "Catégories sélectionnées"
 
 #: modules/mod_admin/templates/_admin_edit_basics_form.tpl:23
 msgid "Short title"
@@ -872,35 +872,35 @@ msgstr "Titre court"
 
 #: modules/mod_admin/templates/_admin_features.category.tpl:8
 msgid "Show address on edit page"
-msgstr ""
+msgstr "Affichage de l'adresse sur la page d'édition"
 
 #: modules/mod_admin/templates/_admin_edit_block_show_as.tpl:3
 msgid "Show as"
-msgstr ""
+msgstr "Montrer en tant que"
 
 #: modules/mod_admin/templates/_admin_edit_content_advanced.tpl:31
 msgid "Show page on multiple paths"
-msgstr ""
+msgstr "Autoriser l'accès à la page via plusieurs adresses"
 
 #: modules/mod_admin/actions/action_admin_dialog_edit_basics.erl:126
 msgid "Something went wrong. Sorry."
-msgstr ""
+msgstr "Désolé, une erreur s'est produite"
 
 #: modules/mod_admin/actions/action_admin_link.erl:84
 msgid "Sorry, you don't have permission to add the connection."
-msgstr ""
+msgstr "Désolé, vous n'avez pas les droits pour réaliser l'opération"
 
 #: modules/mod_admin/mod_admin.erl:375
 msgid "Sorry, you have no permission to add the connection."
-msgstr ""
+msgstr "Désolé, vous n'avez pas les droits pour ajouter une connexion"
 
 #: modules/mod_admin/mod_admin.erl:157
 msgid "Standard"
-msgstr ""
+msgstr "Standard"
 
 #: modules/mod_admin/templates/_admin_sort_header.event.tpl:2
 msgid "Starts"
-msgstr ""
+msgstr "Démarre"
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:126
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:188
@@ -947,11 +947,11 @@ msgstr ""
 
 #: modules/mod_admin/mod_admin.erl:159
 msgid "Text"
-msgstr ""
+msgstr "Texte"
 
 #: modules/mod_admin/templates/_action_unlink_undo.tpl:15
 msgid "The page"
-msgstr "la page"
+msgstr "La page"
 
 #: modules/mod_admin/templates/_admin_edit_visible_for.tpl:7
 msgid "The whole world"
@@ -959,19 +959,19 @@ msgstr "Le monde entier"
 
 #: modules/mod_admin/templates/admin_referrers.tpl:11
 msgid "There are no pages with a connection to the page"
-msgstr "Il n’y a pas de pages connectée a cette page"
+msgstr "Il n’y a pas de page liée a celle-ci"
 
 #: modules/mod_admin/templates/_action_dialog_delete_rsc.tpl:3
 msgid "This can't be undone. Your page will be lost forever."
-msgstr "Cela ne peut pas être défait. Votre page sera compeletement effacée."
+msgstr "Cela ne peut pas être annulé. Votre page sera définitivement supprimée..."
 
 #: modules/mod_admin/actions/action_admin_link.erl:81
 msgid "This connection already exists."
-msgstr ""
+msgstr "La liaison existe déjà"
 
 #: modules/mod_admin/templates/_admin_edit_js.tpl:20
 msgid "This page has been deleted."
-msgstr ""
+msgstr "Cette page a été supprimée"
 
 #: modules/mod_admin/templates/admin_status.tpl:9
 msgid ""
@@ -984,16 +984,16 @@ msgid ""
 "This page is able to connect to others. For example you can connect it to an "
 "actor or a brand."
 msgstr ""
-"Cette page peut se connecter à d’autres pages. Par exemple vous pouvez la "
-"connecter a un acteur ou une marque."
+"Cette page peut être liée à d’autres. Par exemple vous pouvez la "
+"lier a un article ou une auteur."
 
 #: modules/mod_admin/templates/_admin_edit_content_advanced.tpl:50
 msgid "This resource was created by the module"
-msgstr ""
+msgstr "La ressource a été créée par le module"
 
 #: modules/mod_admin/templates/_admin_edit_content_date_range.tpl:66
 msgid "Till"
-msgstr "Till"
+msgstr "Jusqu'à"
 
 #: modules/mod_admin/templates/_admin_edit_basics_form.tpl:5
 #: modules/mod_admin/templates/_admin_overview_list.tpl:11
@@ -1010,7 +1010,7 @@ msgstr ""
 
 #: modules/mod_admin/templates/_action_dialog_connect_tab_find.tpl:7
 msgid "Type text to search"
-msgstr ""
+msgstr "Saisissez le texte de recherche"
 
 #: modules/mod_admin/templates/_action_dialog_edit_basics.tpl:32
 #: modules/mod_admin/templates/_admin_edit_content_advanced.tpl:38
@@ -1025,7 +1025,7 @@ msgstr "Unique uri"
 #: modules/mod_admin/templates/_action_dialog_media_upload.tpl:10
 #: modules/mod_admin/templates/_action_dialog_new_rsc.tpl:14
 msgid "Upload File"
-msgstr ""
+msgstr "Uploader un fichier"
 
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_upload.tpl:4
 msgid "Upload a file from your computer."
@@ -1033,13 +1033,13 @@ msgstr "télécharger un fichier depuis votre ordinateur."
 
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_url.tpl:3
 msgid "Upload a file which is already on the internet."
-msgstr "Télécharger un fichier qui est déja sur Internet."
+msgstr "Rappatrier un fichier présent sur Internet."
 
 #: modules/mod_admin/templates/_action_dialog_connect.tpl:54
 #: modules/mod_admin/templates/_action_dialog_media_upload.tpl:15
 #: modules/mod_admin/templates/_action_dialog_new_rsc.tpl:19
 msgid "Upload by URL"
-msgstr ""
+msgstr "Uploader par URL"
 
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_upload.tpl:35
 msgid "Upload file"
@@ -1047,11 +1047,11 @@ msgstr "Télécharger un fichier"
 
 #: modules/mod_admin/templates/admin_media.tpl:39
 msgid "Uploaded"
-msgstr "Téléchargé"
+msgstr "Uploadé"
 
 #: modules/mod_admin/templates/_action_dialog_zmedia_choose.tpl:36
 msgid "Use the autocompleter to search the media in this site."
-msgstr "Utilisez l'autocompleter pour chercher un media sur le site"
+msgstr "Utilisez la recherche pour trouver un media sur le site"
 
 #: modules/mod_admin/templates/_admin_edit_content_person.tpl:8
 msgid "Use the title of the base content for the display name of this person."
@@ -1061,20 +1061,20 @@ msgstr ""
 
 #: modules/mod_admin/templates/_admin_menu.tpl:70
 msgid "User page"
-msgstr ""
+msgstr "Page utilisateur"
 
 #: modules/mod_admin/templates/_action_dialog_connect_tab_find.tpl:15
 msgid "Valid for:"
-msgstr ""
+msgstr "Valide pour:"
 
 #: modules/mod_admin/templates/_admin_edit_content_publish.tpl:25
 #: modules/mod_admin/templates/_admin_edit_floating_buttons.tpl:8
 msgid "View"
-msgstr ""
+msgstr "Voir"
 
 #: modules/mod_admin/templates/_action_dialog_change_category.tpl:14
 msgid "View all pages from this category"
-msgstr ""
+msgstr "Voir toutes les pages de cette catégorie"
 
 #: modules/mod_admin/templates/_admin_edit_content_page_connections.tpl:36
 msgid "View all referrers"
@@ -1099,7 +1099,7 @@ msgstr "Visible jusqu’à"
 
 #: modules/mod_admin/templates/_action_dialog_edit_basics.tpl:67
 msgid "Visit full edit page"
-msgstr ""
+msgstr "Mode d'édition complet" 
 
 #: modules/mod_admin/templates/_admin_edit_content_address.tpl:72
 msgid "Visiting address"
@@ -1120,33 +1120,33 @@ msgid ""
 "between the two dates. Note that when you are allowed to edit the page then "
 "you can always see it."
 msgstr ""
-"Quand une page a été publiée avec un interval de date, cette page sera "
-"seulement visible entre ces deux dates. Mais vous pourrez l’éditer a tout "
+"Quand une page a été publiée avec un interval de temps, elle sera "
+"seulement visible entre ces deux dates. Mais reste éditable a tout "
 "moment."
 
 #: modules/mod_admin/templates/_action_dialog_duplicate_rsc.tpl:2
 msgid "You are going to duplicate the page"
-msgstr "Vous allez copier cette page"
+msgstr "Vous allez dupliquer cette page"
 
 #: modules/mod_admin/actions/action_admin_delete_media.erl:52
 msgid "You are not allowed to delete this media."
-msgstr ""
+msgstr "Vous n'avez pas le droit de supprimer ce média"
 
 #: modules/mod_admin/actions/action_admin_dialog_delete_rsc.erl:50
 msgid "You are not allowed to delete this page."
-msgstr ""
+msgstr "Vous n'avez pas le droit de supprimer cette page"
 
 #: modules/mod_admin/templates/admin_edit.tpl:15
 msgid "You are not allowed to edit this page."
-msgstr ""
+msgstr "Vous n'avez pas le droit d'éditer cette page"
 
 #: modules/mod_admin/actions/action_admin_dialog_media_upload.erl:174
 msgid "You don't have permission to change this media item."
-msgstr ""
+msgstr "Vous n'avez pas le droit de modifier ce média"
 
 #: modules/mod_admin/actions/action_admin_dialog_media_upload.erl:176
 msgid "You don't have the proper permissions to upload this type of file."
-msgstr ""
+msgstr "Vous n'avez pas les droits pour uploader ce type de fichier"
 
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_upload.tpl:6
 #: modules/mod_admin/templates/_action_dialog_media_upload_tab_url.tpl:5
@@ -1154,27 +1154,26 @@ msgid ""
 "You have to specify a description of the file to make it easier to find and "
 "share."
 msgstr ""
-"Vous devez entrer une description de ce fichier pour pouvoir le retrouver "
-"plus facilement plus tard."
+"Saisissez une description pour retrouver ce fichier facilement plus tard."
 
 #: modules/mod_admin/templates/_admin_edit_depiction.tpl:19
 msgid "add media item"
-msgstr ""
+msgstr "ajouter un média"
 
 #: modules/mod_admin/templates/_admin_edit_block_li.tpl:5
 msgid "block"
-msgstr ""
+msgstr "block"
 
 #: modules/mod_admin/templates/_admin_edit_header.tpl:12
 #: modules/mod_admin/templates/_admin_edit_header.tpl:17
 msgid "by"
-msgstr ""
+msgstr "par"
 
 #: modules/mod_admin/templates/_admin_overview_list.tpl:39
 #: modules/mod_admin/templates/_admin_overview_list.tpl:40
 #: modules/mod_admin/templates/admin_referrers.tpl:34
 msgid "d M Y, H:i"
-msgstr ""
+msgstr "d M Y à H:i"
 
 #: modules/mod_admin/templates/admin_media.tpl:65
 msgid "delete"
@@ -1182,7 +1181,7 @@ msgstr "effacer"
 
 #: modules/mod_admin/templates/_admin_edit_content_date_range.tpl:25
 msgid "e.g. might change"
-msgstr ""
+msgstr "i.e. peut changer"
 
 #: modules/mod_admin/templates/_admin_overview_list.tpl:45
 #: modules/mod_admin/templates/admin_media.tpl:76
@@ -1206,7 +1205,7 @@ msgstr "assembler"
 
 #: modules/mod_admin/templates/_admin_edit_block_li.tpl:9
 msgid "name"
-msgstr ""
+msgstr "nom"
 
 #: modules/mod_admin/actions/action_admin_dialog_new_rsc.erl:57
 msgid "page"
@@ -1236,7 +1235,7 @@ msgstr "sans titre"
 #: modules/mod_admin/templates/_admin_edit_media.tpl:13
 #: modules/mod_admin/templates/_admin_edit_media.tpl:53
 msgid "uploaded on"
-msgstr "télécharger le"
+msgstr "uploadé le"
 
 #: modules/mod_admin/templates/_admin_overview_list.tpl:44
 #: modules/mod_admin/templates/admin_referrers.tpl:38
