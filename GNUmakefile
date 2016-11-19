@@ -1,4 +1,4 @@
-ERL       ?= /usr/local/bin/erl
+ERL       ?= erl
 ERLC      ?= $(ERL)c
 APP       := zotonic
 
