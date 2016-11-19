@@ -11,7 +11,15 @@
 # All configuration values have a default; values that are commented out
 # serve to show the default.
 
-import sys, os
+import sys, os, sphinx_rtd_theme
+
+# Read the Docs only runs sphinx directly (not through Makefile commands), so we
+# build the stubs here
+on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
+
+if on_rtd:
+    print("Building stubs...")
+    os.system('export ZOTONIC_SRC=.. ; for f in `find ref -name .generate`; do $f || exit 1; done')
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -25,7 +33,10 @@ import sys, os
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinx.ext.todo']
+extensions = [
+    'sphinx.ext.todo',
+    'sphinx.ext.extlinks'
+]
 
 todo_include_todos = True
 
@@ -43,7 +54,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'Zotonic'
-copyright = u'2009-2015, The Zotonic Project (zotonic.com)'
+copyright = u'2009–2016, The Zotonic Project (zotonic.com)'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -66,7 +77,7 @@ release = '1.0-dev'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = ['_build', '**/doc-*', '**/meta-*']
+exclude_patterns = ['_build', '**/doc-*', '**/meta-*', '**/includes']
 
 # The reST default role (used for this markup: `text`) to use for all documents.
 #default_role = None
@@ -95,36 +106,21 @@ pygments_style = 'sphinx'
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = 'default'
+html_theme = "sphinx_rtd_theme"
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
 # documentation.
-html_theme_options = {
-    'bodyfont': '"Lucida Grande", "Helvetica Neue", Helvetica, Arial, sans-serif',
-    'headfont': '"Lucida Grande", Arial, Helvetica, sans-serif',
-
-    'bgcolor': 'white',
-    'textcolor': '#222',
-    'linkcolor': '#0A8BDF',
-    'visitedlinkcolor': '#0463C1',
-    'headtextcolor': '#0778b0',
-
-    'collapsiblesidebar': 'false',
-    'sidebarbgcolor': 'white',
-    'sidebartextcolor': '#333',
-    'sidebarlinkcolor': '#0778b0',
-
-    'relbarbgcolor': '#039ed4',
-    'relbartextcolor': '#eee',
-    'relbarlinkcolor': '#eee',
-
-    'footerbgcolor': '#eee',
-    'footertextcolor': '#0778b0'
-}
 
 # Add any paths that contain custom themes here, relative to this directory.
-#html_theme_path = []
+html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
+
+html_theme_options = {
+    'collapse_navigation': True,
+    'display_version': True,
+    'logo_only': True
+}
+
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
@@ -207,12 +203,6 @@ latex_elements = {
 # 'preamble': '',
 }
 
-# Grouping the document tree into LaTeX files. List of tuples
-# (source start file, target name, title, author, documentclass [howto/manual]).
-latex_documents = [
-  ('index-tex', 'Zotonic.tex', u'Zotonic Documentation',
-   u'Andreas Stenius', 'manual'),
-]
 
 # The name of an image file (relative to this directory) to place at the top of
 # the title page.
@@ -282,4 +272,6 @@ class NewTocTree(TocTree):
         return rst
 
 def setup(app):
-    app.add_directive('toctree', NewTocTree)
+    app.add_directive('toctree-reversed', NewTocTree)
+
+extlinks = {'issue': ('https://github.com/zotonic/zotonic/issues/%s', '#') }

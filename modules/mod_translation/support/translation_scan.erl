@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,26 +19,26 @@
 -module(translation_scan).
 -author("Marc Worrell <marc@worrell.nl>").
 
--export([scan/1, scan_file/2]).
+-export([scan/2, scan_file/2]).
 
 -include_lib("zotonic.hrl").
 
 
-scan(Context) ->
-    AllModules = z_module_manager:scan(Context),
-    Active = z_module_manager:active(Context),
-    Modules = [{Mod, ModDir} || {Mod, ModDir} <- AllModules, lists:member(Mod, Active)],
+-export([parse_erl/2]).
+
+-spec scan([{atom(), string()}], #context{}) -> [{ModuleName :: atom(), Labels :: list()}].
+scan(Modules, Context) ->
     Files = lists:flatten(
               [z_module_indexer:all(What, Context)
                || What <- [template, scomp, action, validator, model, service, erlang]]),
     ModFiles = [{Mod, Path} || #module_index{module=Mod, filepath=Path} <- Files ],
-    Combined = [{ModDir, [ModDir++"/"++z_convert:to_list(Mod)++".erl" 
+    Combined = [{Mod, [ModDir++"/"++z_convert:to_list(Mod)++".erl"
                           | proplists:get_all_values(Mod, ModFiles)]}
                 || {Mod, ModDir} <- Modules],
     [ scan_module(Mod) || Mod <- Combined ].
 
-scan_module({Path, Files}) ->
-    {Path, dedupl(lists:flatten([ scan_file(filename:extension(File), File) || File <- Files ]))}.
+scan_module({Module, Files}) ->
+    {Module, dedupl(lists:flatten([ scan_file(filename:extension(File), File) || File <- Files ]))}.
 
 
 dedupl(Trans) ->
@@ -48,6 +48,9 @@ dedupl(Trans) ->
 
 insert([], Dict) ->
     Dict;
+
+insert([{Text, Args, Loc}|Trans], Dict) when not is_binary(Text) ->
+    insert([{unicode:characters_to_binary(Text), Args, Loc}|Trans], Dict);
 insert([{Text, Args, Loc}|Trans], Dict) ->
     case dict:find(Text, Dict) of
         {ok, {_Text, Args0, Loc0}} ->
@@ -67,8 +70,20 @@ merge_args([{Lang,Text}|Rest], Args) ->
     end.
 
 
-%% @doc Parse the Erlang module. Extract all translation tags.
+%% @doc Parse the template or Erlang module. Extract all translation tags.
+scan_file(<<".tpl">>, File) ->
+    scan_file(".tpl", File);
+scan_file(".tpl", File) ->
+    case template_compiler:translations(File) of
+        {ok, Translations} ->
+            normalize_line_info(Translations);
+        {error, Reason} ->
+          lager:error("POT generation, erlang error in ~p: ~p~n", [File, Reason])
+    end;
+
 scan_file(<<".erl">>, File) ->
+    scan_file(".erl", File);
+scan_file(".erl", File) ->
     case epp:open(File, [z_utils:lib_dir(include)]) of
         {ok, Epp} ->
             parse_erl(File, Epp);
@@ -76,69 +91,16 @@ scan_file(<<".erl">>, File) ->
             lager:error("POT generation, erlang error in ~p: ~p~n", [File, Reason]),
             []
     end;
+scan_file(_, _) ->
+  [].
 
-%% @doc Parse the template in the file. Extract all translation tags.
-scan_file(<<".tpl">>, File) ->
-    case parse_file(File) of
-        {ok, ParseTree} ->
-            extract(ParseTree, [], File);
-        {error, Reason} ->
-            lager:error("POT generation, template error in ~p: ~p~n", [File, Reason]),
-            []
-    end;
+normalize_line_info(Translations) ->
+    normalize_line_info(Translations, []).
 
-%% Skip unknown extensions (like ".config")
-scan_file(_Ext, _File) ->
-    [].
-
-
-parse_file(File) ->  
-    case catch file:read_file(File) of
-        {ok, Data} ->
-            case parse_data(Data) of
-                {ok, Val} ->
-                    {ok, Val};
-                Err ->
-                    Err
-            end;
-        Error ->
-            {error, io_lib:format("reading ~p failed (~p)", [File, Error])}  
-    end.
-
-parse_data(Data) when is_binary(Data) ->
-    case erlydtl_scanner:scan(Data) of
-        {ok, Tokens} ->
-            erlydtl_parser:parse(Tokens);
-        Err ->
-            Err
-    end.
-
-
-%% @doc Extract all translation tags from the parse tree.
-extract(ParseTree, Acc, F) when is_list(ParseTree) ->
-    lists:foldl(fun(Tree,A) -> extract(Tree, A, F) end, Acc, ParseTree);
-extract({trans, {trans_text, {_File, Line,_Col}, Text}}, Acc, F) ->
-    [{z_string:trim(Text), [], {F,Line}}|Acc];
-extract({trans_literal, {_File, Line,_Col}, Text}, Acc, F) ->
-    [{Text, [], {F,Line}}|Acc];
-extract({trans_ext, {string_literal, {_File, Line,_Col}, Text}, Args}, Acc, F) ->
-    [{Text, trans_ext_args(Args,[]), {F,Line}}|Acc];
-extract({text, _, _}, Acc, _F) -> Acc;
-extract({string_literal, _, _}, Acc, _F) -> Acc;
-extract({number_literal, _, _}, Acc, _F) -> Acc;
-extract({comment, _}, Acc, _F) -> Acc;
-extract({auto_id, _}, Acc, _F) -> Acc;
-extract({variable, _}, Acc, _F) -> Acc;
-extract(T, Acc, F) when is_tuple(T) ->
-    extract(tl(tuple_to_list(T)), Acc, F);
-extract(N, Acc, _F) when is_integer(N); is_atom(N); is_binary(N) ->
-    Acc.
-
-trans_ext_args([], Acc) ->
-    Acc;
-trans_ext_args([{{identifier,_,Lang}, {string_literal, _, Text}}|Args], Acc) ->
-    trans_ext_args(Args, [{list_to_atom(Lang), Text}|Acc]).
-
+normalize_line_info([], Acc) ->
+    lists:reverse(Acc);
+normalize_line_info([{Text, Args, {Filename, LineNr, _ColumnNr}}|Translations], Acc) ->
+    normalize_line_info(Translations, [{Text, Args, {Filename, LineNr}}|Acc]).
 
 %% Scan binary for erlang ?__(..., Context) syntax with either a binary or a string as first arg.
 parse_erl(File, Epp) ->
@@ -148,7 +110,7 @@ parse_erl_form({eof, _}, _File, Epp, Acc) ->
     epp:close(Epp),
     Acc;
 parse_erl_form({ok, Other}, File, Epp, Acc) ->
-    parse_erl_form(epp:parse_erl_form(Epp), File, Epp, 
+    parse_erl_form(epp:parse_erl_form(Epp), File, Epp,
                    parse_erl_form_part(Other, File, Acc));
 parse_erl_form({error, _}, File, Epp, Acc) ->
     parse_erl_form(epp:parse_erl_form(Epp), File, Epp, Acc).
@@ -166,7 +128,7 @@ parse_erl_form_part({cons, _, X, Y}, File, Acc) ->
 parse_erl_form_part({op, _, '++', X, Y}, File, Acc) ->
     parse_erl_form_part(X, File, []) ++ parse_erl_form_part(Y, File, []) ++ Acc;
 parse_erl_form_part({'case', _, Expr, Exprs}, File, Acc) ->
-    parse_erl_form_part(Expr, File, []) ++ 
+    parse_erl_form_part(Expr, File, []) ++
         lists:foldl(fun(Part,A) -> parse_erl_form_part(Part, File, A) end, Acc, Exprs);
 
 parse_erl_form_part({call, _, {remote, _, {atom, _, z_trans}, {atom, _, trans}},

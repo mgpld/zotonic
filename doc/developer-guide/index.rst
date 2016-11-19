@@ -3,21 +3,27 @@
 Developer Guide
 ===============
 
+The technical handbook for developers building websites with Zotonic. It guides
+you through all aspects of the framework.
+
 .. toctree::
    :maxdepth: 1
    :glob:
 
    introduction
-   installation
+   getting-started
+   docker
    sites
    controllers
    dispatch-rules
    resources
    templates
+   media
    forms-and-validation
    search
    translation
-   access-control/index
+   wires
+   access-control
    modules
    notifications
    server-browser-interaction
@@ -25,6 +31,7 @@ Developer Guide
    services
    email
    shell
+   testing
    deployment/index
    contributing
    releasenotes/index

@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,19 +23,19 @@
 -svc_title("Export a menu resource structure as JSON.").
 -svc_needauth(false).
 
--export([process_get/2, menu_export/2]).
+-export([process_get/1, menu_export/2]).
 
 -include_lib("zotonic.hrl").
 
 
-process_get(_ReqData, Context) ->
-    case z_context:get_q("id", Context) of
+process_get(Context) ->
+    case z_context:get_q(<<"id">>, Context) of
         undefined ->
             {error, missing_arg, "id"};
-        [] ->
+        <<>> ->
             {error, missing_arg, "id"};
         Id ->
-            case m_rsc:exists(Id, Context) of 
+            case m_rsc:exists(Id, Context) of
                 true ->
                     case m_rsc:is_visible(Id, Context) of
                         true ->
@@ -70,6 +70,6 @@ menu_item(Id, Children, Context) ->
     }.
 
 
-        
-    
+
+
 

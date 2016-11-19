@@ -58,7 +58,7 @@
 
 
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_backup,
                 parent=admin_modules,
@@ -98,17 +98,17 @@ start_backup(Context) ->
 
 %% @doc Start a backup, either a full backup (including archived files) or a database only backup.
 start_backup(IsFullBackup, Context) ->
-    gen_server:call(z_utils:name_for_host(?MODULE, z_context:site(Context)), {start_backup, IsFullBackup}).
+    gen_server:call(z_utils:name_for_site(?MODULE, z_context:site(Context)), {start_backup, IsFullBackup}).
 
 %% @doc List all backups present.  Newest first.
 list_backups(Context) ->
-    InProgress = gen_server:call(z_utils:name_for_host(?MODULE, z_context:site(Context)), in_progress_start),
+    InProgress = gen_server:call(z_utils:name_for_site(?MODULE, z_context:site(Context)), in_progress_start),
     [ {F, D, IsFull, D =:= InProgress} || {F,D,IsFull} <- list_backup_files(Context) ].
 
 
 %% @doc Check if there is a backup in progress.
 backup_in_progress(Context) ->
-    case gen_server:call(z_utils:name_for_host(?MODULE, z_context:site(Context)), in_progress_start) of
+    case gen_server:call(z_utils:name_for_site(?MODULE, z_context:site(Context)), in_progress_start) of
         undefined -> false;
         _ -> true
     end.
@@ -126,7 +126,7 @@ manage_schema(install, Context) ->
 %% @doc Starts the server
 start_link(Args) when is_list(Args) ->
     Context = proplists:get_value(context, Args),
-    Name = z_utils:name_for_host(?MODULE, z_context:site(Context)),
+    Name = z_utils:name_for_site(?MODULE, z_context:site(Context)),
     gen_server:start_link({local, Name}, ?MODULE, Args, []).
 
 
@@ -217,7 +217,7 @@ handle_info({'EXIT', Pid, _Error}, State) ->
             z_mqtt:publish(<<"~site/backup">>, [{msg, <<"backup_error">>}], State#state.context),
             %% @todo Log the error
             %% Remove all files of this backup
-            Name = z_convert:to_list(erlydtl_dateformat:format(State#state.backup_start, "Ymd-His", State#state.context)),
+            Name = z_convert:to_list(z_datetime:format(State#state.backup_start, "Ymd-His", State#state.context)),
             [ file:delete(F) || F <- z_utils:wildcard(filename:join(dir(State#state.context), Name++"*")) ],
             {noreply, State#state{backup_pid=undefined, backup_start=undefined}};
         _ ->
@@ -316,7 +316,7 @@ name(Context) ->
     Now = calendar:universal_time(),
     iolist_to_binary(
       [atom_to_list(z_context:site(Context)), "-",
-       erlydtl_dateformat:format(Now, "Ymd-His", Context)]).
+       z_datetime:format(Now, "Ymd-His", Context)]).
 
 
 %% @doc Dump the sql database into the backup directory.  The Name is the basename of the dump.
@@ -360,7 +360,7 @@ pg_dump(Name, Context) ->
                  [] ->
                      ok;
                  Output ->
-                     ?zWarning(Output, Context),
+                     lager:warning(Output),
                      z_session_manager:broadcast(#broadcast{type="error", message=Output, title="mod_backup", stay=false}, Context),
                      {error, Output}
              end,

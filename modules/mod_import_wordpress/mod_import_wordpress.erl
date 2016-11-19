@@ -33,15 +33,15 @@
 
 
 event(#submit{message={wxr_upload, []}}, Context) ->
-    #upload{filename=OriginalFilename, tmpfile=TmpFile} = z_context:get_q_validated("upload_file", Context),
-    Reset = z_convert:to_bool(z_context:get_q("reset", Context)),
+    #upload{filename=OriginalFilename, tmpfile=TmpFile} = z_context:get_q_validated(<<"upload_file">>, Context),
+    Reset = z_convert:to_bool(z_context:get_q(<<"reset">>, Context)),
     z_session_page:spawn_link(?MODULE, do_import, [TmpFile, Reset, OriginalFilename, Context], Context),
 
     Context2 = z_render:growl("Please hold on while the file is importing. You will get a notification when it is ready.", Context),
     z_render:wire([{dialog_close, []}], Context2).
 
 do_import(TmpFile, Reset, OriginalFilename, Context) ->
-    Context1 = 
+    Context1 =
         try
             ok = import_wordpress:wxr_import(TmpFile, Reset, Context),
             Msg = lists:flatten(io_lib:format("The import of ~p has completed.", [OriginalFilename])),
@@ -50,7 +50,7 @@ do_import(TmpFile, Reset, OriginalFilename, Context) ->
             _:E ->
                 Stacktrace = erlang:get_stacktrace(),
                 Msg1 = lists:flatten(io_lib:format("~p failed to import. The error was: ~p", [OriginalFilename, E])),
-                ?zWarning(Msg1, Context),
+                lager:warning(Msg1, Context),
                 lager:warning("Wordpress error: ~p~n~p", [E, Stacktrace]),
                 z_render:growl(Msg1, error, true, Context)
         end,

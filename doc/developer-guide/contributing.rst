@@ -77,6 +77,8 @@ The Zotonic commit convention are slightly based on `rebar’s README
 
 Structure your commit message like this:
 
+.. code-block:: none
+
     prefix: One line summary (less than 50 characters)
 
     Longer description, multiline text that is supposed to wrap at 72
@@ -163,6 +165,9 @@ To build the documentation, Erlang must be installed.
 
     $ cd doc/
 
+    # Install dependencies
+    $ pip install -r requirements.txt
+
     # Generate meta-*.rst files:
     $ make stubs
 
@@ -229,8 +234,9 @@ reference to its page, though; consequent occurrences can be made
 Add a ``.. seealso::`` section at the bottom to highlight any other
 pages which are closely related to the current one, for example::
 
-  .. seealso:: :ref:`dev-contributing`
+.. code-block:: none
 
+    .. seealso:: :ref:`dev-contributing`
 
 Table styles
 ^^^^^^^^^^^^
@@ -309,7 +315,8 @@ Release dates
 ^^^^^^^^^^^^^
 
 Zotonic follows a time-based release model. Every first Monday of the month – at
-the call of the `Dutch test siren`_ – a new Zotonic version is released.
+the call of the `Dutch test siren`_ – a new Zotonic version is released. Version
+numbers are incremented according to the `Semantic versioning`_ specification.
 
 Release schedule
 ^^^^^^^^^^^^^^^^
@@ -318,19 +325,28 @@ Preparation for each release lasts one month:
 
 1. **Development phase**: new features are added and existing ones improved.
    Commits take place on the current ``.x`` development branch (for instance,
-   ``release-0.13.x``).
+   ``0.x``).
 
 2. **Stabilisation phase**: five working days before a release, we create a
-   release branch (for instance, ``release-0.13.7``) from the development
-   branch. During the stabilisation phase, no new features are added. Instead,
-   the last bug fixes for the release are committed.
+   release branch from the development branch, incrementing the minor version
+   number (for instance, ``release-0.16.0``). During the stabilisation phase, no
+   new features are added. Instead, the last bug fixes for the release are
+   committed.
 
-3. On the first Monday of each month, the release branch is **tagged**, merged
-   back into the development branch and then discarded.
+3. On the first Monday of each month, the release branch is **tagged**
+   (for instance, ``0.16.0``), merged back into the development branch and then
+   discarded.
+
+Hotfix releases
+^^^^^^^^^^^^^^^
+
+Some bug fixes, such as security fixes, need to be made available immediately.
+In case a change cannot wait for the next monthly release, we release it as a
+hotfix, incrementing the patch number (for instance, ``0.16.1``).
 
 .. seealso::
     `GitHub <https://github.com/zotonic/zotonic/releases>`_ for the latest
     release.
 
 .. _Dutch test siren: http://www.invadingholland.com/guides-to-holland/emergency-alarm
-
+.. _Semantic versioning: http://semver.org/

@@ -7,16 +7,16 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
-% 
+%
 % Given a list = [1,2,3,4,5,6,7,8,9,0]
 %
 % Get all elements from element M to element N:
@@ -51,7 +51,7 @@ slice(undefined, _, _Context) ->
 slice(List, Slice, _Context) when is_list(List) ->
     slice1(List, Slice);
 slice(MaybeList, Slice, Context) ->
-    slice1(erlydtl_runtime:to_list(MaybeList, Context), Slice).
+    slice1(z_template_compiler_runtime:to_list(MaybeList, Context), Slice).
 
 slice1(List, [undefined, undefined]) ->
     slice2(List, 1, length(List));

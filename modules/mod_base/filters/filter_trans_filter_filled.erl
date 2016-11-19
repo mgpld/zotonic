@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,7 +27,7 @@ trans_filter_filled(Var, _Context) ->
     filled_in(Var).
 
 trans_filter_filled(Var, Key, Context) ->
-    filled_in(erlydtl_runtime:find_value(Key, Var, Context)).
+    filled_in(z_template_compiler_runtime:find_value(Key, Var, #{}, Context)).
 
 filled_in({trans, Tr}) ->
     Tr1 = lists:filter(fun({_,T}) -> is_filled_in(T) end, Tr),

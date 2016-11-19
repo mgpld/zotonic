@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,7 +37,7 @@
 
 
 event(#submit{message={delete_move, Args}}, Context) ->
-    ToCatId = z_convert:to_integer(z_context:get_q_validated("category_id", Context)),
+    ToCatId = z_convert:to_integer(z_context:get_q_validated(<<"category_id">>, Context)),
     {id, Id} = proplists:lookup(id, Args),
     Ids = [ Id | m_hierarchy:children('$category', Id, Context) ],
     case deletable(Ids, Context) andalso z_acl:rsc_editable(ToCatId, Context) of
@@ -101,9 +101,9 @@ cat_move_and_delete(Ids, ToGroupId, Context) ->
     z_session_page:add_script(z_render:wire({unmask, []}, Context)),
     ok.
 
-in_categories(Ids, Context) ->
-    In = lists:flatten(z_utils:combine($,, [ integer_to_list(NId) || NId <- Ids ])),
-    z_db:q("select id from rsc where category_id in ("++In++")", [], Context, 60000).
+in_categories(Ids, Context) when is_list(Ids) ->
+    RscIds = z_db:q("select id from rsc where category_id in (SELECT(unnest($1::int[])))", [Ids], Context, 60000),
+    [ RscId || {RscId} <- RscIds ].
 
 delete_all([], _N, _Total, _Context) ->
     ok;
@@ -143,7 +143,7 @@ observe_category_hierarchy_save(#category_hierarchy_save{tree=New}, Context) ->
     case z_acl:is_allowed(insert, category, Context) of
         true ->
             case m_hierarchy:menu('$category', Context) of
-                New -> 
+                New ->
                     ok;
                 Old ->
                     % Check if any ids are added or deleted
@@ -178,14 +178,14 @@ observe_rsc_delete(#rsc_delete{id=Id, is_a=IsA}, Context) ->
             ok
     end.
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_categories,
                 parent=admin_structure,
                 label=?__("Categories", Context),
                 url={admin_category_sorter},
-                visiblecheck={acl, insert, category}}
-     
+                visiblecheck={acl, use, mod_admin_category}}
+
      |Acc].
 
 

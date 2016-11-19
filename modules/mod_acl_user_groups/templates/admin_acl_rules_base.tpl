@@ -36,20 +36,29 @@
 
 {% if m.acl.use.mod_acl_user_groups %}
     {% with m.acl.insert.acl_user_group as is_editable %}
-        
+
         {% if is_editable %}
             {% include "_admin_acl_rules_publish_buttons.tpl" %}
         {% endif %}
 
         <ul class="nav nav-tabs">
-            <li class="{% if kind == `rsc` %}active{% endif %}"><a href="{% url admin_acl_rules_rsc %}">{_ Content _}</a></li>
-            <li class="{% if kind == `module` %}active{% endif %}"><a href="{% url admin_acl_rules_module %}">{_ Modules _}</a></li>
-            <li class="{% if kind == `upload` %}active{% endif %}"><a href="{% url admin_acl_rules_upload %}">{_ File Uploads _}</a></li>
+            <li class="{% if kind == `rsc` %}active{% endif %}">
+                <a href="{% url admin_acl_rules_rsc %}">{_ Content _}</a>
+            </li>
+            <li class="{% if kind == `collab` %}active{% endif %}">
+                <a href="{% url admin_acl_rules_collab %}">{_ Collaboration groups _}</a>
+            </li>
+            <li class="{% if kind == `module` %}active{% endif %}">
+                <a href="{% url admin_acl_rules_module %}">{_ Modules _}</a>
+            </li>
+            <li class="{% if kind == `upload` %}active{% endif %}">
+                <a href="{% url admin_acl_rules_upload %}">{_ File uploads _}</a>
+            </li>
         </ul>
 
         {% block filter %}
         {% endblock %}
-        
+
         <div class="acl">
             {% block content_acl %}
             {% endblock %}

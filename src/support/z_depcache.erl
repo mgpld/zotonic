@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,16 +27,16 @@
 %% depcache exports
 -export([set/3, set/4, set/5, get/2, get_wait/2, get/3, get_subkey/3, flush/2, flush/1, size/1]).
 -export([memo/2, memo/3, memo/4, memo/5]).
--export([in_process/0, in_process/1, flush_process_dict/0]).
+-export([in_process_server/1, in_process/1, flush_process_dict/0]).
 
 
 -include_lib("zotonic.hrl").
 
 
 %% @doc Start depcache instance based on site configuration
-start_link(SiteProps) -> 
-    Host = proplists:get_value(host, SiteProps),
-    Name = z_utils:name_for_host(?MODULE, Host),
+start_link(SiteProps) ->
+    Site = proplists:get_value(site, SiteProps),
+    Name = z_utils:name_for_site(?MODULE, Site),
     depcache:start_link(Name, [{memory_max, proplists:get_value(depcache_memory_max, SiteProps)}]).
 
 
@@ -72,7 +72,7 @@ set(Key, Data, MaxAge, Depend, #context{depcache=Server}) ->
 
 
 %% @spec get_wait(Key, Context) -> {ok, Data} | undefined
-%% @doc Fetch the key from the cache, when the key does not exist then lock the entry and let 
+%% @doc Fetch the key from the cache, when the key does not exist then lock the entry and let
 %% the calling process insert the value. All other processes requesting the key will wait till
 %% the key is updated and receive the key's new value.
 get_wait(Key, #context{depcache=Server}) ->
@@ -116,8 +116,8 @@ size(#context{depcache=Server}) ->
 
 
 %% @doc Check if we use a local process dict cache
-in_process() ->
-    depcache:in_process().
+in_process_server(Server) ->
+    depcache:in_process_server(Server).
 
 %% @doc Enable or disable the in-process caching using the process dictionary
 in_process(Flag) ->

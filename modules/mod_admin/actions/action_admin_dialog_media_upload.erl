@@ -67,7 +67,7 @@ event(#submit{message={media_upload, EventProps}}, Context) ->
             Props = case proplists:get_value(id, EventProps) of
                         undefined ->
                             Lang = z_context:language(Context),
-                            Title = z_context:get_q("new_media_title", Context),
+                            Title = z_context:get_q(<<"new_media_title">>, Context),
                             NewTitle = case z_utils:is_empty(Title) of
                                            true -> OriginalFilename;
                                            false -> Title
@@ -91,11 +91,11 @@ event(#submit{message={media_upload, EventProps}}, Context) ->
     end;
 
 event(#submit{message={media_url, EventProps}}, Context) ->
-    Url = z_context:get_q("url", Context),
+    Url = z_context:get_q(<<"url">>, Context),
     Props = case proplists:get_value(id, EventProps) of
                 undefined ->
                     Props0 = [
-                        {title, z_context:get_q_validated("new_media_title_url", Context)}
+                        {title, z_context:get_q_validated(<<"new_media_title_url">>, Context)}
                     ],
                     add_content_group(EventProps, Props0, Context);
                 _ ->
@@ -177,7 +177,7 @@ error_message(file_not_allowed, Context) ->
 error_message(download_failed, Context) ->
     ?__("Failed to download the file.", Context);
 error_message(_R, Context) ->
-    ?zWarning(io_lib:format("Unknown upload error: ~p", [_R]), Context),
+    lager:warning("Unknown upload error: ~p", [_R]),
     ?__("Error uploading the file.", Context).
 
 % Add an extra argument to a postback / submit action.

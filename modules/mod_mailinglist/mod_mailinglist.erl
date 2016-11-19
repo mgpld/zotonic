@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -133,8 +133,8 @@ event(#postback{message={mailinglist_reset, Args}}, Context) ->
 
 %% @doc Handle upload of a new recipients list
 event(#submit{message={mailinglist_upload,[{id,Id}]}}, Context) ->
-    #upload{tmpfile=TmpFile} = z_context:get_q_validated("file", Context),
-    IsTruncate = z_convert:to_bool(z_context:get_q("truncate", Context)),
+    #upload{tmpfile=TmpFile} = z_context:get_q_validated(<<"file">>, Context),
+    IsTruncate = z_convert:to_bool(z_context:get_q(<<"truncate">>, Context)),
     case import_file(TmpFile, IsTruncate, Id, Context) of
         ok ->
             z_render:wire([{dialog_close, []}, {reload, []}], Context);
@@ -144,9 +144,9 @@ event(#submit{message={mailinglist_upload,[{id,Id}]}}, Context) ->
 
 %% @doc Handle the test-sending of a page to a single address.
 event(#submit{message={mailing_testaddress, [{id, PageId}]}}, Context) ->
-    Email = z_context:get_q_validated("email", Context),
+    Email = z_context:get_q_validated(<<"email">>, Context),
     z_notifier:notify(#mailinglist_mailing{list_id={single_test_address, Email}, page_id=PageId}, Context),
-    Context1 = z_render:growl(?__("Sending the page to ", Context) ++ Email ++ "...", Context),
+    Context1 = z_render:growl([?__("Sending the page to", Context), " ", Email, "..."], Context),
     z_render:wire([{dialog_close, []}], Context1);
 
 
@@ -165,14 +165,18 @@ event(#postback{message={resend_bounced, [{list_id, ListId}, {id, PageId}]}}, Co
 %% @doc Combine lists
 event(#submit{message={mailinglist_combine,[{id,Id}]}}, Context) ->
     lager:warning("Id: ~p", [Id]),
-    TargetId = z_convert:to_integer(z_context:get_q("list_id", Context)),
-    Operation = z_convert:to_atom(z_context:get_q("operation", Context)),
+    TargetId = z_convert:to_integer(z_context:get_q(<<"list_id">>, Context)),
+    Operation = operation(z_context:get_q(<<"operation">>, Context)),
     case m_mailinglist:recipient_set_operation(Operation, Id, TargetId, Context) of
         ok ->
             z_render:wire([{dialog_close, []}, {reload, []}], Context);
         {error, Msg} ->
             z_render:growl(Msg, "error", true, Context)
     end.
+
+operation(<<"union">>) -> union;
+operation(<<"subtract">>) -> subtract;
+operation(<<"intersection">>) -> intersection.
 
 %%====================================================================
 %% API
@@ -248,7 +252,7 @@ handle_call(Message, _From, State) ->
 handle_cast({#mailinglist_mailing{list_id=ListId, page_id=PageId}, SenderContext}, State) ->
 	send_mailing(ListId, PageId, SenderContext),
 	{noreply, State};
-	
+
 %% @doc Trap unknown casts
 handle_cast(Message, State) ->
     {stop, {unknown_cast, Message}, State}.
@@ -259,7 +263,7 @@ handle_cast(Message, State) ->
 %% @doc Poll the database for scheduled mailings.
 handle_info(poll, State) ->
     poll_scheduled(z_acl:sudo(State#state.context)),
-    z_utils:flush_message(poll),    
+    z_utils:flush_message(poll),
     {noreply, State};
 
 %% @doc Handling all non call/cast messages
@@ -311,7 +315,7 @@ poll_scheduled(Context) ->
 		undefined ->
 			ok
 	end.
-	
+
 
 %% @doc Send the page to the mailinglist.
 send_mailing(ListId, PageId, Context) ->
@@ -345,17 +349,17 @@ send_mailing_process(ListId, Recipients, PageId, Context) ->
         send(m_rsc:p_no_acl(Id, email_raw, Context), From, [{recipient_id,Id}|Options], Context);
     send(Email, From, Options, Context) ->
         case z_convert:to_list(z_string:trim(Email)) of
-            [] -> 
+            [] ->
                 skip;
             Email1 ->
                 Id = proplists:get_value(id, Options),
                 Attachments = mod_mailinglist:page_attachments(Id, Context),
-                z_email_server:send(#email{to=Email1, 
+                z_email_server:send(#email{to=Email1,
                                            from=From,
-                                           html_tpl={cat, "mailing_page.tpl"}, 
-                                           vars=[{email,Email1}|Options], 
+                                           html_tpl={cat, "mailing_page.tpl"},
+                                           vars=[{email,Email1}|Options],
                                            attachments=Attachments
-                                    }, 
+                                    },
                                     Context)
         end.
 
@@ -373,14 +377,14 @@ as_upload(Id, Context) ->
              filename=proplists:get_value(original_filename, M)
            }.
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_mailinglist,
                 parent=admin_content,
                 label=?__("Mailing lists", Context),
                 url={admin_mailinglist},
                 visiblecheck={acl, use, ?MODULE}}
-     
+
      |Acc].
 
 

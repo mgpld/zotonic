@@ -11,9 +11,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -60,7 +60,7 @@ url(Files, Context) ->
 %% @doc Generate a url with the given files.
 url(Files, Args, Context) ->
     {Css, CssPath, Js, JsPath} = collapsed_paths(Files),
-    CssFiles = url_for(Css, CssPath, <<".css">>, Args, Context), 
+    CssFiles = url_for(Css, CssPath, <<".css">>, Args, Context),
     JsFiles = url_for(Js, JsPath, <<".js">>, Args, Context),
     CssFiles ++ JsFiles.
 
@@ -74,7 +74,7 @@ tag1(Files, Args, Context) ->
             {Css, CssPath, Js, JsPath} = collapsed_paths(Files),
             NoLangContext = z_context:set_language(undefined, Context),
             [link_element(Css, CssPath, Args, NoLangContext),
-                script_element(Js, JsPath, Args, NoLangContext)]
+             script_element(Js, JsPath, Args, NoLangContext)]
     end,
     case z_module_manager:active(mod_development, Context) of
         false ->
@@ -87,7 +87,7 @@ tag1(Files, Args, Context) ->
 link_element(_Css, [], _Args, _Context) ->
     [];
 link_element(Css, CssPath, Args, Context) ->
-    TitleAttr = case proplists:get_value(title, Args) of
+    TitleAttr = case proplists:get_value(title, Args, undefined) of
            undefined -> [];
            TitleValue -> [<<" title=\"">>, TitleValue, $"]
            end,
@@ -103,23 +103,23 @@ script_element(Js, JsPath, Args, Context) ->
     iolist_to_binary([<<"<script src=\"">>, JsUrl, <<"\" type=\"text/javascript\"></script>">>]).
 
 url_for_args(Files, JoinedPath, Extension, Args, Context) ->
-    Args1 = case proplists:get_bool(use_absolute_url, Args) of
+    AbsUrlArg = case proplists:get_value(use_absolute_url, Args, false) of
         false -> [];
         true -> [use_absolute_url]
     end,
     Checksum = checksum(Files, Context),
-    [$/|Path] = JoinedPath,
-    [{star, [Path, ?SEP, integer_to_list(Checksum), Extension]} | Args1].
+    <<$/,Path/binary>> = iolist_to_binary(JoinedPath),
+    [{star, [Path, ?SEP, integer_to_binary(Checksum), Extension]} | AbsUrlArg].
 
 %% @doc Make the collapsed paths for the js and the css files.
 collapsed_paths(Files) ->
-    {Css, Js} = split_css_js([ z_convert:to_list(F) || F <- Files]),
+    {Css, Js} = split_css_js([ z_convert:to_binary(F) || F <- Files]),
     CssSort = collapse_dirs(Css),
     JsSort= collapse_dirs(Js),
-    CssPath = string:join(CssSort, [?SEP]),
-    JsPath = string:join(JsSort, [?SEP]),
+    CssPath = z_utils:combine(?SEP, CssSort),
+    JsPath = z_utils:combine(?SEP, JsSort),
     {Css, CssPath, Js, JsPath}.
-    
+
 
 %% @doc Given the filepath of the request, return all files collapsed in the path.
 %% @spec uncollapse(string()|binary()) -> list()
@@ -135,7 +135,7 @@ add_extension([File]) ->
 add_extension([TimestampExt | Files]) ->
     Extension = filename:extension(TimestampExt),
     lists:foldl(fun(F, Acc) -> [add_extension_1(F,Extension)|Acc] end, [], Files).
-    
+
 add_extension_1(F, Ext) when is_binary(F) ->
     Ext1 = z_convert:to_binary(Ext),
     <<F/binary, Ext1/binary>>;
@@ -174,40 +174,40 @@ uncollapse_dirs([File|Rest], Dirname, Acc) when is_binary(File) ->
 collapse_dirs([]) ->
     [];
 collapse_dirs([File|Files]) ->
-    collapse_dirs(Files, string:tokens(dirname(File), "/"), [ensure_abspath(filename:rootname(File))]).
+    collapse_dirs(Files, binary:split(dirname(File), <<"/">>, [global]), [ensure_abspath(filename:rootname(File))]).
 
     collapse_dirs([], _PrevTk, Acc) ->
         lists:reverse(Acc);
     collapse_dirs([File|Files], PrevTk, Acc) ->
-        FileTk = string:tokens(dirname(File), "/"),
+        FileTk = binary:split(dirname(File), <<"/">>, [global]),
         case drop_prefix(PrevTk, FileTk) of
             {[], []} ->
                 % File is in the same directory
                 collapse_dirs(Files, FileTk, [filename:rootname(filename:basename(File)) | Acc ]);
             {[], B} ->
                 % File is in a subdirectory from A
-                RelFile = string:join(B, "/") ++ [$/ | filename:rootname(filename:basename(File))],
+                RelFile = [ z_utils:combine($/, B), $/, filename:rootname(filename:basename(File))],
                 collapse_dirs(Files, FileTk, [RelFile | Acc]);
             {_A, _B} ->
                 % File is in a (sub-)directory higher from the previous one, reset to top level
                 collapse_dirs(Files, FileTk, [ensure_abspath(filename:rootname(File)) | Acc ])
         end.
-    
+
     drop_prefix([A|RestA], [A|RestB]) ->
         drop_prefix(RestA, RestB);
     drop_prefix(A, B) ->
         {A, B}.
-        
+
     dirname(F) ->
         case filename:dirname(F) of
-            "." -> [];
+            <<".">> -> [];
             Dirname -> Dirname
         end.
 
-    ensure_abspath([$/ | _] = File) ->
+    ensure_abspath(<<$/, _/binary>> = File) ->
         File;
     ensure_abspath(File) ->
-        [$/ | File].
+        <<$/, File/binary>>.
 
 
 %% @doc Calculate a checksum of the mod times of the list of files.
@@ -223,7 +223,7 @@ checksum([File|Files], State, Context) ->
             checksum(Files, State1, Context);
         {error, enoent} ->
             %% Not found, skip the file
-            lager:warning("[~s] lib file not found: ~s", [z_context:site(Context), File]),
+            lager:warning("lib file not found: ~s", [File]),
             checksum(Files, State, Context)
     end.
 
@@ -234,7 +234,7 @@ last_modified(FilePath) ->
     end.
 
 dt_checksum({{Year, Month, Day}, {Hour, Minute, Second}}, State) ->
-    fletcher_sum(Year, fletcher_sum(Month, fletcher_sum(Day, 
+    fletcher_sum(Year, fletcher_sum(Month, fletcher_sum(Day,
         fletcher_sum(Hour, fletcher_sum(Minute, fletcher_sum(Second, State)))))).
 
 %% Calculation of Fletcher32 checksum
@@ -248,14 +248,14 @@ fletcher_sum(Val, {Sum1, Sum2}) ->
 %% @doc Split the list of files in js and css files, remove leading '/'
 split_css_js(Files) ->
     split_css_js(Files, [], []).
-    
+
     split_css_js([], CssAcc, JsAcc) ->
         {lists:reverse(CssAcc), lists:reverse(JsAcc)};
-    split_css_js([[$/|File]|Rest], CssAcc, JsAcc) ->
+    split_css_js([<<$/,File/binary>>|Rest], CssAcc, JsAcc) ->
         split_css_js([File|Rest], CssAcc, JsAcc);
     split_css_js([File|Rest], CssAcc, JsAcc) ->
         case filename:extension(File) of
-            ".css" -> split_css_js(Rest, [File|CssAcc], JsAcc);
-            ".js"  -> split_css_js(Rest, CssAcc, [File|JsAcc]);
+            <<".css">> -> split_css_js(Rest, [File|CssAcc], JsAcc);
+            <<".js">>  -> split_css_js(Rest, CssAcc, [File|JsAcc]);
             _ -> split_css_js(Rest, CssAcc, JsAcc)
         end.

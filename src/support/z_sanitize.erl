@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -68,37 +68,85 @@ context_options(Context) ->
     [
         {elt_extra, m_config:get_value(site, html_elt_extra, <<"embed,iframe,object,script">>, Context)},
         {attr_extra, m_config:get_value(site, html_attr_extra, <<"data,allowfullscreen,flashvars,frameborder,scrolling,async,defer">>, Context)},
-        {element, fun(Element, Stack, _Opts) -> sanitize_element(Element, Stack, Context) end}
+        {element, fun(Element, Stack, Opts) -> sanitize_element(Element, Stack, Opts, Context) end}
     ].
 
 default_options() ->
     [
         {elt_extra, <<>>},
         {attr_extra, <<>>},
-        {element, fun(Element, _Stack, _Opts) -> Element end}
+        {element, fun sanitize_element_opts/3}
     ].
 
 
-sanitize_element(Element, Stack, Context) ->
+sanitize_element(Element, Stack, Opts, Context) ->
     case z_notifier:foldl(#sanitize_element{element=Element, stack=Stack}, Element, Context) of
         Element ->
-            sanitize_element_1(Element, Stack, Context);
+            sanitize_element_1(Element, Stack, Opts, Context);
         NewElement ->
             NewElement
     end.
 
-sanitize_element_1({<<"iframe">>, Props, _Inner}, _Stack, Context) ->
+sanitize_element_1({<<"iframe">>, Props, _Inner}, _Stack, _Opts, Context) ->
     sanitize_iframe(Props, Context);
-sanitize_element_1({<<"embed">>, Props, _Inner}, _Stack, Context) ->
+sanitize_element_1({<<"embed">>, Props, _Inner}, _Stack, _Opts, Context) ->
     sanitize_embed(Props, Context);
-sanitize_element_1({<<"object">>, Props, []}, _Stack, Context) ->
+sanitize_element_1({<<"object">>, Props, []}, _Stack, _Opts, Context) ->
     sanitize_object(Props, Context);
-sanitize_element_1({<<"object">>, _Props, Inner}, _Stack, _Context) ->
+sanitize_element_1({<<"object">>, _Props, Inner}, _Stack, _Opts, _Context) ->
     Inner;
-sanitize_element_1({<<"script">>, Props, _Inner}, _Stack, Context) ->
+sanitize_element_1({<<"script">>, Props, _Inner}, _Stack, _Opts, Context) ->
     sanitize_script(Props, Context);
-sanitize_element_1(Element, _Stack, _Context) ->
+sanitize_element_1(Element, Stack, Opts, _Context) ->
+    sanitize_element_opts(Element, Stack, Opts).
+
+
+sanitize_element_opts({<<"a">>, Attrs, Inner} = Element, _Stack, _Opts) ->
+    case proplists:is_defined(<<"target">>, Attrs) of
+        true ->
+            Attrs1 = [ Attr || Attr = {K,_} <- Attrs, K =/= <<"rel">> ],
+            Attrs2 = [ {<<"rel">>, <<"noopener noreferrer">>} | Attrs1 ],
+            {<<"a">>, Attrs2, Inner};
+        false ->
+            Element
+    end;
+sanitize_element_opts({comment, <<" [", _/binary>> = Comment} = Element, _Stack, _Opts) ->
+    % Conditionals by Microsoft Word: <!-- [if (..)] (..) [endif]-->
+    case binary:last(Comment) of
+        $] -> <<>>;
+        _ -> Element
+    end;
+sanitize_element_opts({comment, <<"StartFragment">>}, _Stack, _Opts) ->
+    % Inserted by Microsoft Word: <!--StartFragment-->
+    <<>>;
+sanitize_element_opts({comment, <<"EndFragment">>}, _Stack, _Opts) ->
+    % Inserted by Microsoft Word: <!--EndFragment-->
+    <<>>;
+sanitize_element_opts({Tag, Attrs, Inner}, _Stack, _Opts) ->
+    Attrs1 = cleanup_element_attrs(Attrs),
+    {Tag, Attrs1, Inner};
+sanitize_element_opts(Element, _Stack, _Opts) ->
     Element.
+
+cleanup_element_attrs(Attrs) ->
+    lists:filtermap(fun cleanup_element_attr/1, Attrs).
+
+cleanup_element_attr({<<"class">>, Classes}) ->
+    Classes1 = binary:split(Classes, <<" ">>, [global]),
+    case lists:filter(fun is_acceptable_classname/1, Classes1) of
+        [] -> false;
+        Cs -> {true, {<<"class">>, iolist_to_binary(z_utils:combine(32, Cs))}}
+    end;
+cleanup_element_attr({<<"style">>, <<"mso-", _/binary>>}) ->
+    % This might need some extra parsing of the css.
+    % For now we just drop styles starting with a "mso-" selector.
+    false;
+cleanup_element_attr(_Attr) ->
+    true.
+
+is_acceptable_classname(<<"Mso", _/binary>>) -> false;
+is_acceptable_classname(<<>>) -> false;
+is_acceptable_classname(_) -> true.
 
 
 sanitize_script(Props, Context) ->
@@ -107,7 +155,7 @@ sanitize_script(Props, Context) ->
         {ok, Url} ->
             {<<"script">>, [{<<"src">>,Url} | proplists:delete(<<"src">>, Props)], []};
         false ->
-            lager:info("[~p] Dropped script with url ~p", [z_context:site(Context), Src]),
+            lager:info("Dropped script with url ~p", [Src]),
             <<>>
     end.
 
@@ -117,7 +165,7 @@ sanitize_iframe(Props, Context) ->
         {ok, Url} ->
             {<<"iframe">>, [{<<"src">>,Url} | proplists:delete(<<"src">>, Props)], []};
         false ->
-            lager:info("[~p] Dropped iframe url ~p", [z_context:site(Context), Src]),
+            lager:info("Dropped iframe url ~p", [Src]),
             <<>>
     end.
 
@@ -131,7 +179,7 @@ sanitize_object(Props, Context) ->
                 {ok, Url} ->
                     {<<"embed">>, [{<<"src">>,Url} | proplists:delete(<<"data">>, Props)], []};
                 false ->
-                    lager:info("[~p] Dropped object url ~p", [z_context:site(Context), Src]),
+                    lager:info("Dropped object url ~p", [Src]),
                     <<>>
             end
     end.
@@ -146,7 +194,7 @@ sanitize_embed(Props, Context) ->
                 {ok, Url} ->
                     {<<"embed">>, [{<<"src">>,Url} | proplists:delete(<<"src">>, Props)], []};
                 false ->
-                    lager:info("[~p] Dropped embed url ~p", [z_context:site(Context), Src]),
+                    lager:info("Dropped embed url ~p", [Src]),
                     <<>>
             end
     end.
@@ -253,6 +301,7 @@ wl(<<"www.tumblr.com/",  _/binary>> = Url) -> {ok, Url};
 wl(<<"assets.tumblr.com/",  _/binary>> = Url) -> {ok, Url};
 wl(<<"static.issuu.com/",  _/binary>> = Url) -> {ok, Url};
 wl(<<"e.issuu.com/",  _/binary>> = Url) -> {ok, Url};
+wl(<<"cdn.embedly.com/", _/binary>> = Url) -> {ok, Url};
 wl(Url) ->
     case lists:dropwhile(fun(Re) ->
                             re:run(Url, Re) =:= nomatch

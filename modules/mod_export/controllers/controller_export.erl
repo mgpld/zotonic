@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,76 +20,56 @@
 -author("Marc Worrell <marc@worrell.nl>").
 
 -export([
-    init/1,
-    service_available/2,
-    forbidden/2,
-    content_types_provided/2,
-    charsets_provided/2,
-    
-    do_export/2
+    forbidden/1,
+    content_types_provided/1,
+    charsets_provided/1,
+
+    do_export/1
 ]).
 
--include_lib("controller_webmachine_helper.hrl").
 -include_lib("zotonic.hrl").
 
-init(DispatchArgs) -> {ok, DispatchArgs}.
-
-service_available(ReqData, DispatchArgs) when is_list(DispatchArgs) ->
-    Context  = z_context:new(ReqData, ?MODULE),
-    z_context:lager_md(Context),
-    Context1 = z_context:set(DispatchArgs, Context),
-    ?WM_REPLY(true, Context1).
-
-forbidden(ReqData, Context) ->
-    Context1 = ?WM_REQ(ReqData, Context),
-    Context2 = z_context:ensure_qs(z_context:continue_session(Context1)),
+forbidden(Context) ->
+    Context2 = z_context:ensure_qs(z_context:continue_session(Context)),
     z_context:lager_md(Context2),
     Dispatch = z_context:get(zotonic_dispatch, Context2),
-    case z_notifier:first(#export_resource_visible{dispatch=Dispatch}, Context2) of
-        undefined -> ?WM_REPLY(false, Context2);
-        {ok, true} -> ?WM_REPLY(false, Context2);
-        {ok, false} -> ?WM_REPLY(true, Context2)
+    case z_acl:is_allowed(use, mod_export, Context2) of
+        true ->
+            case z_notifier:first(#export_resource_visible{dispatch=Dispatch}, Context2) of
+                undefined -> {false, Context2};
+                true -> {false, Context2};
+                false -> {true, Context2}
+            end;
+        false ->
+            {true, Context2}
     end.
 
-content_types_provided(ReqData, Context0) ->
-    Context = ?WM_REQ(ReqData, Context0),
+content_types_provided(Context) ->
     Dispatch = z_context:get(zotonic_dispatch, Context),
     case controller_export_resource:get_content_type(undefined, Dispatch, Context) of
         {ok, ContentType} ->
-            Context2 = z_context:set(content_type_mime, ContentType, Context),
-            ?WM_REPLY([{ContentType, do_export}], Context2);
+            {[{ContentType, do_export}], Context};
         {error, Reason} = Error ->
-            lager:error("~p: mod_export error when fetching content type for ~p ~p",
-                        [z_context:site(Context), Dispatch, Reason]),
+            lager:error("mod_export error when fetching content type for ~p ~p", [Dispatch, Reason]),
             throw(Error)
     end.
 
-charsets_provided(ReqData, Context) ->
-    {[{"utf-8", fun(X) -> X end}], ReqData, Context}.
-
-do_export(ReqData, Context0) ->
-    Context = ?WM_REQ(ReqData, Context0),
-    Stream = {stream, {<<>>, fun() -> controller_export_resource:do_header(Context) end}},
-    Context1 = set_filename(Context),
-    ?WM_REPLY(Stream, Context1).
+charsets_provided(Context) ->
+    {[<<"utf-8">>], Context}.
 
 
-set_filename(Context) ->
-    ContentType = z_context:get(content_type_mime, Context),
+do_export(Context) ->
+    ContentType = cowmachine_req:resp_content_type(Context),
     Dispatch = z_context:get(zotonic_dispatch, Context),
-    case z_notifier:first(#export_resource_filename{
-                                dispatch=Dispatch,
-                                content_type=ContentType}, Context)
-    of
-        undefined ->
-            Extension = case mimetypes:mime_to_exts(ContentType) of
-                            undefined -> "bin";
-                            Exts -> binary_to_list(hd(Exts))
-                        end, 
-            Filename = "export."++Extension,
-            z_context:set_resp_header("Content-Disposition", "attachment; filename="++Filename, Context);
-        {ok, Filename} ->
-            Filename1 = z_convert:to_list(Filename),
-            z_context:set_resp_header("Content-Disposition", "attachment; filename="++Filename1, Context)
-    end.
+    StreamOpts = [
+        {dispatch, Dispatch},
+        {is_query, z_convert:to_bool(z_context:get(is_query, Context))},
+        {is_raw, z_convert:to_bool(z_context:get_q(raw, Context))}
+    ],
+    Stream = export_encoder:stream(undefined, ContentType, StreamOpts, Context),
+    Context1 = set_filename(ContentType, Dispatch, Context),
+    {Stream, Context1}.
+
+set_filename(ContentType, Dispatch, Context) ->
+    controller_export_resource:set_filename(undefined, ContentType, Dispatch, Context).
 

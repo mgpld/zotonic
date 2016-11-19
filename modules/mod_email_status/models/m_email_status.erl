@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,12 +28,13 @@
     get/2,
 
     clear_status/3,
+    clear_status/2,
 
     mark_received/2,
 
     mark_read/2,
     mark_sent/3,
-    mark_failed/4,    
+    mark_failed/4,
     mark_bounced/2,
 
     install/1
@@ -75,7 +76,8 @@ clear_status(Email, Context) ->
             set is_valid = true,
                 recent_error_ct = 0,
                 modified = now()
-            where email = $1",
+            where email = $1
+              and (is_valid = false or recent_error_ct > 0)",
             [Email],
             Context),
     ok.
@@ -93,7 +95,7 @@ is_valid(Email0, Context) ->
                     Context).
 
 is_valid_nocache(Email, Context) ->
-    case z_db:q1("select is_valid from email_status where email = $1", 
+    case z_db:q1("select is_valid from email_status where email = $1",
                  [Email],
                  Context)
     of
@@ -111,7 +113,7 @@ get(Email0, Context) ->
                    Context).
 
 
-%% @doc Increment the email receive counter. This doesn't say anything about the validity 
+%% @doc Increment the email receive counter. This doesn't say anything about the validity
 %%      of the email address, only that we received an email with this envelope address.
 -spec mark_received(binary(), #context{}) -> ok.
 mark_received(Email0, Context) ->
@@ -204,12 +206,12 @@ mark_sent(Email0, true, Context) ->
         set is_valid = true,
             modified = now()
         where email = $1
-          and bounce < sent 
+          and bounce < sent
           and (error < sent or not error_is_final)",
         [Email],
         Context)
     of
-        1 -> 
+        1 ->
             maybe_notify(Email, IsValid, true, true, Context),
             ok;
         0 ->
@@ -243,7 +245,7 @@ mark_failed(Email0, IsFinal, Status, Context) ->
                         Ctx)
                     of
                         0 ->
-                            z_db:q("insert into email_status 
+                            z_db:q("insert into email_status
                                         (email, is_valid, error_is_final, error, error_status,
                                          error_ct, recent_error_ct, modified)
                                     values ($1, false, $2, now(), $3, 1, $4, now())",

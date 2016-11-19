@@ -40,7 +40,6 @@
     pid_observe_development_reload/3,
     pid_observe_development_make/3,
     observe_admin_menu/3,
-    observe_module_activate/2,
     % internal (for spawn)
     page_debug_stream/3,
     page_debug_stream_loop/3
@@ -49,7 +48,7 @@
 -include_lib("zotonic.hrl").
 -include_lib("modules/mod_admin/include/admin_menu.hrl").
 
--record(state, {host}).
+-record(state, { site :: atom() | undefined }).
 
 % Interval for checking for new and/or changed files.
 -define(DEV_POLL_INTERVAL, 10000).
@@ -79,15 +78,6 @@ debug_stream(TargetId, What, Context) ->
 observe_debug_stream(#debug_stream{target=TargetId, what=What}, Context) ->
     start_debug_stream(TargetId, What, Context).
 
-%% @doc When activating a module while developing, call Module:manage_schema(install, Context).
-observe_module_activate(#module_activate{module=Module}, Context) ->
-    case z_module_manager:reinstall(Module, Context) of
-        ok ->
-            lager:info("[~p] Reinstalled module: ~p", [z_context:site(Context), Module]);
-        nop ->
-            nop
-    end.
-
 pid_observe_development_reload(Pid, development_reload, _Context) ->
     gen_server:cast(Pid, development_reload).
 
@@ -106,12 +96,12 @@ pid_observe_development_make(Pid, development_make, _Context) ->
 %% @doc Initiates the server.
 init(Args) ->
     {context, Context} = proplists:lookup(context, Args),
-    Host = z_context:site(Context),
+    Site = z_context:site(Context),
     lager:md([
-            {site, Host},
+            {site, Site},
             {module, ?MODULE}
         ]),
-    {ok, #state{host=Host}}.
+    {ok, #state{site=Site}}.
 
 
 %% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -193,13 +183,13 @@ page_debug_stream(TargetId, What, Context) ->
         end.
 
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_development,
                 parent=admin_system,
                 label=?__("Development", Context),
                 url={admin_development},
                 visiblecheck={acl, use, mod_development}}
-     
+
      |Acc].
 

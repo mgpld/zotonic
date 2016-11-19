@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,7 +28,7 @@
 
 -include("zotonic.hrl").
 
--define(PASSWORD_DOTS, "••••••").
+-define(PASSWORD_DOTS, <<"••••••">>).
 
 render_action(TriggerId, TargetId, Args, Context) ->
     Id = z_convert:to_integer(proplists:get_value(id, Args)),
@@ -42,11 +42,11 @@ render_action(TriggerId, TargetId, Args, Context) ->
 %% @spec event(Event, Context1) -> Context2
 event(#postback{message={set_username_password, Id, OnDelete}}, Context) ->
     {Username, Password} = case m_identity:get_username(Id, Context) of
-                                undefined -> {[], []};
+                                undefined -> {<<>>, <<>>};
                                 Name -> {Name, ?PASSWORD_DOTS}
                             end,
     Vars = [
-        {delegate, atom_to_list(?MODULE)},
+        {delegate, atom_to_binary(?MODULE, 'utf8')},
         {id, Id},
         {username, Username},
         {password, Password},
@@ -55,10 +55,10 @@ event(#postback{message={set_username_password, Id, OnDelete}}, Context) ->
     z_render:dialog(?__("Set username / password", Context), "_action_dialog_set_username_password.tpl", Vars, Context);
 
 event(#submit{message=set_username_password}, Context) ->
-    Id = z_convert:to_integer(z_context:get_q("id", Context)),
-    Username = z_context:get_q_validated("new_username", Context),
-    Password = z_context:get_q_validated("new_password", Context),
-    
+    Id = z_convert:to_integer(z_context:get_q(<<"id">>, Context)),
+    Username = z_context:get_q_validated(<<"new_username">>, Context),
+    Password = z_context:get_q_validated(<<"new_password">>, Context),
+
     case z_acl:is_allowed(use, mod_admin_identity, Context) orelse z_acl:user(Context) == Id of
         true ->
             case Password of
@@ -79,7 +79,7 @@ event(#submit{message=set_username_password}, Context) ->
                             %% Assume duplicate key violation, user needs to pick another username.
                             z_render:growl_error(?__("The username is already in use, please try another.", Context), Context);
                         ok ->
-                            case z_convert:to_bool(z_context:get_q("send_welcome", Context)) of
+                            case z_convert:to_bool(z_context:get_q(<<"send_welcome">>, Context)) of
                             true ->
                                 Vars = [{id, Id},
                                         {username, Username},

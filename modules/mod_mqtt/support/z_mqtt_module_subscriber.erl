@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,6 +37,7 @@ start_link({_Topic, _Qos, _MFA, _Pid, _Site} = Args) ->
 
 
 init({Topic, Qos, MFA, Pid, Site}) ->
+    erlang:process_flag(trap_exit, true),
     maybe_link(Pid),
     ok = emqtt_router:subscribe({Topic,Qos}, self()),
     {ok, #state{
@@ -63,7 +64,11 @@ handle_info({route, Message}, State) ->
         {M,F,A} ->
             _ = M:F(Message, A, z_context:new(State#state.site))
     end,
-    {noreply, State}.
+    {noreply, State};
+handle_info({'EXIT', _From, _Reason}, State) ->
+    %% The module for which we handle the mqtt subscription has either crashed
+    %% or stopped. Stop normally we don't have to route messages anymore.
+    {stop, normal, State}.
 
 terminate(_Reason, _State) ->
     ok.

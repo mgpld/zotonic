@@ -2,6 +2,8 @@
 {% wire id=#form type="submit" postback={user_add on_success=on_success} delegate=delegate %}
 <form id="{{ #form }}" method="POST" action="postback" class="form form-horizontal">
 
+    {% include "_password_autocomplete_off.tpl" %}
+
     <h4>{_ Name and e-mail address _}</h4>
     <p>
 	    {_ Give the name and the e-mail address of the new user. A <em>person</em> page will be created for this user. _}
@@ -45,7 +47,7 @@
             <select class="form-control" id="{{ #category }}" name="category">
                 {% with m.config.mod_admin_identity.new_user_category.value as default_category %}
                     {% for category in m.category.person.tree_flat %}
-                        {% if m.acl_rule.can_insert[category] %}
+                        {% if m.acl.is_allowed.insert[category] %}
                             <option value="{{ category.id.name }}" {% if category.id.name == default_category %}selected{% endif %}>
                                 {{ category.indent }} {{ category.id.title }}
                             </option>
@@ -69,7 +71,7 @@
     <input style="position:absolute;top:-9999px;" type="text" id="fake-username" name="fake-username" class="nosubmit" value="" />
     <input style="position:absolute;top:-9999px;" type="password" id="fake-password" name="fake-password" class="nosubmit" value="" />
     <!-- End Safari -->
-	
+
     <div class="form-group row">
 	    <label class="control-label col-md-3" for="new_username">{_ Username _}</label>
         <div class="col-md-9">

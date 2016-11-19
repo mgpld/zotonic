@@ -31,12 +31,21 @@
  {lager,
   [{handlers,
     [
-      {lager_console_backend, info},
-      {lager_file_backend, [{file, "priv/log/error.log"},   {level, error}]},
-      {lager_file_backend, [{file, "priv/log/console.log"}, {level, info}]}
+      {lager_console_backend, [info, {lager_default_formatter, [time, color, " [", severity, "] ", {site, [site, " "], ""}, {module, [module, ":", line, " "], ""}, message, "\n"]}]},
+      {lager_file_backend, [{file, "priv/log/error.log"}, {level, error}, {formatter_config, [date, " ", time, " [", severity, "] ", {site, [site, " "], ""}, {pid, ""}, {module, [{pid, ["@"], ""}, module, {function, [":", function], ""}, {line, [":", line], ""}], ""}, " ", message, "\n"] }]},
+      {lager_file_backend, [{file, "priv/log/console.log"}, {level, info}, {formatter_config, [date, " ", time, " [", severity, "] ", {site, [site, " "], ""}, {pid, ""}, {module, [{pid, ["@"], ""}, module, {function, [":", function], ""}, {line, [":", line], ""}], ""}, " ", message, "\n"] }]}
     ]},
    {crash_log, "priv/log/crash.log"}
   ]},
+
+ {ssl,
+  [
+%%% The number of maximum number of ssl sessions cached by the server. Increase if you
+%%% of a lot of incoming connections.
+   {session_cache_server_max, 20000},
+%%% The maximum time the client side information is stored in the cache (in seconds)
+   {session_lifetime, 300}
+ ]},
 
  {webzmachine,
   [
@@ -59,11 +68,14 @@
    %% {perf_log_dir, "priv/log/perf/"},
 
 %%% Location of wmtrace logs (defaults to "priv/wmtrace" if not specified).
-   {wmtrace_dir, "priv/log/wmtrace/"},
+   {wmtrace_dir, "priv/log/wmtrace/"}
 
-%%% Which sendfile command to use: disable, yaws, erlang;
-%%% disabled by default because both erlang and yaws implementations are buggy
-   {use_sendfile, disable}
+  ]},
 
+ {setup,
+  [
+   {data_dir, "priv/data"},
+   {log_dir,  "priv/log"}
   ]}
+
 ].

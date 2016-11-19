@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -46,8 +46,8 @@ start_link({convert_v1, _Id, _Medium, _Upload, _QueueFilename, _PickledContext},
                                                 % Flush old convert queue
     ok;
 start_link({convert_v2, _Id, _Medium, _Upload, QueueFilename, _ProcessNr, _PickledContext} = Args, Context) ->
-    gen_server:start_link({via, z_proc, {video_convert, z_convert:to_binary(QueueFilename)}}, 
-                          ?MODULE, 
+    gen_server:start_link({via, z_proc, {video_convert, z_convert:to_binary(QueueFilename)}},
+                          ?MODULE,
                           [Args, z_context:site(Context)],
                           []).
 
@@ -64,7 +64,7 @@ init([{convert_v2, Id, Medium, Upload, QueueFilename, ProcessNr, PickledContext}
            }}.
 
 handle_call(_Msg, _From, State) ->
-    {reply, {error, uknown_msg}, State}.
+    {reply, {error, unknown_msg}, State}.
 
 handle_cast(convert, State) ->
     Context = z_context:depickle(State#state.pickled_context),
@@ -171,7 +171,7 @@ video_convert_1(QueuePath, Orientation, _Mime, Context) ->
                   undefined -> ?CMDLINE;
                   <<>> -> ?CMDLINE;
                   [] -> ?CMDLINE;
-                  CmdLineCfg -> z_conver:to_list(CmdLineCfg)
+                  CmdLineCfg -> z_convert:to_list(CmdLineCfg)
               end,
     Logging = z_convert:to_bool(m_config:get_value(mod_video, logging, Context)),
     TmpFile = z_tempfile:new(),
@@ -200,7 +200,7 @@ video_convert_1(QueuePath, Orientation, _Mime, Context) ->
                                      {error, convert};
                                  _ ->
                                      {ok, TmpFile}
-                             end; 
+                             end;
                          Other ->
                              lager:warning("Video convert error: ~p [queue: ~p]", [Other, QueuePath]),
                              {error, Other}

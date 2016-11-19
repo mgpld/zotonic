@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -45,14 +45,19 @@ observe_identity_verified(#identity_verified{user_id=RscId, type=Type, key=Key},
 
 observe_identity_password_match(#identity_password_match{password=Password, hash=Hash}, _Context) ->
     case m_identity:hash_is_equal(Password, Hash) of
-        true -> 
-            ok;
+        true ->
+            case m_identity:needs_rehash(Hash) of
+                true ->
+                    {ok, rehash};
+                false ->
+                    ok
+            end;
         false ->
             {error, password}
     end.
-    
 
-observe_rsc_update(#rsc_update{action=Action, id=RscId, props=Pre}, {_Modified, Post} = Acc, Context) 
+
+observe_rsc_update(#rsc_update{action=Action, id=RscId, props=Pre}, {_Modified, Post} = Acc, Context)
     when Action =:= insert; Action =:= update ->
     case z_context:get(is_m_identity_update, Context) of
         true ->
@@ -62,7 +67,7 @@ observe_rsc_update(#rsc_update{action=Action, id=RscId, props=Pre}, {_Modified, 
                 {A, A} -> Acc;
                 {_Old, undefined} -> Acc;
                 {_Old, <<>>} -> Acc;
-                {_Old, New} -> 
+                {_Old, New} ->
                     ensure(RscId, email, z_html:unescape(New), Context),
                     Acc
             end
@@ -74,14 +79,14 @@ observe_rsc_update(#rsc_update{}, Acc, _Context) ->
 observe_search_query({search_query, Req, OffsetLimit}, Context) ->
     search(Req, OffsetLimit, Context).
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_user,
                 parent=admin_auth,
                 label=?__("Users", Context),
                 url={admin_user},
                 visiblecheck={acl, use, mod_admin_identity}}
-     
+
      |Acc].
 
 
@@ -89,7 +94,7 @@ observe_admin_menu(admin_menu, Acc, Context) ->
 event(#postback{message={identity_verify_confirm, Args}}, Context) ->
     {idn_id, IdnId} = proplists:lookup(idn_id, Args),
     case m_identity:get(IdnId, Context) of
-        undefined -> 
+        undefined ->
             z_render:growl_error("Sorry, can not find this identity.", Context);
         Idn ->
             z_render:wire({confirm, [
@@ -129,7 +134,7 @@ event(#postback{message={identity_verify_check, Args}}, Context) ->
 event(#postback{message={identity_verify_preferred, Args}}, Context) ->
     {id, RscId} = proplists:lookup(id, Args),
     {type, Type} = proplists:lookup(type, Args),
-    Key = z_context:get_q("key", Context), 
+    Key = z_context:get_q(<<"key">>, Context),
     case m_rsc:is_editable(RscId, Context) of
         true ->
             case Type of
@@ -170,7 +175,7 @@ event(#postback{message={identity_delete, Args}}, Context) ->
             case m_identity:get(IdnId, Context) of
                 undefined -> nop;
                 Idn -> {rsc_id, RscId} = proplists:lookup(rsc_id, Idn)
-            end, 
+            end,
             {ok, _} = m_identity:delete(IdnId, Context),
             z_render:wire({mask, [{target, ListId}]}, Context);
         false ->
@@ -183,8 +188,8 @@ event(#postback{message={identity_add, Args}}, Context) ->
     case m_rsc:is_editable(RscId, Context) of
         true ->
             Type = z_convert:to_atom(proplists:get_value(type, Args, email)),
-            case z_convert:to_binary(z_string:trim(z_context:get_q("idn-key", Context, []))) of
-                <<>> -> 
+            case z_string:trim(z_context:get_q(<<"idn-key">>, Context, <<>>)) of
+                <<>> ->
                     Context;
                 Key ->
                     KeyNorm = m_identity:normalize_key(Type, Key),
@@ -214,15 +219,10 @@ event(#postback{message={identity_add, Args}}, Context) ->
 event(#postback{message={switch_user, [{id, Id}]}}, Context) ->
     case z_acl:is_admin(Context) of
         true ->
+            % Changing the authenticated will force all connected pages to reload or change.
+            % After this we can't send any replies any more, as the pages are disconnecting.
             {ok, NewContext} = z_auth:switch_user(Id, Context),
-            %% find out redirect URL, if we can stay in the admin or not.
-            Url = case z_acl:is_allowed(use, mod_admin, NewContext) of
-                      true ->
-                          z_dispatcher:url_for(admin, NewContext);
-                      false ->
-                          <<"/">>
-                  end,
-            z_render:wire({redirect, [{location, Url}]}, NewContext);
+            NewContext;
         false ->
             z_render:growl_error(?__("You are not allowed to switch users.", Context), Context)
     end.
@@ -251,14 +251,14 @@ ensure(RscId, Type, Key, Context) ->
 
 send_verification(RscId, IdnId, Context) ->
     case m_identity:get(IdnId, Context) of
-        undefined -> 
+        undefined ->
             {error, notfound};
         Idn ->
             {rsc_id, RscId} = proplists:lookup(rsc_id, Idn),
             case proplists:get_value(type, Idn) of
                 <<"email">> ->
                     % Send the verfication e-mail
-                    Email = proplists:get_value(key, Idn), 
+                    Email = proplists:get_value(key, Idn),
                     {ok, VerifyKey} = m_identity:set_verify_key(IdnId, Context),
                     Vars = [
                         {idn, Idn},
@@ -293,7 +293,7 @@ verify(IdnId, VerifyKey, Context) ->
             end;
         Idn ->
             % Set the identity to verified
-            IdnIdBin = z_convert:to_binary(IdnId), 
+            IdnIdBin = z_convert:to_binary(IdnId),
             case z_convert:to_binary(proplists:get_value(id, Idn)) of
                 IdnIdBin ->
                     m_identity:set_verified(proplists:get_value(id, Idn), Context),
@@ -313,7 +313,7 @@ search({users, [{text,Text}]}, OffsetLimit, Context) ->
 search({users, [{text,QueryText}, {users_only, UsersOnly0}]}, _OffsetLimit, Context) ->
     UsersOnly = z_convert:to_bool(UsersOnly0),
     {TSJoin, Where, Args, Order} = case z_utils:is_empty(QueryText) of
-                        true -> 
+                        true ->
                             {[], [], [], "r.pivot_title"};
                         false ->
                             {", plainto_tsquery($2, $1) query",
@@ -323,9 +323,9 @@ search({users, [{text,QueryText}, {users_only, UsersOnly0}]}, _OffsetLimit, Cont
                      end,
     IdnJoin = case UsersOnly of
                 true -> " join identity i on (r.id = i.rsc_id and i.type = 'username_pw') ";
-                false -> "" 
+                false -> ""
               end,
-    Cats = case UsersOnly of   
+    Cats = case UsersOnly of
                 true -> [];
                 false -> [{"r", [person, institution]}]
            end,

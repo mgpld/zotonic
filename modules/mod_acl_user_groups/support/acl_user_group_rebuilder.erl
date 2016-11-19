@@ -1,4 +1,4 @@
-%% @copyright 2015 Marc Worrell
+%% @copyright 2015-2016 Marc Worrell
 %% @doc Rebuilder process. Expands all rules and updated the in-memory ets tables
 %%
 %% This function requests an expansion of all ACL rules. These are then processed and
@@ -13,6 +13,7 @@
 %%
 %% ```
 %% {{content_group_id, {category_id, action, only_if_owner}, user_group_id}, true}
+%% {{'collab', {category_id, action, only_if_owner}, 'collab'}, true}
 %% {{content_group_id, action, user_group_id}, true}
 %% {{module, module_action, user_group_id}, true}
 %% {{action, user_group_id}, [content_group_id]}
@@ -23,7 +24,7 @@
 %%
 %% @end
 
-%% Copyright 2015 Marc Worrell
+%% Copyright 2015-2016 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -43,7 +44,7 @@
 	rebuild/3
 	]).
 
-%% @doc Fetch a the new rules and store them in a fresh ets table. 
+%% @doc Fetch a the new rules and store them in a fresh ets table.
 %%      The completed table is transfered to the acl module gen_server.
 rebuild(ModulePid, State, Context) ->
 	{ContentGroupIds, UserGroupIds, UserGroupPaths, Rules} = acl_user_groups_rules:expand(State, Context),
@@ -56,7 +57,7 @@ rebuild(ModulePid, State, Context) ->
 				]),
 	lists:foreach(
 		fun(K0) ->
-			{IsAllow, K} = extract_is_allow(K0), 
+			{IsAllow, K} = extract_is_allow(K0),
 			case K of
 				{CId, {CatId, insert, _IfOwner}, GId} ->
 					ets:insert(Table, {{CId, {CatId, insert, false}, GId}, IsAllow}),

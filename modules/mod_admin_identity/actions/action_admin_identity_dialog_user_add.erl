@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -51,37 +51,37 @@ event(#postback{message={dialog_user_add, OnSuccess}}, Context) ->
 event(#submit{message={user_add, Props}}, Context) ->
     case z_acl:is_allowed(use, mod_admin_identity, Context) of
         true ->
-            NameFirst = z_context:get_q_validated("name_first", Context),
-            NamePrefix = z_context:get_q("surprefix", Context),
-            NameSur = z_context:get_q_validated("name_surname", Context),
-            Category = z_context:get_q(category, Context, person),
+            NameFirst = z_context:get_q_validated(<<"name_first">>, Context),
+            NamePrefix = z_context:get_q(<<"surprefix">>, Context, <<>>),
+            NameSur = z_context:get_q_validated(<<"name_surname">>, Context),
+            Category = z_context:get_q(<<"category">>, Context, person),
             Title = case NamePrefix of
-                [] -> [ NameFirst, " ", NameSur ];
+                <<>> -> [ NameFirst, " ", NameSur ];
                 _ -> [ NameFirst, " ", NamePrefix, " ", NameSur ]
             end,
 
-            Email = z_context:get_q_validated("email", Context),
+            Email = z_context:get_q_validated(<<"email">>, Context),
             PersonProps = [
                 {is_published, true},
                 {category, Category},
-                {title, lists:flatten(Title)},
+                {title, iolist_to_binary(Title)},
                 {name_first, NameFirst},
                 {name_surname_prefix, NamePrefix},
                 {name_surname, NameSur},
                 {email, Email},
                 {creator_id, self}
             ],
-            
+
             F = fun(Ctx) ->
                 case m_rsc:insert(PersonProps, Ctx) of
                     {ok, PersonId} ->
-                        Username = z_context:get_q_validated("new_username", Ctx),
-                        Password = z_context:get_q_validated("new_password", Ctx),
+                        Username = z_context:get_q_validated(<<"new_username">>, Ctx),
+                        Password = z_context:get_q_validated(<<"new_password">>, Ctx),
                         case m_identity:set_username_pw(PersonId, Username, Password, Ctx) of
                             ok -> ok;
                             {error, PWReason} -> throw({error, PWReason})
                         end,
-                        case z_convert:to_bool(z_context:get_q("send_welcome", Context)) of
+                        case z_convert:to_bool(z_context:get_q(<<"send_welcome">>, Context)) of
                             true ->
                                 Vars = [{id, PersonId},
                                         {username, Username},
@@ -95,7 +95,7 @@ event(#submit{message={user_add, Props}}, Context) ->
                         throw({error, InsReason})
                 end
             end,
-            
+
             case z_db:transaction(F, Context) of
                 {ok, _PersonId} ->
                     Context1 = z_render:growl(["Created the user ",z_html:escape(Title), "."], Context),

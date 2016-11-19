@@ -4,7 +4,7 @@
         {% if m.config.comments.moderate.value %}
             <div id='comments-moderation-notice' style='display: none'>
     	        <h2>Your comment</h2>
-    	        <p>{_ Your comment has been saved and will be subject to review before it is displayed to other visitors of the website. Thank you for your comment! _}</p>
+                <p>{_ Your comment has been saved and will be subject to moderation before it is displayed on the website _}</p>
             </div>
             {% wire id="comments-form" type="submit" postback={newcomment id=id} delegate="mod_comment" action={fade_out target="comments-area"} action={slide_fade_in target="comments-moderation-notice"} %}
         {% else %}
@@ -27,7 +27,7 @@
 		                        {% validate id="name" type={presence} %}
 	                        </div>
                         </div>
-                        
+
                         <div class="form-group row">
 	                        <label class="control-label col-md-3" for="mail">{_ E-mail _}</label>
                             <div class="col-md-9">
@@ -44,7 +44,7 @@
 		                    {% validate id="message" type={presence} %}
 	                    </div>
                     </div>
-                    
+
                     <div class="form-group row">
 	                    <div class="col-md-9 col-md-offset-3">
 		                    <button class="btn btn-primary" type="submit">{_ Send _}</button>
@@ -54,7 +54,7 @@
 	                <div>
 	                    <input type="hidden" name="user_agent" value="{{ m.req.user_agent|escape }}" />
                     </div>
-                    
+
                 </fieldset>
             </form>
         </div>

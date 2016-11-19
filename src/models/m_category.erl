@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -125,12 +125,12 @@ m_to_list(#m{value={cat, Id}}, Context) ->
     get(Id, Context);
 m_to_list(_, _Context) ->
     [].
-    
+
 %% @doc Transform a model value so that it can be formatted or piped through filters
 %% @spec m_value(Source, Context) -> term()
 m_value(#m{value=undefined}, Context) ->
     tree(Context);
-m_value(#m{value=#m{value={cat, Id}}}, Context) ->
+m_value(#m{value={cat, Id}}, Context) ->
     get(Id, Context).
 
 
@@ -156,8 +156,8 @@ is_used(Category, Context) ->
 insert(ParentId, Name, Props, Context) ->
     {ok, CatId} = name_to_id(category, Context),
     {ok, Id} = m_rsc_update:insert(Props ++ [{name, Name}, {category_id, CatId}], Context),
-    case ParentId of 
-        undefined -> 
+    case ParentId of
+        undefined ->
             Id;
         _ ->
             move_below(Id, ParentId, Context),
@@ -169,13 +169,13 @@ insert(ParentId, Name, Props, Context) ->
 %% @doc Delete the category, move referring pages to another category.
 %%      After this routine the caches are dirty and child-categories might need renumbering if a TransferId
 %%      was defined and there were sub-categories.
--spec delete(integer(), integer()|undefined, #context{}) -> ok | {error, term()}.
+-spec delete(m_rsc:resource(), integer() | undefined, #context{}) -> ok | {error, term()}.
 delete(Id, TransferId, Context) ->
     % fail when deleting 'other', 'meta', 'category' or 'predicate'
-    case z_db:q("select name from rsc where id = $1", [Id], Context) of
-        N when  N == <<"other">>; 
-                N == <<"meta">>; 
-                N == <<"category">>; 
+    case z_db:q("select name from rsc where id = $1", [m_rsc:rid(Id, Context)], Context) of
+        N when  N == <<"other">>;
+                N == <<"meta">>;
+                N == <<"category">>;
                 N == <<"predicate">> ->
             {error, is_system_category};
         _ ->
@@ -185,17 +185,17 @@ delete(Id, TransferId, Context) ->
                 true ->
                     F = fun(Ctx) ->
                         ParentId = z_db:q1("select parent_id
-                                              from hierarchy 
-                                               where id = $1
+                                              from hierarchy
+                                                where id = $1
                                                  and name = '$category'",
-                                              [Id],
+                                              [m_rsc:rid(Id, Context)],
                                               Ctx),
                         ToId = case {TransferId,ParentId} of
                                     {undefined,undefined} ->
                                         %% The removed category is a top-category, move all content to 'other'
                                         case z_db:q1("
-                                                select c.id 
-                                                from rsc r 
+                                                select c.id
+                                                from rsc r
                                                     join hierarchy c
                                                     on c.id = r.id and c.name = '$category'
                                                 where r.name = 'other'", Ctx) of
@@ -204,8 +204,8 @@ delete(Id, TransferId, Context) ->
                                     {undefined, ParentId} ->
                                         ParentId;
                                     {TransferId, _ParentId} ->
-                                        TransferId = z_db:q1("select id 
-                                                              from hierarchy 
+                                        TransferId = z_db:q1("select id
+                                                              from hierarchy
                                                               where id = $1
                                                                 and name = '$category'",
                                                              [TransferId],
@@ -213,8 +213,8 @@ delete(Id, TransferId, Context) ->
                                 end,
 
                         % Move all sub-categories of the deleted category one level "up"
-                        case z_db:q("update hierarchy 
-                                     set parent_id = $1 
+                        case z_db:q("update hierarchy
+                                     set parent_id = $1
                                      where parent_id = $2
                                        and name = '$category'",
                                     [ParentId, Id],
@@ -225,17 +225,17 @@ delete(Id, TransferId, Context) ->
                         end,
 
                         % Move all resources to the new category
-                        ToNr = z_db:q1("select nr 
+                        ToNr = z_db:q1("select nr
                                         from hierarchy
                                         where id = $1
-                                          and name = '$category'", 
+                                          and name = '$category'",
                                        [ToId],
                                        Ctx),
-                        z_db:q("update rsc 
+                        z_db:q("update rsc
                                 set category_id = $1,
                                     pivot_category_nr = $2
                                 where category_id = $3",
-                               [ToId, ToNr, Id],
+                               [ToId, ToNr, m_rsc:rid(Id, Context)],
                                Ctx),
                         ok = m_rsc_update:delete_nocheck(Id, Ctx)
                     end,
@@ -342,19 +342,19 @@ tree2(Cat, Context) ->
     case tree(Cat, Context) of
         undefined ->
             undefined;
-        Node -> 
+        Node ->
             [ {children, prune(2, proplists:get_value(children, Node))}
               | proplists:delete(children, Node)
             ]
     end.
 
-prune(_N, []) -> 
+prune(_N, []) ->
     [];
 prune(1, CS) ->
     [
         [ {children, []}
-          | proplists:delete(children, C) 
-        ] 
+          | proplists:delete(children, C)
+        ]
         || C <- CS
     ];
 prune(N, CS) ->
@@ -367,7 +367,7 @@ prune(N, CS) ->
 
 
 %% @doc Get the basic properties of a category
--spec get(integer()|binary()|list()|atom(), #context{}) -> list() | undefined.
+-spec get(m_rsc:resource(), #context{}) -> list() | undefined.
 get(undefined, _Context) ->
     undefined;
 get(Id, Context) when is_integer(Id) ->
@@ -491,7 +491,7 @@ get_path(Id, Context) ->
     end.
 
 %% @doc Return the categories (as atoms) the category is part of, including the category itself (as last member).
--spec is_a(integer()|binary()|string(), #context{}) -> list(atom()).
+-spec is_a(m_rsc:resource(), #context{}) -> list(atom()).
 is_a(Id, Context) ->
     case get(Id, Context) of
         undefined -> [];
@@ -530,7 +530,7 @@ is_meta(CatId, Context) when is_integer(CatId) ->
         Context).
 
 %% @doc Map a category name to an id, be flexible with the input
--spec name_to_id(binary()|list()|integer()|{integer()}, #context{}) -> {ok, integer()} | {error, {unknown_category, term()}}.
+-spec name_to_id(m_rsc:resource() | {m_rsc:resource_id()}, #context{}) -> {ok, m_rsc:resource_id()} | {error, {unknown_category, term()}}.
 name_to_id({Id}, _Context) when is_integer(Id) ->
     {ok, Id};
 name_to_id(Id, _Context) when is_integer(Id) ->
@@ -543,10 +543,10 @@ name_to_id(Name, Context) when is_atom(Name); is_binary(Name); is_list(Name) ->
             Result;
         undefined ->
             Result = case z_db:q1("
-                            select r.id 
-                            from rsc r 
+                            select r.id
+                            from rsc r
                                 join hierarchy c
-                                on r.id = c.id 
+                                on r.id = c.id
                                 and c.name = '$category'
                             where r.name = $1", [Name], Context)
                      of
@@ -618,7 +618,7 @@ last_modified(Cat, Context) ->
 
 
 
-%% @doc Return the name for a given category. 
+%% @doc Return the name for a given category.
 %%
 %% If the category does not have a unique name will result in undefined.
 %% If the lookup is made by name, the name is checked for existence,
@@ -627,10 +627,10 @@ last_modified(Cat, Context) ->
 id_to_name(Name, Context) when is_atom(Name); is_binary(Name); is_list(Name) ->
     F = fun() ->
         Nm = z_db:q1("
-                    select r.name 
-                    from rsc r 
-                        join hierarchy c 
-                        on r.id = c.id 
+                    select r.name
+                    from rsc r
+                        join hierarchy c
+                        on r.id = c.id
                         and c.name = '$category'
                     where r.name = $1", [Name], Context),
         z_convert:to_atom(Nm)
@@ -639,9 +639,9 @@ id_to_name(Name, Context) when is_atom(Name); is_binary(Name); is_list(Name) ->
 id_to_name(Id, Context) when is_integer(Id) ->
     F = fun() ->
         Nm = z_db:q1("select r.name
-                      from rsc r 
-                            join hierarchy c 
-                            on r.id = c.id 
+                      from rsc r
+                            join hierarchy c
+                            on r.id = c.id
                             and c.name = '$category'
                       where r.id = $1", [Id], Context),
         z_convert:to_atom(Nm)
@@ -676,7 +676,7 @@ ensure_hierarchy(Context) ->
             {ok, CatId} = name_to_id(category, Context),
             case m_hierarchy:ensure('$category', CatId, Context) of
                 {ok, N} when N > 0 ->
-                    lager:warning("[~p] Ensure category found ~p new categories.", [z_context:site(Context), N]),
+                    lager:warning("Ensure category found ~p new categories.", [N]),
                     flush(Context);
                 {ok, 0} ->
                     ok;
@@ -684,7 +684,7 @@ ensure_hierarchy(Context) ->
                     Error
             end;
         true ->
-            lager:warning("[~p] Ensure category requested while renumbering.", [z_context:site(Context)]),
+            lager:warning("Ensure category requested while renumbering."),
             {error, renumbering}
     end.
 
@@ -787,7 +787,7 @@ renumber_pivot_task(Context) ->
                 limit 1000", Context, 60000),
     case Nrs of
         [] ->
-            ?zInfo("Category renumbering completed.", Context),
+            lager:info("Category renumbering completed", Context),
             set_tree_dirty(false, Context),
             ok;
         Ids ->
@@ -795,8 +795,8 @@ renumber_pivot_task(Context) ->
                     lists:foreach(
                         fun({Id,CatNr}) ->
                             z_db:q("update rsc
-                                    set pivot_category_nr = $2 
-                                    where id = $1 
+                                    set pivot_category_nr = $2
+                                    where id = $1
                                       and (pivot_category_nr is null or pivot_category_nr <> $2)", [Id, CatNr], Ctx)
                         end,
                         Ids),

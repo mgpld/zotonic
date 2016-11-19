@@ -44,7 +44,7 @@
 -include_lib("zotonic.hrl").
 
 -record(state, {dispatchlist=undefined, lookup=undefined, context,
-                host, hostname, hostname_port, smtphost, hostalias,
+                site, hostname, hostname_port, smtphost, hostalias,
 				redirect=true}).
 
 -record(dispatch_url, {url, dispatch_options}).
@@ -62,8 +62,8 @@ dispatcher_args() ->
 %% @spec start_link(SiteProps) -> {ok,Pid} | ignore | {error,Error}
 %% @doc Starts the dispatch server
 start_link(SiteProps) ->
-    {host, Host} = proplists:lookup(host, SiteProps),
-    Name = z_utils:name_for_host(?MODULE, Host),
+    {site, Site} = proplists:lookup(site, SiteProps),
+    Name = z_utils:name_for_site(?MODULE, Site),
     gen_server:start_link({local, Name}, ?MODULE, SiteProps, []).
 
 
@@ -101,26 +101,44 @@ url_for(Name, Args, Escape, #context{dispatcher=Dispatcher} = Context) ->
             Name, Args1, Context)).
 
 
-%% @spec hostname(Context) -> iolist()
 %% @doc Fetch the preferred hostname for this site
+-spec hostname(#context{}) -> iolist() | undefined.
 hostname(#context{dispatcher=Dispatcher}) ->
-    gen_server:call(Dispatcher, 'hostname', infinity).
+    try
+        gen_server:call(Dispatcher, 'hostname', infinity)
+    catch
+        exit:{noproc, {gen_server, call, _}} ->
+            undefined
+    end.
 
-%% @spec hostname_port(Context) -> iolist()
 %% @doc Fetch the preferred hostname, including port, for this site
+-spec hostname_port(#context{}) -> iolist() | undefined.
 hostname_port(#context{dispatcher=Dispatcher}) ->
-    gen_server:call(Dispatcher, 'hostname_port', infinity).
+    try
+        gen_server:call(Dispatcher, 'hostname_port', infinity)
+    catch
+        exit:{noproc, {gen_server, call, _}} ->
+            undefined
+    end.
 
 %% @doc Make the url an absolute url
 abs_url(Url, Context) ->
     abs_url(Url, undefined, [], Context).
 
-%% @spec dispatchinfo(Context) -> {host, hostname, smtphost, hostaliases, redirect, dispatchlist}
 %% @doc Fetch the dispatchlist for the site.
+-spec dispatchinfo(#context{}|pid()|atom()) ->
+              {ok, atom(), binary()|string(), binary()|string(), list(), boolean(), list()}
+            | {error, noproc}.
 dispatchinfo(#context{dispatcher=Dispatcher}) ->
-    gen_server:call(Dispatcher, 'dispatchinfo', infinity);
+    dispatchinfo(Dispatcher);
 dispatchinfo(Server) when is_pid(Server) orelse is_atom(Server) ->
-    gen_server:call(Server, 'dispatchinfo', infinity).
+    try
+        DispatchInfo = gen_server:call(Server, 'dispatchinfo', infinity),
+        {ok, DispatchInfo}
+    catch
+        exit:{noproc, {gen_server, call, _}} ->
+            {error, noproc}
+    end.
 
 
 %% @doc Update the dispatch list but don't reload it yet. Used when flushing all sites, see z:flush/0
@@ -198,25 +216,26 @@ to_bool(N) -> z_convert:to_bool(N).
 %%                     {stop, Reason}
 %% @doc Initiates the server, loads the dispatch list into the webmachine dispatcher
 init(SiteProps) ->
-    {host, Host} = proplists:lookup(host, SiteProps),
-    {hostname, Hostname} = proplists:lookup(hostname, SiteProps),
+    {site, Site} = proplists:lookup(site, SiteProps),
     lager:md([
-        {site, Host},
+        {site, Site},
         {module, ?MODULE}
       ]),
-    Smtphost = proplists:get_value(smtphost, SiteProps),
+    {hostname, Hostname0} = proplists:lookup(hostname, SiteProps),
+    Hostname = z_convert:to_binary(Hostname0),
+    Smtphost = z_convert:to_binary(proplists:get_value(smtphost, SiteProps)),
     HostAlias = proplists:get_value(hostalias, SiteProps, []),
-    Context = z_context:new(Host),
+    Context = z_context:new(Site),
     process_flag(trap_exit, true),
     State  = #state{
                 dispatchlist=[],
                 lookup=dict:new(),
                 context=Context,
-                host=Host,
+                site=Site,
 				smtphost=drop_port(Smtphost),
                 hostname=drop_port(Hostname),
                 hostname_port=Hostname,
-                hostalias=[ drop_port(Alias) || Alias <- HostAlias ],
+                hostalias=[ drop_port(z_convert:to_binary(Alias)) || Alias <- HostAlias ],
                 redirect=z_convert:to_bool(proplists:get_value(redirect, SiteProps, true))
     },
     z_notifier:observe(module_ready, {?MODULE, reload}, Context),
@@ -228,10 +247,8 @@ drop_port(undefined) ->
     undefined;
 drop_port(none) ->
     undefined;
-drop_port(Hostname) when is_list(Hostname) ->
-    hd(string:tokens(Hostname, ":"));
-drop_port(Hostname) ->
-    drop_port(z_convert:to_list(Hostname)).
+drop_port(Hostname) when is_binary(Hostname) ->
+    hd(binary:split(Hostname, <<":">>)).
 
 
 %% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -253,10 +270,10 @@ handle_call('hostname', _From, State) ->
 handle_call('hostname_port', _From, State) ->
     {reply, State#state.hostname_port, State};
 
-%% @doc Return the dispatchinfo for the site  {host, hostname, smtphost, hostaliases, redirect, dispatchlist}
+%% @doc Return the dispatchinfo for the site  {site, hostname, smtphost, hostaliases, redirect, dispatchlist}
 handle_call('dispatchinfo', _From, State) ->
     {reply,
-     {State#state.host, State#state.hostname, State#state.smtphost,
+     {State#state.site, State#state.hostname, State#state.smtphost,
       State#state.hostalias, State#state.redirect, State#state.dispatchlist},
      State};
 
@@ -494,6 +511,8 @@ revjoin([S | Rest], Separator, Acc) ->
 
 
 %% @doc Append extra arguments to the url, depending if 'qargs' or 'varargs' is set.
+append_extra_args(Args, Context) when is_map(Args) ->
+    append_extra_args(maps:to_list(Args), Context);
 append_extra_args(Args, Context) ->
     append_qargs(append_varargs(Args, Context), Context).
 

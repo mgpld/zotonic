@@ -31,8 +31,7 @@ html(Context) ->
     QState = z_context:get_q("state", Context),
     case z_context:get_session(linkedin_state, Context) of
         undefined ->
-            lager:warning("[~p] LinkedIn OAuth redirect with missing session state",
-                          [z_context:site(Context)]),
+            lager:warning("LinkedIn OAuth redirect with missing session state"),
             html_error(missing_secret, Context);
         QState ->
             case z_context:get_q("code", Context) of
@@ -43,8 +42,8 @@ html(Context) ->
                     access_token(fetch_access_token(Code, Context), Context)
             end;
         SessionState ->
-            lager:warning("[~p] LinkedIn OAuth redirect with state mismatch, expected ~p, got ~p",
-                          [z_context:site(Context), SessionState, QState]),
+            lager:warning("LinkedIn OAuth redirect with state mismatch, expected ~p, got ~p",
+                          [SessionState, QState]),
             Context1 = z_render:wire({script, [{script, "window.close();"}]}, Context),
             html_error(wrong_secret, Context1)
     end.
@@ -83,7 +82,7 @@ html_ok(Context) ->
 
 html_error(Error, Context) ->
     Vars = [
-        {service, "LinkedIn"}, 
+        {service, "LinkedIn"},
         {is_safari8problem, is_safari8problem(Context)},
         {error, Error}
     ],
@@ -164,16 +163,16 @@ fetch_access_token(Code, Context) ->
     LinkedInUrl = "https://www.linkedin.com/uas/oauth2/accessToken",
     Body = iolist_to_binary([
             "grant_type=authorization_code",
-            "&client_id=", z_utils:url_encode(AppId),
-            "&redirect_uri=", z_convert:to_list(z_utils:url_encode(RedirectUrl)),
-            "&client_secret=", z_utils:url_encode(AppSecret),
-            "&code=", z_utils:url_encode(Code)
+            "&client_id=", z_url:url_encode(AppId),
+            "&redirect_uri=", z_convert:to_list(z_url:url_encode(RedirectUrl)),
+            "&client_secret=", z_url:url_encode(AppSecret),
+            "&code=", z_url:url_encode(Code)
         ]),
     case httpc:request(post, {LinkedInUrl, [], "application/x-www-form-urlencoded", Body}, httpc_http_options(), httpc_options()) of
         {ok, {{_, 200, _}, _Headers, Payload}} ->
             {struct, Json} = mochijson:binary_decode(Payload),
-            {<<"access_token">>, AccessToken} = proplists:lookup(<<"access_token">>, Json), 
-            {<<"expires_in">>, ExpiresIn} = proplists:lookup(<<"expires_in">>, Json), 
+            {<<"access_token">>, AccessToken} = proplists:lookup(<<"access_token">>, Json),
+            {<<"expires_in">>, ExpiresIn} = proplists:lookup(<<"expires_in">>, Json),
             {ok, AccessToken, ExpiresIn};
         Other ->
             lager:error("[linkedin] error fetching access token [code ~p] ~p", [Code, Other]),
@@ -200,7 +199,7 @@ fetch_user_data(AccessToken) ->
 
 % ensure_inets_profile(Profile) ->
 %     case inets:start(httpc, [{profile, Profile}]) of
-%         {ok, _Pid} -> 
+%         {ok, _Pid} ->
 %             httpc:set_options([{keep_alive_timeout, 1}], Profile),
 %             ok;
 %         {error, {already_started, _Pid}} ->
@@ -233,7 +232,7 @@ fields() ->
         $)
         ]).
 
-httpc_options() -> 
+httpc_options() ->
     [
         {sync, true},
         {body_format, binary}

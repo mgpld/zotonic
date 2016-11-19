@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,10 +21,10 @@
 -author("Arjan Scherpenisse <arjan@scherpenisse.net>").
 
 -export([
-         needauth/1, 
-         title/1, 
-         all/1, 
-         all/2, 
+         needauth/1,
+         title/1,
+         all/1,
+         all/2,
          serviceinfo/2,
          http_methods/1,
          handler/1,
@@ -73,26 +73,26 @@ all(authvalues, Context) ->
     All = all(info, Context),
     All2 = lists:filter( fun(S) -> proplists:get_value(needauth, S) end, All),
     Grouped = grouped(All2, Context),
-    lists:flatten([ {"*", "Everything"} | 
+    lists:flatten([ {<<"*">>, <<"Everything">>} |
                     [ [authvalue_module(Module) | [authvalue_service(S) || S <- Services]]   || {Module, Services} <- Grouped]]).
 
 authvalue_module(Module) ->
     ModuleTitle = proplists:get_value(mod_title, Module:module_info(attributes)),
-    {module_to_api_prefix(Module) ++ "/*", ModuleTitle}.
+    {<<(module_to_api_prefix(Module))/binary, "/*">>, z_convert:to_binary(ModuleTitle)}.
 
 authvalue_service(ServiceInfo) ->
     ServiceTitle = title(proplists:get_value(service, ServiceInfo)),
-    {proplists:get_value(method, ServiceInfo), ServiceTitle}.
-    
+    {z_convert:to_binary(proplists:get_value(method, ServiceInfo)), ServiceTitle}.
+
 
 module_to_api_prefix(ZotonicModule) when is_atom(ZotonicModule) ->
-    case atom_to_list(ZotonicModule) of
-        [$m, $o, $d, $_ | Mod] -> Mod;
+    case atom_to_binary(ZotonicModule, 'utf8') of
+        <<"mod_", Mod/binary>> -> Mod;
         Site -> Site
     end.
-    
-api_prefix_to_module(Base) when is_list(Base) ->
-    case z_utils:ensure_existing_module([$m, $o, $d, $_ | Base]) of
+
+api_prefix_to_module(Base) when is_binary(Base) ->
+    case z_utils:ensure_existing_module(<<"mod_", Base/binary>>) of
         {ok, M} -> M;
         {error, _} ->
             {ok, M2} = z_utils:ensure_existing_module(Base),
@@ -112,14 +112,14 @@ serviceinfo(ServiceModule, Context) ->
 
 serviceinfo(Method, ZotonicModule, ServiceModule) ->
     ZotonicModuleName = module_to_api_prefix(ZotonicModule),
-    [ {method, string:join([ZotonicModuleName, atom_to_list(Method)], "/")},
-      {module, ZotonicModule}, 
+    [ {method, iolist_to_binary([ZotonicModuleName, $/, atom_to_list(Method)])},
+      {module, ZotonicModule},
       {service, ServiceModule},
       {title,  title(ServiceModule)},
       {needauth, needauth(ServiceModule)},
-      {http, string:join([atom_to_list(MM) || MM <- http_methods(ServiceModule)],",")} 
+      {http, iolist_to_binary(z_utils:combine($,, http_methods(ServiceModule)))}
     ].
-    
+
 
 %%
 %% Whether a service needs an authenticated user. Defaults to false.
@@ -130,9 +130,9 @@ needauth(Service) ->
 
 %%
 %% Title of the service
-%%    
+%%
 title(Service) ->
-    module_attr(Service, svc_title, "(untitled)", list).
+    z_convert:to_binary(module_attr(Service, svc_title, <<"(untitled)">>, list)).
 
 
 %%
@@ -140,26 +140,26 @@ title(Service) ->
 %%
 http_methods(Service) ->
     F = Service:module_info(functions),
-    lists:filter(fun (M) -> lists:member(handler(M), F) end, ['GET', 'POST', 'HEAD', 'PUT', 'DELETE']).
+    lists:filter(fun (M) -> lists:member(handler(M), F) end, [<<"GET">>, <<"POST">>, <<"HEAD">>, <<"PUT">>, <<"DELETE">>]).
 
 %% define the handler mapping for the module.
-handler('POST') ->
-    {process_post, 2};
-handler('GET') -> 
-    {process_get, 2};
-handler('HEAD') ->
-    {process_get, 2};
-handler('PUT') ->
-    {process_post, 2};
-handler('DELETE') ->
-    {process_post, 2}.
+handler(<<"POST">>) ->
+    {process_post, 1};
+handler(<<"GET">>) ->
+    {process_get, 1};
+handler(<<"HEAD">>) ->
+    {process_get, 1};
+handler(<<"PUT">>) ->
+    {process_post, 1};
+handler(<<"DELETE">>) ->
+    {process_post, 1}.
 
 
 module_attr(Service, Attr, Default, T) ->
     Info = Service:module_info(attributes),
     V = proplists:get_value(Attr, Info),
     case T of
-        list -> 
+        list ->
             case V of
                 undefined -> Default;
                 V -> V
@@ -174,12 +174,12 @@ module_attr(Service, Attr, Default, T) ->
 %%
 %% Whether a services applies to a pattern.  applies(Pattern, Service).
 %%
-applies([Pattern|Rest], ServiceMethod) when is_list(Pattern) ->
+applies([Pattern|Rest], ServiceMethod) when is_binary(Pattern) ->
     applies(Pattern, ServiceMethod) orelse applies(Rest, ServiceMethod);
 applies(Pattern, ServiceMethod) ->
-    applies1(string:tokens(Pattern, "/"), string:tokens(ServiceMethod, "/")).
+    applies1(binary:split(Pattern, <<"/">>), binary:split(ServiceMethod, <<"/">>)).
 
-applies1(["*"], _) ->
+applies1([<<"*">>], _) ->
     true;
 applies1([], _) ->
     false;

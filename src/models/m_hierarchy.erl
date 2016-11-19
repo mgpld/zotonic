@@ -26,6 +26,7 @@
     tree_flat/2,
     tree_flat/3,
     parents/3,
+    contains/3,
     children/3,
     menu/2,
     ensure/2,
@@ -100,12 +101,12 @@ tree(Name, Context) when is_binary(Name) ->
                 select id, parent_id, lvl, lft, rght
                 from hierarchy h
                 where name = $1
-                order by nr", 
+                order by nr",
                 [Name],
                 Context),
         build_tree(CatTuples, [], [])
     end,
-    z_depcache:memo(F, {hierarchy, Name}, ?DAY, [hierarchy], Context);
+    z_depcache:memo(F, {hierarchy, Name}, ?DAY, [hierarchy, {hierarchy,Name}], Context);
 tree(Name, Context) ->
     tree(z_convert:to_binary(Name), Context).
 
@@ -150,12 +151,30 @@ ids([], Acc) ->
 ids([N|Ns], Acc) ->
     Acc1 = [proplists:get_value(id,N) | ids(proplists:get_value(children, N), Acc)],
     ids(Ns, Acc1).
-                             
+
+%% @doc Return the list of ids contained within (and including) the id.
+contains(_Name, undefined, _Context) ->
+    [];
+contains(Name0, Id, Context) when is_integer(Id) ->
+    Name = z_convert:to_binary(Name0),
+    z_depcache:memo(
+            fun() ->
+                [{Lft, Rght}] = z_db:q("SELECT lft, rght FROM hierarchy WHERE name = 'content_group' AND id = $1", [Id], Context),
+                R = z_db:q("SELECT id FROM hierarchy WHERE name = 'content_group' AND lft >= $1 AND rght <= $2", [Lft, Rght], Context),
+                [CId || {CId} <- R]
+            end,
+            {hierarchy_contains, Name, Id},
+            3600,
+            [{hierarchy, Name}, Id],
+            Context);
+contains(Name, Id, Context) ->
+    contains(Name, m_rsc:rid(Id, Context), Context).
+
 %% @doc Make a flattened list with indentations showing the level of the tree entries.
 %%      Useful for select lists.
 tree_flat(Name, Context) ->
     List = flatten_tree(tree(Name, Context)),
-    [ 
+    [
         [{indent,indent(proplists:get_value(level, E, 0))} | E ]
         || E <- List
     ].
@@ -257,10 +276,10 @@ save_nocheck(Name, NewTree, Context) when is_binary(Name); is_atom(Name) ->
 save_nocheck_trans(Name, NewFlat, Context) ->
     OldFlatNr = z_db:q("
                 select id, parent_id, lvl, nr
-                from hierarchy 
+                from hierarchy
                 where name = $1
                 order by nr
-                for update", 
+                for update",
                 [Name],
                 Context),
     OldFlat = [ {Id,P,Lvl} || {Id,P,Lvl,_Nr} <- OldFlatNr ],
@@ -472,7 +491,7 @@ build_tree([], _Stack, Acc) ->
 build_tree([{Id, _Parent, _Lvl, _Left, _Right} = C|Rest], Stack, Acc) ->
     {C1, Rest1} = build_tree(C, [Id|Stack], [], Rest),
     build_tree(Rest1, Stack, [C1|Acc]).
-    
+
 build_tree({Id, _Parent, _Lvl, _Left, _Right} = P, Stack, Acc, [{Id2, Id, _Lvl2, _Left2, _Right2} = C|Rest]) ->
     {C1, Rest1} = build_tree(C, [Id2|Stack], [], Rest),
     build_tree(P, Stack, [C1|Acc], Rest1);
@@ -484,7 +503,7 @@ build_tree({Id, Parent, Lvl, Left, Right}, Stack, Acc, Rest) ->
         {path, lists:reverse(Stack)},
         {left, Left},
         {right, Right}
-     ], 
+     ],
      Rest}.
 
 

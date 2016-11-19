@@ -6,11 +6,13 @@ Command-line
 The ``zotonic`` command runs a number of utility commands which all
 operate on a Zotonic instance.
 
-The ``zotonic`` command lives in the bin/ folder of the Zotonic
-source. Putting this path into your PATH variable makes working with
-Zotonic a lot easier::
+.. tip::
 
-  export PATH=$HOME/zotonic/bin:$PATH
+    The ``zotonic`` command lives in the bin/ folder of the Zotonic
+    source. Putting this path into your PATH variable makes working with
+    Zotonic a lot easier::
+
+        export PATH=$HOME/zotonic/bin:$PATH
 
 The command determines where the Zotonic base dir is by looking at its path; it always assumes that its zotonic basedir is one dir up from where the binary itself is.
 
@@ -28,11 +30,17 @@ Currently, the following subcommands are implemented:
 ``zotonic restart``
   Restart the background Zotonic server instance.
 
+``zotonic wait [timeout]``
+  Wait ``timeout`` seconds (default: 30) for Zotonic to be started, then return.
+
 ``zotonic update``
   Update the server.  Compiles and loads any new code, flushes caches and rescans all modules.
 
 ``zotonic shell``
   Get an EShell on the running instance. See :ref:`guide-cli-shell`.
+
+``zotonic rpc``
+  Send an RPC request to the running Zotonic instance. Example: `zotonic rpc "zotonic ping"`
 
 ``zotonic addsite [options] <site_name>``
   Creates a new site with [site_name] as its name.  See :ref:`guide-cli-addsite` for a full overview of this command.
@@ -102,6 +110,11 @@ Currently, the following subcommands are implemented:
 ``zotonic update``
   Update the server. Compiles and loads any new code, flushes caches and rescans all modules.
 
+``zotonic sitetest <sitename>``
+  Start Zotonic, and runs all sitetests for the given site, and exits
+  again. The exit code will be 1 if any of the tests fail, or 0
+  otherwise. See :ref:`dev-testing`.
+
 ``zotonic compile``
   Compiles all the Zotonic Erlang source files, modules and sites,
   including those in the user sites directory and user modules
@@ -114,7 +127,9 @@ Currently, the following subcommands are implemented:
   Compiles and reloads a single :term:`Erlang module` within the
   Zotonic folder. This runs very fast and works very well on a
   save-hook of your text editor. In Emacs, it would be called like
-  this::
+  this:
+
+.. code-block:: emacs
 
     (add-hook 'erlang-mode-hook
           '(lambda ()
@@ -128,4 +143,3 @@ Currently, the following subcommands are implemented:
 
 ``zotonic logtail``
   Starts a ``tail -F`` on the three Zotonic log files, console.log, error.log and crash.log
-

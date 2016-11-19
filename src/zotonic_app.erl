@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -34,13 +34,11 @@ ensure_started(App) ->
 %% @doc application start callback for zotonic.
 start(_Type, _StartArgs) ->
     write_pidfile(),
-    set_path(),
     ensure_started(crypto),
     ensure_started(public_key),
     ensure_started(ssl),
     ensure_started(inets),
     inets:start(httpc,[{profile,zotonic}]),
-    zotonic_deps:ensure(),
     ensure_started(mimetypes),
     ensure_started(emqtt),
     ensure_started(gproc),
@@ -54,28 +52,14 @@ stop(_State) ->
     remove_pidfile(),
     ok.
 
-%% @doc Set the abs pathname of zotonic in the application environment. It is 
-%% used to locate templates, scomps, translations and actions.
-set_path() ->
-    Path = case code:lib_dir(zotonic) of
-        {error, _} ->
-            % When zotonic's root directory isn't called 'zotonic' try to find
-            % out what this name is. 
-            P = code:all_loaded(),
-            filename:dirname(filename:dirname(proplists:get_value(?MODULE, P)));
-        P ->
-            P
-    end,
-    application:set_env(zotonic, lib_dir, Path).
-
 %% @doc Return the applications lib_dir from the applications environment.
 get_path() ->
-    application:get_env(zotonic, lib_dir).
-    
+    os:getenv("ZOTONIC").
+
 %% Pid-file handling
 
 get_pidfile() ->
-    case os:getenv("ZOTONIC_PIDFILE") of 
+    case os:getenv("ZOTONIC_PIDFILE") of
         false -> {ok, Cwd} = file:get_cwd(),
                  filename:join(Cwd, "zotonic.pid");
         File -> File

@@ -22,8 +22,8 @@
             "_logon_modal.tpl"
             page=page|default:"/admin"
             logon_context="admin_logon"
+            use_wire=0
         %}
     </div>
-</div>
 </div>
 {% endblock %}

@@ -9,7 +9,7 @@
 		{% if not status or status.is_valid %}
 			{% if status.error_ct or status.bounce_ct %}
 				<p class="alert alert-warning">
-					<span class="icon-envelope"></span>
+					<span class="glyphicon glyphicon-envelope"></span>
 					<strong>{_ This email address is now ok. _}</strong>
 					{_ There have been some problems but they have been cleared. This message will disappear as soon as an email has been received succesfully. _}
 				</p>
@@ -32,7 +32,7 @@
 					</a>
 				</p>
 				{% wire id=#doreset
-						postback={email_status_reset email=email id=id 
+						postback={email_status_reset email=email id=id
 								  on_success={hide target=#doreset}
 								  on_success={show target=#didreset}}
 						delegate=`mod_email_status`
@@ -44,7 +44,7 @@
 		{% endif %}
 	{% else %}
 		<p class="alert alert-warning">
-			<span class="icon-envelope"></span>
+			<span class="glyphicon glyphicon-envelope"></span>
 			<strong>{_ This email address is not valid. _}</strong>
 		</p>
 	{% endif %}

@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -48,9 +48,9 @@ event(#postback{message={config_new_dialog, OnSuccess}}, Context) ->
 event(#submit{message={config_new, Args}}, Context) ->
     case z_acl:is_allowed(use, mod_admin_config, Context) of
         true ->
-            Module = z_string:to_name(z_context:get_q_validated("module", Context)),
-            Key = z_string:to_name(z_context:get_q_validated("key", Context)),
-            Value = z_context:get_q("val", Context, ""),
+            Module = z_string:to_name(z_context:get_q_validated(<<"module">>, Context)),
+            Key = z_string:to_name(z_context:get_q_validated(<<"key">>, Context)),
+            Value = z_context:get_q(<<"val">>, Context, <<>>),
             OnSuccess = proplists:get_all_values(on_success, Args),
 
             case m_config:get_id(Module, Key, Context) of

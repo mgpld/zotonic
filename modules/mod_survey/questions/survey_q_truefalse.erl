@@ -6,9 +6,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -44,8 +44,8 @@ prep_chart(Q, [{_, Vals}], Context) ->
     Total = True + False,
     TrueP = round(True * 100 / Total),
     FalseP = 100 - TrueP,
-    LabelTrue = get_label(true, Q, Context),
-    LabelFalse = get_label(false, Q, Context),
+    LabelTrue = get_label(yes, Q, Context),
+    LabelFalse = get_label(no, Q, Context),
     [
      {question, proplists:get_value(prompt, Q)},
      {values, [{LabelTrue, True}, {LabelFalse, False}]},
@@ -57,10 +57,10 @@ get_label(Label, Q, Context) ->
     Trans = proplists:get_value(Label, Q, <<>>),
     maybe_default(Label, z_trans:lookup_fallback(Trans, Context), Context).
 
-maybe_default(true, <<>>, Context) ->
-    ?__("True", Context);
-maybe_default(false, <<>>, Context) ->
+maybe_default(no, <<>>, Context) ->
     ?__("False", Context);
+maybe_default(yes, <<>>, Context) ->
+    ?__("True", Context);
 maybe_default(_, Text, _Context) ->
     Text.
 

@@ -58,6 +58,19 @@
 %%% Always overridden by the ZOTONIC_PORT environment variable.
    {listen_port, 8000},
 
+%%% Outside port on which Zotonic will listen for HTTP requests.
+%%% Default set to listen_port.
+%%%   {port, 80},
+
+%%% Outside port zotonic uses to receive incoming HTTPS requests.
+%%% Default set to ssl_listen_port.
+%%%   {ssl_port, 443},
+
+%%% Inside listen port zotonic uses to receive HTTPS requests.
+%%% Always overridden by the ZOTONIC_SSL_PORT environment variable.
+%%% Set to the atom 'none' to disable SSL
+%%%   {ssl_listen_port, 8443},
+
 %%% SMTP outbound relay configuration.
    %% {smtp_relay, true},
    %% {smtp_host, "localhost"},
@@ -103,6 +116,9 @@
 %%% be generated on first Zotonic startup, if the config file does not yet exist.
    {password, "%%GENERATED%%"}
 
+%%% IP whitelist, used for accessing sites with a default "admin" password
+   %% {ip_whitelist, "127.0.0.0/8,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,169.254.0.0/16,::1,fd00::/8,fe80::/10"},
+
 %%% Inet request backlog, increase when requests are being dropped.
    %% {inet_backlog, 500},
 
@@ -143,6 +159,14 @@
 %%% Scan for changed files beam files if inotify and fswatch are not enabled
 %%% Enabling this will make the system slow, it is not advised on production systems.
    %% {filewatcher_scanner_enabled, false},
+
+%%% Maximum number of concurrent sidejob processes. Every client request sent over
+%%% Websocket is executed in a sidejob process. Default is 10% of the process_limit
+   %% {sessionjobs_limit, 20000},
+
+%%% Maximum number of concurrent spawned sidejobs. This includes processes spawned and linked
+%%% to the session and page-sessions. Default is 50% of the process_limit. 
+   %% {sidejobs_limit, 100000},
 
 %%% List with extra dependencies which get fetched and compiled by rebar
    %% {deps,

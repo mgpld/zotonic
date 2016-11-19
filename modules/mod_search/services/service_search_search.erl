@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,18 +23,18 @@
 -svc_title("Search Zotonic resources.").
 -svc_needauth(false).
 
--export([process_get/2]).
+-export([process_get/1]).
 
 -define(MAX_LIMIT, 1000).
 
 -include_lib("zotonic.hrl").
 
-process_get(_ReqData, Context) ->
+process_get(Context) ->
     try
-        Format = z_context:get_q("format", Context, "ids"),
-        Limit = erlang:min(?MAX_LIMIT, z_convert:to_integer(z_context:get_q("limit", Context, "20"))),
-        Offset = 1+erlang:max(0, z_convert:to_integer(z_context:get_q("offset", Context, "0"))),
-        Q1 = lists:foldl(fun proplists:delete/2, controller_api:get_q_all(Context), ["offset", "limit", "format"]),
+        Format = z_context:get_q(<<"format">>, Context, <<"ids">>),
+        Limit = erlang:min(?MAX_LIMIT, z_convert:to_integer(z_context:get_q(<<"limit">>, Context, <<"20">>))),
+        Offset = 1+erlang:max(0, z_convert:to_integer(z_context:get_q(<<"offset">>, Context, <<"0">>))),
+        Q1 = lists:foldl(fun proplists:delete/2, controller_api:get_q_all(Context), [<<"offset">>, <<"limit">>, <<"format">>]),
         Q = search_query:parse_request_args(Q1),
         S = z_search:search({'query', Q}, {Offset, Limit}, Context),
         convert_result(Format, S#search_result.result, Context)
@@ -48,10 +48,10 @@ process_get(_ReqData, Context) ->
     end.
 
 
-convert_result("ids", Ids, _Context) ->
+convert_result(<<"ids">>, Ids, _Context) ->
     {array, Ids};
 
-convert_result("simple", Ids, Context) ->
+convert_result(<<"simple">>, Ids, Context) ->
     {array, [format_simple(Id, Context) || Id <- Ids]};
 
 convert_result(F, _, _) ->

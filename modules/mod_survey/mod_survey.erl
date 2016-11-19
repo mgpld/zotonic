@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -34,11 +34,15 @@
     observe_admin_rscform/3,
     observe_survey_is_submit/2,
 
+    observe_export_resource_filename/2,
+    observe_export_resource_header/2,
+    observe_export_resource_data/2,
+
     get_page/3,
 
     do_submit/4,
     collect_answers/3,
-    render_next_page/6,
+    render_next_page/7,
     go_button_target/4,
     module_name/1
 ]).
@@ -54,30 +58,33 @@ manage_schema(What, Context) ->
 event(#postback{message={survey_start, Args}}, Context) ->
     {id, SurveyId} = proplists:lookup(id, Args),
     Answers = normalize_answers(proplists:get_value(answers, Args)),
-    render_update(render_next_page(SurveyId, 1, exact, Answers, [], Context), Args, Context);
+    Editing = proplists:get_value(editing, Args),
+    render_update(render_next_page(SurveyId, 1, exact, Answers, [], Editing, Context), Args, Context);
 
 event(#submit{message={survey_next, Args}}, Context) ->
     {id, SurveyId} = proplists:lookup(id, Args),
     {page_nr, PageNr} = proplists:lookup(page_nr, Args),
     {answers, Answers} = proplists:lookup(answers, Args),
     {history, History} = proplists:lookup(history, Args),
-    render_update(render_next_page(SurveyId, PageNr+1, forward, Answers, History, Context), Args, Context);
+    Editing = proplists:get_value(editing, Args),
+    render_update(render_next_page(SurveyId, PageNr+1, forward, Answers, History, Editing, Context), Args, Context);
 
 event(#postback{message={survey_back, Args}}, Context) ->
     {id, SurveyId} = proplists:lookup(id, Args),
     {answers, Answers} = proplists:lookup(answers, Args),
     {history, History} = proplists:lookup(history, Args),
+    Editing = proplists:get_value(editing, Args),
     case History of
         [_,PageNr|History1] ->
-            render_update(render_next_page(SurveyId, PageNr, exact, Answers, History1, Context), Args, Context);
+            render_update(render_next_page(SurveyId, PageNr, exact, Answers, History1, Editing, Context), Args, Context);
         _History ->
-            render_update(render_next_page(SurveyId, 0, exact, Answers, [], Context), Args, Context)
+            render_update(render_next_page(SurveyId, 0, exact, Answers, [], Editing, Context), Args, Context)
     end;
 
 event(#postback{message={survey_remove_result, [{id, SurveyId}, {persistent_id, PersistentId}, {user_id, UserId}]}}, Context) ->
     m_survey:delete_result(SurveyId, UserId, PersistentId, Context),
     Target = "survey-result-"++z_convert:to_list(UserId)++"-"++z_convert:to_list(PersistentId),
-    z_render:wire([ 
+    z_render:wire([
             {growl, [{text, ?__("Survey result deleted.", Context)}]},
             {slide_fade_out, [{target, Target}]}
         ], Context);
@@ -142,11 +149,49 @@ observe_survey_is_submit(#survey_is_submit{block=Q}, _Context) ->
     end.
 
 
+%% @doc Fetch the filename for the export
+observe_export_resource_filename(#export_resource_filename{dispatch=survey_results_download, id=Id}, Context) ->
+    case m_survey:is_allowed_results_download(Id, Context) of
+        true ->
+            Filename = lists:flatten([
+                            "survey-",
+                            integer_to_list(Id),
+                            case m_rsc:p(Id, slug, Context) of
+                                undefined -> "";
+                                <<>> -> "";
+                                Slug -> [$-|z_convert:to_list(Slug)]
+                            end]),
+            {ok, Filename};
+        false ->
+            throw({stop_request, 403})
+    end;
+observe_export_resource_filename(#export_resource_filename{}, _Context) ->
+    undefined.
+
+%% @doc Fetch the header for the survey download
+observe_export_resource_header(#export_resource_header{dispatch=survey_results_download, id=Id}, Context) ->
+    case m_survey:is_allowed_results_download(Id, Context) of
+        true ->
+            {Hs, Promps, Data} = m_survey:survey_results_prompts(Id, Context),
+            {ok, Hs, [Promps | Data]};
+        false ->
+            throw({stop_request, 403})
+    end;
+observe_export_resource_header(#export_resource_header{}, _Context) ->
+    undefined.
+
+%% @doc Fetch all ids making up the export, handles collections and search queries.
+observe_export_resource_data(#export_resource_data{dispatch=survey_results_download, state=Data}, _Context) ->
+    {ok, Data, undefined};
+observe_export_resource_data(#export_resource_data{}, _Context) ->
+    undefined.
+
+
 get_page(Id, Nr, #context{} = Context) when is_integer(Nr) ->
     case m_rsc:p(Id, blocks, Context) of
         Qs when is_list(Qs) ->
             go_page(Nr, Qs, [], exact, Context);
-        _ -> 
+        _ ->
             []
     end.
 
@@ -165,7 +210,7 @@ normalize_answer({A, true}) -> {z_convert:to_binary(A), <<"1">>};
 normalize_answer({A, false}) -> {z_convert:to_binary(A), <<"0">>};
 normalize_answer({A,V}) -> {z_convert:to_binary(A), z_convert:to_binary(V)};
 normalize_answer([A,V]) -> normalize_answer({A,V}).
-    
+
 
 render_update(#context{} = RenderContext, _Args, _Context) ->
     RenderContext;
@@ -175,10 +220,10 @@ render_update(#render{} = Render, Args, Context) ->
 
 
 %% @doc Fetch the next page from the survey, update the page view
--spec render_next_page(integer(), integer(), exact|forward, list(), list(), #context{}) -> #render{} | #context{}.
-render_next_page(Id, 0, _Direction, _Answers, _History, Context) ->
+-spec render_next_page(integer(), integer(), exact|forward, list(), list(), list()|undefined, #context{}) -> #render{} | #context{}.
+render_next_page(Id, 0, _Direction, _Answers, _History, _Editing, Context) when is_integer(Id) ->
     z_render:wire({redirect, [{id, Id}]}, Context);
-render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
+render_next_page(Id, PageNr, Direction, Answers, History, Editing, Context) when is_integer(Id) ->
     {As, Submitter} = get_args(Context),
     Answers1 = lists:foldl(fun({Arg,_Val}, Acc) -> proplists:delete(Arg, Acc) end, Answers, As),
     Answers2 = Answers1 ++ group_multiselect(As),
@@ -186,9 +231,9 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
         Questions when is_list(Questions) ->
 
             Next = case Submitter of
-                       undefined -> 
+                       undefined ->
                             go_page(PageNr, Questions, Answers2, Direction, Context);
-                       _ButtonName ->  
+                       _ButtonName ->
                             go_button_target(Submitter, Questions, Answers2, Context)
                    end,
 
@@ -201,7 +246,8 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
                              {questions, L},
                              {pages, count_pages(Questions)},
                              {answers, Answers2},
-                             {history, [NewPageNr|History]}],
+                             {history, [NewPageNr|History]},
+                             {editing, Editing}],
                     #render{template="_survey_question_page.tpl", vars=Vars};
 
                 {error, {not_found, Name} = Reason} ->
@@ -213,28 +259,36 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
                     z_render:growl_error("Error evaluating submit.", Context);
 
                 stop ->
-                    render_next_page(Id, 0, Direction, Answers, History, Context);
+                    render_next_page(Id, 0, Direction, Answers, History, Editing, Context);
+
+                submit when Editing =:= undefined ->
+                    %% That was the last page. Show a thank you and save the result.
+                    case do_submit(Id, Questions, Answers2, Context) of
+                        ok ->
+                            case z_convert:to_bool(m_rsc:p(Id, survey_show_results, Context)) of
+                                true ->
+                                    #render{
+                                        template="_survey_results.tpl",
+                                        vars=[
+                                            {id,Id}, {inline, true}, {history, History}, {q, As}
+                                        ]
+                                    };
+                                false ->
+                                    #render{
+                                        template="_survey_end.tpl",
+                                        vars=[
+                                            {id,Id}, {history, History}, {q, As}
+                                        ]
+                                    }
+                            end;
+                        {ok, ContextOrRender} ->
+                            ContextOrRender;
+                        {error, _Reason} ->
+                            #render{template="_survey_error.tpl", vars=[{id,Id}, {history,History}, {q, As}]}
+                    end;
 
                 submit ->
-                    case z_session:get(mod_survey_editing, Context) of
-                        {U, P} -> 
-                            admin_edit_survey_result(z_convert:to_integer(Id), U, P, Questions, Answers2, Context);
-                        _ ->
-                            %% That was the last page. Show a thank you and save the result.
-                            case do_submit(Id, Questions, Answers2, Context) of
-                                ok ->
-                                    case z_convert:to_bool(m_rsc:p(Id, survey_show_results, Context)) of
-                                        true ->
-                                            #render{template="_survey_results.tpl", vars=[{id,Id}, {inline, true}, {history,History}, {q, As}]};
-                                        false ->
-                                            #render{template="_survey_end.tpl", vars=[{id,Id}, {history,History}, {q, As}]}
-                                    end;
-                                {ok, ContextOrRender} ->
-                                    ContextOrRender;
-                                {error, _Reason} ->
-                                    #render{template="_survey_error.tpl", vars=[{id,Id}, {history,History}, {q, As}]}
-                            end
-                    end
+                    admin_edit_survey_result(Id, Questions, Answers2, Editing, Context)
             end;
         _NoBlocks ->
             % No survey defined, show an error page.
@@ -242,12 +296,12 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
     end.
 
     get_args(Context) ->
-        Args = [ {z_convert:to_binary(K), z_convert:to_binary(V)} 
+        Args = [ {z_convert:to_binary(K), z_convert:to_binary(V)}
                 || {K,V} <- z_context:get_q_all_noz(Context), not is_tuple(V)
                ],
         Submitter = proplists:get_value(<<"z_submitter">>, Args),
         Buttons = proplists:get_all_values(<<"survey$button">>, Args),
-        WithButtons = lists:foldl(fun(B, Acc) -> 
+        WithButtons = lists:foldl(fun(B, Acc) ->
                                       case B of
                                           Submitter -> [{B,<<"yes">>} | proplists:delete(B, Acc) ];
                                           _ -> [{B, <<"no">>} | Acc]
@@ -266,7 +320,7 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
         [];
     group_multiselect(As) ->
         group_multiselect(lists:sort(As), undefined, [], []).
-    
+
         group_multiselect([], K, [V], Acc) -> [{K,V}|Acc];
         group_multiselect([], K, Vs, Acc) -> [{K,Vs}|Acc];
         group_multiselect([{K,V}|KVs], undefined, [], Acc) -> group_multiselect(KVs, K, [V], Acc);
@@ -336,7 +390,7 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
         case is_page_end(Q) of
             true ->
                 case test(Q, Answers, Context) of
-                    ok -> 
+                    ok ->
                         eval_page_jumps({L,Nr}, Answers, Context);
                     {jump, Name} ->
                         % Go to question 'name', count pagebreaks in between for the new page nr
@@ -345,7 +399,7 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
                             stop -> stop;
                             submit -> submit;
                             {[], _Nr} -> {error, {not_found, Name}};
-                            NextQsNr -> 
+                            NextQsNr ->
                                 eval_page_jumps(NextQsNr, Answers, Context)
                         end;
                     {error, Reason} ->
@@ -363,10 +417,10 @@ render_next_page(Id, PageNr, Direction, Answers, History, Context) ->
                 survey_q_page_break:test(Q, Answers, Context);
             <<"survey_button">> ->
                 % Assume button
-                Name = proplists:get_value(name, Q), 
+                Name = proplists:get_value(name, Q),
                 case proplists:get_value(Name, Answers) of
                     <<"yes">> ->
-                        Target = proplists:get_value(target, Q), 
+                        Target = proplists:get_value(target, Q),
                         case z_utils:is_empty(Target) of
                             true -> ok;
                             false -> {jump, Target}
@@ -456,7 +510,7 @@ is_page_end(Block) ->
 do_submit(SurveyId, Questions, Answers, Context) ->
     {FoundAnswers, Missing} = collect_answers(Questions, Answers, Context),
     case z_notifier:first(#survey_submit{id=SurveyId, handler=m_rsc:p(SurveyId, survey_handler, Context),
-                                         answers=FoundAnswers, missing=Missing, answers_raw=Answers}, 
+                                         answers=FoundAnswers, missing=Missing, answers_raw=Answers},
                           Context)
     of
         undefined ->
@@ -477,18 +531,23 @@ maybe_mail(SurveyId, Answers, Context) ->
     case probably_email(SurveyId, Context) of
         true ->
             PrepAnswers = survey_answer_prep:readable(SurveyId, Answers, Context),
+            Attachments = uploads(Context),
             mail_respondent(SurveyId, Answers, PrepAnswers, Context),
-            mail_result(SurveyId, PrepAnswers, Context);
+            mail_result(SurveyId, PrepAnswers, Attachments, Context);
         false ->
             nop
     end.
+
+uploads(Context) ->
+    Qs = z_context:get_q_all_noz(Context),
+    [ Upload || {_, #upload{} = Upload} <- Qs ].
 
 probably_email(SurveyId, Context) ->
     not z_utils:is_empty(m_rsc:p_no_acl(SurveyId, survey_email, Context))
     orelse z_convert:to_bool(m_rsc:p_no_acl(SurveyId, survey_email_respondent, Context)).
 
 %% @doc mail the survey result to an e-mail address
-mail_result(SurveyId, PrepAnswers, Context) ->
+mail_result(SurveyId, PrepAnswers, Attachments, Context) ->
     case m_rsc:p_no_acl(SurveyId, survey_email, Context) of
         undefined ->
             skip;
@@ -498,7 +557,14 @@ mail_result(SurveyId, PrepAnswers, Context) ->
                 {id, SurveyId},
                 {answers, PrepAnswers}
             ],
-            z_email:send_render(Email, "email_survey_result.tpl", Vars, Context),
+            E = #email{
+                to=Email,
+                html_tpl="email_survey_result.tpl",
+                vars=Vars,
+                attachments=Attachments
+            },
+            ContextLang = z_context:set_language(z_language:default_language(Context), Context),
+            z_email:send(E, ContextLang),
             ok
     end.
 
@@ -550,9 +616,9 @@ collect_answers([Q|Qs], Answers, FoundAnswers, Missing, Context) ->
             case Module:answer(Q, Answers, Context) of
                 {ok, none} ->
                     collect_answers(Qs, Answers, FoundAnswers, Missing, Context);
-                {ok, AnswerList} -> 
+                {ok, AnswerList} ->
                     collect_answers(Qs, Answers, [{QName, AnswerList}|FoundAnswers], Missing, Context);
-                {error, missing} -> 
+                {error, missing} ->
                     case z_convert:to_bool(proplists:get_value(is_required, Q)) of
                         true ->
                             collect_answers(Qs, Answers, FoundAnswers, [QName|Missing], Context);
@@ -565,12 +631,29 @@ collect_answers([Q|Qs], Answers, FoundAnswers, Missing, Context) ->
     end.
 
 %% @doc Save the modified survey results
-admin_edit_survey_result(Id, U, P, Questions, Answers, Context) ->
-    z_session:set(mod_survey_editing, undefined, Context),
-    {FoundAnswers, _Missing} = collect_answers(Questions, Answers, Context),
-    m_survey:insert_survey_submission(Id, U, P, FoundAnswers, Context),
-    Context1 = z_render:dialog_close(Context),
-    z_render:update("survey-results", z_template:render("_admin_survey_editor_results.tpl", [{id, Id}], Context), Context1).
+admin_edit_survey_result(Id, Questions, Answers, {editing, UserId, PersistentId, Actions}, Context) ->
+    case z_acl:rsc_editable(Id, Context) of
+        true ->
+            {FoundAnswers, _Missing} = collect_answers(Questions, Answers, Context),
+            m_survey:insert_survey_submission(Id, UserId, PersistentId, FoundAnswers, Context),
+            case Actions of
+                [] ->
+                    Context1 = z_render:dialog_close(Context),
+                    z_render:update(
+                            "survey-results",
+                            #render{
+                                template="_admin_survey_editor_results.tpl",
+                                vars=[
+                                    {id, Id}
+                                ]
+                            },
+                            Context1);
+                _ ->
+                    z_render:wire(Actions, Context)
+            end;
+        false ->
+            z_render:growl(?__("You are not allowed to change these results.", Context), Context)
+    end.
 
 
 

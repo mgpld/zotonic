@@ -4,7 +4,7 @@
 %%
 %% Setup instructions:
 %% * Enable the mod_twitter module
-%% * Configure in the admin the twitter keys (Auth -> App Keys &amp; Authentication Services)
+%% * Configure in the admin the twitter keys (Auth -> External Services)
 %% * Create a person in the Zotonic database, find a twitter ID on
 %%   twitter, and put it in the person record on the admin edit page (sidebar)
 %% * The module will start automatically to follow the users which have a twitter id set.
@@ -15,9 +15,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -55,7 +55,7 @@
 -include_lib("zotonic.hrl").
 
 -record(state, {
-            context, 
+            context,
             twerl_pid=undefined,
             follow={[],[]}
         }).
@@ -77,20 +77,19 @@ event(#submit{message=admin_twitter}, Context) ->
 
 save_settings(Context) ->
     lists:foreach(fun ({Key, Value}) ->
-                        K1 = z_convert:to_list(Key),
-                        case is_setting(K1) of
-                            true -> m_config:set_value(mod_twitter, list_to_atom(K1), Value, Context);
+                        case is_setting(Key) of
+                            true -> m_config:set_value(mod_twitter, binary_to_atom(Key, 'utf8'), Value, Context);
                             false -> ok
                         end
                   end,
                   z_context:get_q_all_noz(Context)).
 
-is_setting("consumer_key") -> true;
-is_setting("consumer_secret") -> true;
-is_setting("useauth") -> true;
-is_setting("access_token") -> true;
-is_setting("access_token_secret") -> true;
-is_setting("follow") -> true;
+is_setting(<<"consumer_key">>) -> true;
+is_setting(<<"consumer_secret">>) -> true;
+is_setting(<<"useauth">>) -> true;
+is_setting(<<"access_token">>) -> true;
+is_setting(<<"access_token_secret">>) -> true;
+is_setting(<<"follow">>) -> true;
 is_setting(_) -> false.
 
 observe_rsc_update_done(#rsc_update_done{id=Id}, Context) ->
@@ -189,8 +188,8 @@ handle_cast(Message, State) ->
 
 %% @doc Reconnect the follower process if it stopped.
 handle_info({'EXIT', Pid, Reason}, #state{twerl_pid=Pid} = State) ->
-    lager:warning("[~p] Twitter: received from twerl 'EXIT' ~p", 
-                  [z_context:site(State#state.context), Reason]),
+    lager:warning("Twitter: received from twerl 'EXIT' ~p",
+                  [Reason]),
     timer:send_after(15000, ensure_started),
     {noreply, State#state{twerl_pid=undefined}};
 
@@ -204,10 +203,10 @@ handle_info({tweet, JSON}, State) ->
         handle_tweet(JSON, State#state.context)
     catch
         X:Y ->
-            lager:error("[~p] Twitter: exception during tweet import ~p:~p, stacktrace: ~p", 
-                        [z_context:site(State#state.context), X, Y, erlang:get_stacktrace()]),
-            lager:info("[~p] Twitter: error tweet is: ~p", 
-                        [z_context:site(State#state.context), JSON])
+            lager:error("Twitter: exception during tweet import ~p:~p, stacktrace: ~p",
+                        [X, Y, erlang:get_stacktrace()]),
+            lager:info("Twitter: error tweet is: ~p",
+                        [JSON])
     end,
     {noreply, State};
 
@@ -251,7 +250,7 @@ check_stream(#state{context=Context} = State) ->
         true ->
             prepare_following(Consumer, AccessToken, AccessTokenSecret, State);
         false ->
-            lager:info("[~p] Twitter: not configured for automatic tweet imports.", [z_context:site(Context)]),
+            lager:info("Twitter: not configured for automatic tweet imports."),
             {ok, State}
     end.
 
@@ -270,14 +269,14 @@ prepare_following(Consumer, AccessToken, AccessTokenSecret, #state{context=Conte
     Phrases = lists:usort(PhrasesConfig),
     case {{Follow,Phrases}, State#state.twerl_pid} of
         {{[],[]}, _Pid} ->
-            lager:info("[~p] Twitter: nothing to follow", [z_context:site(Context)]),
+            lager:info("Twitter: nothing to follow"),
             stop_stream(State),
             {ok, State};
         {Following, Pid} when is_pid(Pid) ->
             % Nothing changed
             {ok, State};
         _ ->
-            lager:info("[~p] Twitter: following ~p users and ~p phrases", [z_context:site(Context), length(Follow), length(Phrases)]),
+            lager:info("Twitter: following ~p users and ~p phrases", [length(Follow), length(Phrases)]),
             State1 = ensure_twerl(State),
             stop_stream(State1),
             start_stream(Follow, Phrases, Consumer, AccessToken, AccessTokenSecret, State1)
@@ -289,8 +288,8 @@ stop_stream(#state{twerl_pid=TwerlPid}) ->
     twerl_stream_manager:stop_stream(TwerlPid).
 
 ensure_twerl(#state{twerl_pid=undefined} = State) ->
-    {ok, Pid} = twerl_stream_manager:start_link(),
     Self = self(),
+    {ok, Pid} = twerl_stream_manager:start_link([{monitor, Self}]),
     twerl_stream_manager:set_callback(Pid, fun(Data) -> Self ! {tweet, Data} end),
     State#state{twerl_pid=Pid};
 ensure_twerl(State) ->
@@ -311,7 +310,7 @@ start_stream(Follow, Phrases, Consumer, AccessToken, AccessTokenSecret, #state{t
             Auth = [
                 z_convert:to_list(ConsumerKey),
                 z_convert:to_list(ConsumerSecret),
-                z_convert:to_list(AccessToken), 
+                z_convert:to_list(AccessToken),
                 z_convert:to_list(AccessTokenSecret)
             ],
             twerl_stream_manager:set_endpoint(TwerlPid, {post, "https://stream.twitter.com/1.1/statuses/filter.json"}),
@@ -320,7 +319,7 @@ start_stream(Follow, Phrases, Consumer, AccessToken, AccessTokenSecret, #state{t
             ok = twerl_stream_manager:start_stream(TwerlPid),
             {ok, State#state{follow={Follow,Phrases}}};
         {error, _} = Error ->
-            lager:error("[~p] Twitter: error looking up user-ids for stream: ~p  (ids: ~p)", 
+            lager:error("Twitter: error looking up user-ids for stream: ~p  (ids: ~p)",
                         [z_context:site(State#state.context), Error, Follow]),
             {Error, State}
     end.
@@ -360,7 +359,7 @@ handle_tweet(Tweet, Context) ->
                          twitter_message_types())
     of
         [] ->
-            lager:debug("[~p] Twitter: receive unknown data in stream: ~p", [z_context:site(Context), Tweet]);
+            lager:debug("Twitter: receive unknown data in stream: ~p", [Tweet]);
         [Key|_] ->
             handle_tweet_type(Key, Tweet, Context)
     end.
@@ -370,8 +369,8 @@ handle_tweet(Tweet, Context) ->
 twitter_message_types() ->
     [
         <<"limit">>,
-        <<"event">>, 
-        <<"delete">>, 
+        <<"event">>,
+        <<"delete">>,
         <<"disconnect">>,
         <<"warning">>,
         <<"status_withheld">>,
@@ -388,27 +387,25 @@ handle_tweet_type(<<"user">>, Tweet, Context) ->
     % AsyncContext = z_context:prune_for_async(Context),
     % spawn(fun() -> import_tweet(Tweet, AsyncContext) end);
     twitter_import_tweet:import_tweet(Tweet, Context);
-handle_tweet_type(<<"delete">>, _Tweet, Context) ->
+handle_tweet_type(<<"delete">>, _Tweet, _Context) ->
     % {"delete":{"status":{"user_id":42,"user_id_str":"42","id_str":"1234","id":1234}}}
-    lager:debug("[~p] Twitter: streamer ignored delete request.", [z_context:site(Context)]);
-handle_tweet_type(<<"limit">>, Tweet, Context) ->
+    lager:debug("Twitter: streamer ignored delete request.");
+handle_tweet_type(<<"limit">>, Tweet, _Context) ->
     {Limit} = proplists:get_value(<<"limit">>, Tweet),
-    lager:debug("[~p] Twitter: streamer received limit (~p).", 
-               [z_context:site(Context), proplists:get_value(<<"track">>, Limit)]);
-handle_tweet_type(<<"disconnect">>, Tweet, Context) ->
+    lager:debug("Twitter: streamer received limit (~p).",
+               [proplists:get_value(<<"track">>, Limit)]);
+handle_tweet_type(<<"disconnect">>, Tweet, _Context) ->
     {Disconnect} = proplists:get_value(<<"disconnect">>, Tweet),
-    lager:warning("[~p] Twitter: streamer disconnect by Twitter because ~p, ~p", 
-                  [z_context:site(Context),
-                   proplists:get_value(<<"code">>, Disconnect),
+    lager:warning("Twitter: streamer disconnect by Twitter because ~p, ~p",
+                  [proplists:get_value(<<"code">>, Disconnect),
                    proplists:get_value(<<"reason">>, Disconnect)]);
-handle_tweet_type(<<"warning">>, Tweet, Context) ->
+handle_tweet_type(<<"warning">>, Tweet, _Context) ->
     {Warning} = proplists:get_value(<<"warning">>, Tweet),
-    lager:warning("[~p] Twitter: streamer warning ~p, ~p", 
-                  [z_context:site(Context),
-                   proplists:get_value(<<"code">>, Warning),
+    lager:warning("Twitter: streamer warning ~p, ~p",
+                  [proplists:get_value(<<"code">>, Warning),
                    proplists:get_value(<<"message">>, Warning)]);
-handle_tweet_type(Key, _Tweet, Context) ->
-    lager:debug("[~p] Twitter: streamer ignored ~p", [z_context:site(Context), Key]).
+handle_tweet_type(Key, _Tweet, _Context) ->
+    lager:debug("Twitter: streamer ignored ~p", [Key]).
 
 
 %%
@@ -431,9 +428,9 @@ handle_author_edges_upgrade(C) ->
     Context = z_acl:sudo(C),
     case m_rsc:name_to_id_cat(tweeted, predicate, Context) of
         {ok, Tweeted} ->
-            lager:info("[~p] Twitter: Found old 'tweeted' predicate, upgrading...", [z_context:site(Context)]),
+            lager:info("Twitter: Found old 'tweeted' predicate, upgrading..."),
             Author = m_rsc:name_to_id_cat_check(author, predicate, Context),
-            z_db:q("update edge set subject_id = object_id, object_id = subject_id, predicate_id = $1 where predicate_id = $2", 
+            z_db:q("update edge set subject_id = object_id, object_id = subject_id, predicate_id = $1 where predicate_id = $2",
                    [Author, Tweeted],
                    Context),
             m_rsc:delete(Tweeted, Context),

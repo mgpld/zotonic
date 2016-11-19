@@ -2,10 +2,10 @@
     <p>
         {_ The password of the admin user cannot be changed in the database. Please edit your site's configuration file at _} <strong>priv/sites/{{ m.site.host }}/config</strong> {_ if you want to change the admin password. _}
     </p>
-    
+
 {% else %}
     <p>
-	    {_ Enter a (unique) username and password. Usernames and passwords are case sensitive, so be careful when entering them. _}
+	    {_ Enter a unique username and password. Usernames and passwords are case sensitive, so be careful when entering them. _}
 	    {% if username %}
 	        {_ Click “delete” to remove any existing username/password from the person; this person will no longer be a user. _}
 	    {% endif %}
@@ -15,11 +15,7 @@
     <form id="{{ #form }}" method="POST" action="postback" class="form form-horizontal">
         <input type="hidden" name="id" value="{{ id }}" />
 
-        <!-- Fake usernames/password fields to stop Safari from autofilling -->
-        <!-- See https://github.com/zotonic/zotonic/issues/811 -->
-        <input style="position:absolute;top:-9999px;" type="text" id="fake-username" name="fake-username" class="nosubmit" value="" />
-        <input style="position:absolute;top:-9999px;" type="password" id="fake-password" name="fake-password" class="nosubmit" value="" />
-        <!-- End Safari -->
+        {% include "_password_autocomplete_off.tpl" %}
 
         <div class="form-group row">
 	        <label class="control-label col-md-3" for="new_username">{_ Username _}</label>
@@ -50,7 +46,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="modal-footer">
 	        {% button class="btn btn-default" action={dialog_close} text=_"Cancel" tag="a" %}
 

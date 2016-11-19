@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,7 +28,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 -export([start_link/1]).
 -export([
-    observe_search_query/2, 
+    observe_search_query/2,
     pid_observe_zlog/3,
     observe_admin_menu/3
 ]).
@@ -36,7 +36,7 @@
 -include("zotonic.hrl").
 -include_lib("modules/mod_admin/include/admin_menu.hrl").
 
--record(state, {host, admin_log_pages=[]}).
+-record(state, {site :: atom() | undefined, admin_log_pages=[] :: list()}).
 
 %% interface functions
 
@@ -76,12 +76,12 @@ init(Args) ->
     {context, Context} = proplists:lookup(context, Args),
     Context1 = z_acl:sudo(z_context:new(Context)),
     install_check(Context1),
-    Host = z_context:site(Context1),
+    Site = z_context:site(Context1),
     lager:md([
-            {site, Host},
+            {site, Site},
             {module, ?MODULE}
         ]),
-    {ok, #state{host=Host}}.
+    {ok, #state{site=Site}}.
 
 
 %% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -156,7 +156,7 @@ search(_, _, _) ->
 
 %% @doc Insert a simple log entry. Send an update to all UA's displaying the log.
 handle_simple_log(#log_message{user_id=UserId, type=Type, message=Msg, props=Props}, State) ->
-    Context = z_acl:sudo(z_context:new(State#state.host)),
+    Context = z_acl:sudo(z_context:new(State#state.site)),
     {ok, Id} = z_db:insert(log, [
                     {user_id, UserId},
                     {type, Type},
@@ -165,9 +165,9 @@ handle_simple_log(#log_message{user_id=UserId, type=Type, message=Msg, props=Pro
     mod_signal:emit({log_message, [{log_id, Id}, {user_id, UserId}, {type, Type}, {message, Msg}, {props, Props}]}, Context).
 
 % All non #log_message{} logs are sent to their own log table. If the severity of the log entry is high enough then
-% it is also sent to the main log.  
+% it is also sent to the main log.
 handle_other_log(Record, State) ->
-    Context = z_acl:sudo(z_context:new(State#state.host)),
+    Context = z_acl:sudo(z_context:new(State#state.site)),
     LogType = element(1, Record),
     Fields = record_to_proplist(Record),
     case z_db:table_exists(LogType, Context) of
@@ -217,7 +217,7 @@ opt_user(undefined) -> [];
 opt_user(Id) -> [" (", integer_to_list(Id), ")"].
 
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_log,
                 parent=admin_system,

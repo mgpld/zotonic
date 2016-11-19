@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,36 +20,28 @@
 -module(controller_signup_confirm).
 -author("Marc Worrell <marc@worrell.nl>").
 
--export([init/1, service_available/2, charsets_provided/2, content_types_provided/2]).
--export([provide_content/2]).
+-export([
+    charsets_provided/1,
+    content_types_provided/1,
+    provide_content/1
+]).
 -export([event/2]).
 
--include_lib("controller_webmachine_helper.hrl").
 -include_lib("include/zotonic.hrl").
 
 
-init(DispatchArgs) -> {ok, DispatchArgs}.
+charsets_provided(Context) ->
+    {[<<"utf-8">>], Context}.
 
-service_available(ReqData, DispatchArgs) when is_list(DispatchArgs) ->
-    Context  = z_context:new(ReqData, ?MODULE),
-    z_context:lager_md(Context),
-    Context1 = z_context:set(DispatchArgs, Context),
-    ?WM_REPLY(true, Context1).
+content_types_provided(Context) ->
+    {[{<<"text/html">>, provide_content}], Context}.
 
-charsets_provided(ReqData, Context) ->
-    {[{"utf-8", fun(X) -> X end}], ReqData, Context}.
-
-content_types_provided(ReqData, Context) ->
-    {[{"text/html", provide_content}], ReqData, Context}.
-
-
-provide_content(ReqData, Context) ->
-    Context1 = ?WM_REQ(ReqData, Context),
-    Context2 = z_context:ensure_all(Context1),
+provide_content(Context) ->
+    Context2 = z_context:ensure_all(Context),
     z_context:lager_md(Context2),
-    Key = z_context:get_q(key, Context2, []),
+    Key = z_context:get_q(<<"key">>, Context2, <<>>),
     {Vars, ContextConfirm} = case Key of
-                                [] -> 
+                                <<>> ->
                                     {[], Context2};
                                 _ ->
                                     case confirm(Key, Context2) of
@@ -62,8 +54,7 @@ provide_content(ReqData, Context) ->
                                     end
                               end,
     Rendered = z_template:render("signup_confirm.tpl", Vars, ContextConfirm),
-    {Output, OutputContext} = z_context:output(Rendered, ContextConfirm),
-    ?WM_REPLY(Output, OutputContext).
+    z_context:output(Rendered, ContextConfirm).
 
 
 %% @doc Handle the submit of the signup form.
@@ -74,7 +65,7 @@ event(#submit{}, Context) ->
             {ok, ContextUser} = z_auth:logon(UserId, Context),
             Location = confirm_location(UserId, ContextUser),
             z_render:wire({redirect, [{location, Location}]}, ContextUser);
-        {error, _Reason} -> 
+        {error, _Reason} ->
             z_render:wire({show, [{target,"confirm_error"}]}, Context)
     end.
 

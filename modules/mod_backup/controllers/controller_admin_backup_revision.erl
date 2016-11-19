@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,22 +20,22 @@
 -author("Marc Worrell <marc@worrell.nl>").
 
 -export([
-    is_authorized/2,
+    is_authorized/1,
     event/2
 ]).
 
 -include_lib("controller_html_helper.hrl").
 
-is_authorized(ReqData, Context0) ->
-    Context = z_admin_controller_helper:init_session(?WM_REQ(ReqData, Context0)),
+is_authorized(Context0) ->
+    Context = z_admin_controller_helper:init_session(Context0),
     case z_acl:is_allowed(use, mod_admin, Context) of
         true ->
-            Id = m_rsc:rid(z_context:get_q("id", Context), Context),
+            Id = m_rsc:rid(z_context:get_q(<<"id">>, Context), Context),
             case m_rsc:exists(Id, Context) of
-                false -> 
+                false ->
                     z_acl:wm_is_authorized(true, Context);
                 true ->
-                    z_acl:wm_is_authorized(z_acl:rsc_editable(Id, Context), Context) 
+                    z_acl:wm_is_authorized(z_acl:rsc_editable(Id, Context), Context)
             end;
         false ->
             z_acl:wm_is_authorized(true, Context)
@@ -44,29 +44,29 @@ is_authorized(ReqData, Context0) ->
 
 html(Context) ->
     Vars = [
-        {id, m_rsc:rid(z_context:get_q("id", Context), Context)},
+        {id, m_rsc:rid(z_context:get_q(<<"id">>, Context), Context)},
         {page_admin_backup, true}
     ],
 	Html = z_template:render("admin_backup_revision.tpl", Vars, Context),
 	z_context:output(Html, Context).
 
 
-event(#postback_notify{message="rev-diff"}, Context) ->
-    Id = m_rsc:rid(z_context:get_q("id", Context), Context),
+event(#postback_notify{message= <<"rev-diff">>}, Context) ->
+    Id = m_rsc:rid(z_context:get_q(<<"id">>, Context), Context),
     case z_acl:rsc_editable(Id, Context) of
         true ->
-            A = z_convert:to_list(z_context:get_q("a", Context)),
-            B = z_convert:to_list(z_context:get_q("b", Context)),
+            A = z_context:get_q(<<"a">>, Context),
+            B = z_context:get_q(<<"b">>, Context),
             PropsA = fetch_props(Id, A, Context),
             PropsB = fetch_props(Id, B, Context),
             case check_access(PropsA, PropsB, Context) of
                 true ->
-                    update_diff(Id, PropsA, PropsB, Context); 
+                    update_diff(Id, PropsA, PropsB, Context);
                 false ->
-                    z_render:growl_error(?__("You are not allowed to see the revisions", Context), Context) 
+                    z_render:growl_error(?__("You are not allowed to see the revisions", Context), Context)
             end;
         false ->
-            z_render:growl_error(?__("You are not allowed to see the revisions", Context), Context) 
+            z_render:growl_error(?__("You are not allowed to see the revisions", Context), Context)
     end;
 event(#postback{message={revert, Args}}, Context) ->
     RscId = proplists:get_value(rsc_id, Args),
@@ -75,7 +75,7 @@ event(#postback{message={revert, Args}}, Context) ->
         true ->
             do_revert(RscId, RevId, Context);
         false ->
-            z_render:growl_error(?__("You are not allowed to see the revisions", Context), Context) 
+            z_render:growl_error(?__("You are not allowed to see the revisions", Context), Context)
     end.
 
 
@@ -121,9 +121,9 @@ update_diff(Id, {ok, A}, {ok, B}, Context) ->
 
 fetch_props(_Id, undefined, _Context) ->
     undefined;
-fetch_props(Id, <<"latest">>, Context) ->
-    fetch_props(Id, "latest", Context);
 fetch_props(Id, "latest", Context) ->
+    fetch_props(Id, <<"latest">>, Context);
+fetch_props(Id, <<"latest">>, Context) ->
     {ok, [
             {id, 0},
             {rsc_id, Id},
@@ -148,9 +148,9 @@ fetch_props(Id, Rev, Context) ->
 check_access(undefined, undefined, _Context) ->
     true;
 check_access({ok, PropsA}, undefined, Context) ->
-    z_acl:rsc_editable(proplists:get_value(id,PropsA), Context);
+    z_acl:rsc_editable(proplists:get_value(rsc_id,PropsA), Context);
 check_access(undefined, {ok, PropsA}, Context) ->
-    z_acl:rsc_editable(proplists:get_value(id,PropsA), Context);
+    z_acl:rsc_editable(proplists:get_value(rsc_id,PropsA), Context);
 check_access({ok, PropsA}, {ok, PropsB}, Context) ->
     case {proplists:get_value(rsc_id, PropsA),
           proplists:get_value(rsc_id, PropsB)}

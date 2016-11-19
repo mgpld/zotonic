@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -62,7 +62,7 @@ extract_filters(Path, OptFilters, Context) ->
                 nomatch ->
                     {SafePath, SafePath, OptFilters};
                 {_,_} ->
-                    case z_media_tag:url2props(SafePath, Context) of 
+                    case z_media_tag:url2props(SafePath, Context) of
                         {ok, {OriginalFile, PreviewPropList, _Checksum, _ChecksumBaseString}} ->
                             {SafePath, OriginalFile, case OptFilters of undefined -> []; _ -> OptFilters end ++ PreviewPropList};
                         {error, _} ->
@@ -107,7 +107,7 @@ locate_source([{module, Module} = M|Rs], Path, OriginalFile, Filters, Context) -
     end;
 locate_source([DirName|Rs], Path, OriginalFile, Filters, Context) ->
     NamePath = make_abs(filename:join([DirName,Path]), Context),
-    case part_file(NamePath) of
+    case part_file(NamePath, []) of
         {ok, Loc} ->
             Loc;
         {error, enoent} ->
@@ -122,11 +122,11 @@ locate_source_module_indexer(lib, Path, OriginalFile, [], Context) ->
 locate_source_module_indexer(ModuleIndex, Path, _OriginalFile, undefined, Context) ->
     case z_module_indexer:find(ModuleIndex, Path, Context) of
         {ok, #module_index{filepath=FoundFile}} ->
-            part_file(FoundFile);
+            part_file(FoundFile, []);
         {error, enoent} ->
             % Try to find ".tpl" version -> render and cache result
             TplFile = <<Path/binary, ".tpl">>,
-            case z_module_indexer:find_ua_class(template, desktop, TplFile, Context) of
+            case z_module_indexer:find(template, TplFile, Context) of
                 {ok, #module_index{} = M} ->
                     {ok, render(M, Context)};
                 {error, _} = Error ->
@@ -147,9 +147,9 @@ locate_source_module_indexer(ModuleIndex, Path, OriginalFile, Filters, Context) 
     end.
 
 %% @doc Locate an uploaded file, stored in the archive.
-locate_source_uploaded(<<"preview/", _/binary>> = Path, OriginalFile, Filters, Context) -> 
+locate_source_uploaded(<<"preview/", _/binary>> = Path, OriginalFile, Filters, Context) ->
     locate_source_uploaded_1([], Path, OriginalFile, Filters, Context);
-locate_source_uploaded(Path, OriginalFile, Filters, Context) -> 
+locate_source_uploaded(Path, OriginalFile, Filters, Context) ->
     case m_media:get_by_filename(OriginalFile, Context) of
         undefined ->
             {error, enoent};
@@ -173,7 +173,7 @@ locate_in_filestore(Path, InDir, Medium, Context) ->
         {ok, {filezcache, Pid, Opts}} when is_pid(Pid) ->
             {ok, #part_cache{
                 cache_pid=Pid,
-                cache_monitor=erlang:monitor(process, Pid), 
+                cache_monitor=erlang:monitor(process, Pid),
                 modified=proplists:get_value(created, Opts),
                 acl=proplists:get_value(id, Medium),
                 size=proplists:get_value(size, Opts)
@@ -187,16 +187,13 @@ locate_in_filestore(Path, InDir, Medium, Context) ->
                 acl=proplists:get_value(id, Medium)
             }};
         undefined ->
-            part_file(filename:join(InDir, Path))
+            part_file(filename:join(InDir, Path), [{acl,proplists:get_value(id, Medium)}])
     end.
 
 part_missing(Filename) ->
     {ok, #part_missing{
         file = Filename
     }}.
-
-part_file(Filename) ->
-    part_file(Filename, []).
 
 part_file(Filename, Opts) ->
     case file:read_file_info(Filename) of
@@ -241,13 +238,16 @@ generate_preview(true, _Mime, Path, OriginalFile, Filters, Medium, Context) ->
                     z_notifier:first(#filestore{action=upload, path=FileStorePath}, Context),
                     case proplists:get_value(id, Medium) of
                         undefined ->
-                            part_file(PreviewFilePath);
+                            part_file(PreviewFilePath, []);
                         RscId ->
                             part_file(PreviewFilePath, [{acl,RscId}])
                     end;
                 {error, enoent} ->
-                    lager:warning("Convert error: input file disappeared, restarting ~p (~p)", [Path, Filename]),
+                    lager:warning("[~p] Convert error: input file disappeared, restarting ~p (~p)",
+                                  [z_context:site(Context), Path, Filename]),
                     {error, preview_source_gone};
+                {error, convert_error} ->
+                    convert_error_part(Medium, PreviewFilePath, Filters, Context);
                 {error, _} = Error ->
                     lager:warning("Convert error: ~p for path ~p", [Error, Path]),
                     Error
@@ -257,6 +257,33 @@ generate_preview(true, _Mime, Path, OriginalFile, Filters, Medium, Context) ->
     end;
 generate_preview(false, _Mime, _Path, _OriginalFile, _Filters, _Medium, _Context) ->
     {error, enoent}.
+
+
+% Copy error image to the OutFile
+% 1. Find correct error image
+% 2. Redo the resize with the error image as input
+convert_error_part(Medium, PreviewFilePath, Filters, Context) ->
+    case z_module_indexer:find(lib, <<"images/placeholder.png">>, Context) of
+        {ok, #module_index{filepath=Path}} ->
+            case z_media_preview:convert(z_convert:to_list(Path), Path, z_convert:to_list(PreviewFilePath), Filters, Context) of
+                ok ->
+                    case proplists:get_value(id, Medium) of
+                        undefined ->
+                            part_file(PreviewFilePath, []);
+                        RscId ->
+                            part_file(PreviewFilePath, [{acl,RscId}])
+                    end;
+                {error, _} = Error ->
+                    lager:info("[~p] Error ~p generating fallback preview for ~p with filters ~p",
+                               [z_context:site(Context), Error, PreviewFilePath, Filters]),
+                    Error
+            end;
+        {error, enoent} ->
+            lager:info("[~p] Can't find 'images/placeholder.png' for convert error fallback.",
+                       [z_context:site(Context)]),
+            {error, convert_error}
+    end.
+
 
 fetch_archive(File, Context) ->
     case locate_in_filestore(File, z_path:media_archive(Context), [], Context) of
@@ -274,12 +301,13 @@ fetch_archive(File, Context) ->
 
 make_abs([$/|_] = Path, _Context) -> Path;
 make_abs(<<$/, _/binary>> = Path, _Context) -> Path;
-make_abs(Path, Context) -> z_path:files_subdir(Path, Context). 
+make_abs(Path, Context) -> z_path:files_subdir(Path, Context).
 
 
 safe_path(<<$/, P/binary>>) ->
     safe_path(P);
 safe_path(P) ->
+    % TODO: replace with binary version
     PS = z_convert:to_list(P),
     case mochiweb_util:safe_relative_path(PS) of
         undefined ->

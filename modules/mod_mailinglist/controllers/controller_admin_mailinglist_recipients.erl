@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,14 +20,14 @@
 -author("Marc Worrell <marc@worrell.nl>").
 
 -export([
-    is_authorized/2,
+    is_authorized/1,
 	event/2
 ]).
 
 -include_lib("controller_html_helper.hrl").
 
-is_authorized(ReqData, Context) ->
-    z_admin_controller_helper:is_authorized(mod_mailinglist, ReqData, Context).
+is_authorized(Context) ->
+    z_admin_controller_helper:is_authorized(mod_mailinglist, Context).
 
 html(Context) ->
     Vars = [
@@ -53,7 +53,7 @@ event(#postback{message={dialog_recipient_edit, [{id,Id}, {recipient_id, RcptId}
 event(#postback{message={recipient_is_enabled_toggle, [{recipient_id, RcptId}]}, target=TargetId}, Context) ->
 	m_mailinglist:recipient_is_enabled_toggle(RcptId, Context),
 	z_script:add_script(
-		["$(\"#", TargetId, "\").parents(\"li:first\").toggleClass(\"unpublished\"); "], 
+		["$(\"#", TargetId, "\").parents(\"li:first\").toggleClass(\"unpublished\"); "],
 		Context);
 
 event(#postback{message={recipient_change_email, [{recipient_id, RcptId}]}}, Context) ->

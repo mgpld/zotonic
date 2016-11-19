@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,7 +28,7 @@
     m_find_value/3,
     m_to_list/2,
     m_value/2,
-    
+
     list_rsc/2,
     get/2,
     insert/6,
@@ -36,7 +36,7 @@
     toggle/2,
     gravatar_code/1,
     merge/3,
-    
+
     search/3
 ]).
 
@@ -78,22 +78,23 @@ m_value(#m{value=undefined}, _Context) ->
 
 
 %% @doc List all comments of the resource.
-%% @spec list_rsc(int(), Context) -> [ PropList ]
-list_rsc(RscId, Context) when is_integer(RscId) ->
+-spec list_rsc(m_rsc:resource(), #context{}) -> list().
+list_rsc(RscId, Context) ->
     F = fun() ->
-        z_db:assoc_props("select * from comment where rsc_id = $1 order by created asc", [RscId], Context)
+        z_db:assoc_props("select * from comment where rsc_id = $1 order by created asc", [m_rsc:rid(RscId, Context)], Context)
     end,
     z_depcache:memo(F, {comment_rsc, RscId}, ?MAXAGE_COMMENT, Context).
 
 
 %% @doc Count comments of the resource.
 %% @spec count_rsc(int(), Context) -> [ PropList ]
-count_rsc(RscId, Context) when is_integer(RscId) ->
+-spec count_rsc(m_rsc:resource(), #context{}) -> list().
+count_rsc(RscId, Context) ->
     F = fun() ->
-        z_db:q1("select count(*) from comment where rsc_id = $1", [RscId], Context)
+        z_db:q1("select count(*) from comment where rsc_id = $1", [m_rsc:rid(RscId, Context)], Context)
     end,
     z_depcache:memo(F, {comment_rsc_count, RscId}, ?MAXAGE_COMMENT, [{comment_rsc, RscId}], Context).
-    
+
 
 %% @doc Fetch a specific comment from the database.
 %% @spec get(int(), Context) -> PropList
@@ -102,21 +103,21 @@ get(CommentId, Context) ->
 
 
 %% @doc Insert a new comment. Fetches the submitter information from the Context.
-%% @spec insert(Id::int(), Name::string(), Email::string(), Message::string(), Is_visible::boolean(), Context) -> {ok, CommentId} | {error, Reason}
 %% @todo Insert external ip address and user agent string
+-spec insert(m_rsc:resource(), Name::string(), Email::string(), Message::string(), Is_visible::boolean(), #context{}) -> {ok, pos_integer()} | {error, any()}.
 insert(RscId, Name, Email, Message, Is_visible, Context) ->
-    case z_acl:rsc_visible(RscId, Context) 
-        and (z_auth:is_auth(Context) 
+    case z_acl:rsc_visible(RscId, Context)
+        and (z_auth:is_auth(Context)
             orelse z_convert:to_bool(m_config:get_value(mod_comment, anonymous, true, Context))) of
         true ->
             Email = z_string:trim(Email),
             Name1 = z_html:escape(z_string:trim(Name)),
             Message1 = z_sanitize:escape_link(z_string:trim(Message), Context),
-            KeepInformed = z_convert:to_bool(z_context:get_q("keep_informed", Context, false)),
-            UserAgent = z_context:get_q("user_agent", Context, <<"">>),
+            KeepInformed = z_convert:to_bool(z_context:get_q(<<"keep_informed">>, Context, false)),
+            UserAgent = z_context:get_q(<<"user_agent">>, Context, <<>>),
             IPAddress = peer(z_context:get_reqdata(Context)),
             Props = [
-                {rsc_id, z_convert:to_integer(RscId)},
+                {rsc_id, m_rsc:rid(RscId, Context)},
                 {is_visible, Is_visible},
                 {user_id, z_acl:user(Context)},
                 {persistent_id, z_context:persistent_id(Context)},
@@ -143,7 +144,7 @@ insert(RscId, Name, Email, Message, Is_visible, Context) ->
 peer(undefined) ->
     <<>>;
 peer(RD) ->
-    wrq:peer(RD).
+    cowmachine_req:peer(RD).
 
 %% @doc Delete a comment.  Only possible if the user has edit permission on the page.
 delete(CommentId, Context) ->
@@ -161,7 +162,7 @@ delete(CommentId, Context) ->
 toggle(CommentId, Context) ->
     case check_editable(CommentId, Context) of
         {ok, RscId} ->
-            z_db:q("update comment 
+            z_db:q("update comment
                     set is_visible = not is_visible
                     where id = $1",
                    [CommentId],
@@ -194,14 +195,15 @@ gravatar_code(Email) ->
 
 
 %% @doc Move all comments from one resource to another
+-spec merge(m_rsc:resource(), m_rsc:resource(), #context{}) -> ok.
 merge(WinnerId, LooserId, Context) ->
     z_db:q("update comment
             set rsc_id = $1
             where rsc_id = $2",
-           [WinnerId, LooserId],
+           [m_rsc:rid(WinnerId, Context), m_rsc:rid(LooserId, Context)],
            Context),
-    z_depcache:flush({comment_rsc, LooserId}, Context),
-    z_depcache:flush({comment_rsc, WinnerId}, Context),
+    z_depcache:flush({comment_rsc, m_rsc:rid(LooserId, Context)}, Context),
+    z_depcache:flush({comment_rsc, m_rsc:rid(WinnerId, Context)}, Context),
     ok.
 
 

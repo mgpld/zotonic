@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,50 +19,43 @@
 -module(controller_zotonic_status).
 -author("Marc Worrell <marc@worrell.nl>").
 
--export([init/1, service_available/2, charsets_provided/2, content_types_provided/2]).
 -export([
-	provide_content/2,
+    charsets_provided/1,
+    content_types_provided/1,
+	provide_content/1,
 	event/2,
 	updater/2
 ]).
 
--include_lib("controller_webmachine_helper.hrl").
 -include_lib("include/zotonic.hrl").
 
 
-init(DispatchArgs) -> {ok, DispatchArgs}.
+charsets_provided(Context) ->
+    {[<<"utf-8">>], Context}.
 
-service_available(ReqData, DispatchArgs) when is_list(DispatchArgs) ->
-    Context  = z_context:new(ReqData, ?MODULE),
-    Context1 = z_context:set(DispatchArgs, Context),
-    ?WM_REPLY(true, Context1).
-
-charsets_provided(ReqData, Context) ->
-    {[{"utf-8", fun(X) -> X end}], ReqData, Context}.
-
-content_types_provided(ReqData, Context) ->
+content_types_provided(Context) ->
     case z_context:get(content_type, Context) of
         undefined ->
-            {[{"text/html", provide_content}], ReqData, Context};
-        Mime -> 
-            {[{Mime, provide_content}], ReqData, Context}
+            {[{<<"text/html">>, provide_content}], Context};
+        Mime ->
+            {[{z_convert:to_binary(Mime), provide_content}], Context}
     end.
 
-provide_content(ReqData, Context) ->
-    Context1 = ?WM_REQ(ReqData, Context),
-    Context2 = z_context:ensure_all(Context1),
-
+provide_content(Context) ->
+    Context2 = z_context:ensure_all(Context),
     case z_acl:user(Context2) of
-        undefined -> 
+        undefined ->
             logon_page(Context2);
-        _ -> 
+        _ ->
             status_page(Context2)
     end.
 
 logon_page(Context) ->
     Rendered = z_template:render("logon.tpl", z_context:get_all(Context), Context),
     {Output, OutputContext} = z_context:output(Rendered, Context),
-    ?WM_REPLY(Output, OutputContext).
+    Context1 = cowmachine_req:set_response_code(503, OutputContext),
+    Context2 = cowmachine_req:set_resp_body(Output, Context1),
+    {{halt, 503}, Context2}.
 
 status_page(Context) ->
     Template = z_context:get(template, Context),
@@ -76,22 +69,25 @@ status_page(Context) ->
     Vars1 = z_notifier:foldl(zotonic_status_init, Vars, Context),
     Rendered = z_template:render(Template, Vars1, Context),
     {Output, OutputContext} = z_context:output(Rendered, Context),
-    start_stream(SitesStatus, OutputContext),
-    ?WM_REPLY(Output, OutputContext).
+    case Template of
+        "home.tpl" -> start_stream(SitesStatus, OutputContext);
+        _ -> ok
+    end,
+    {Output, OutputContext}.
 
 
 %% -----------------------------------------------------------------------------------------------
 %% Handle all events
 %% -----------------------------------------------------------------------------------------------
 
-event(#submit{message=[], form=FormId}, Context) ->
-    case z_context:get_q(password, Context) == z_config:get(password) of
+event(#submit{message= <<>>, form=FormId}, Context) ->
+    case z_context:get_q(<<"password">>, Context) =:= z_convert:to_binary(z_config:get(password)) of
         true ->
             {ok, ContextAuth} = z_auth:logon(1, Context),
             z_render:wire({reload, []}, ContextAuth);
         false ->
             z_render:wire([
-                        {add_class, [{target,FormId}, {class,"error-pw"}]}, 
+                        {add_class, [{target,FormId}, {class,"error-pw"}]},
                         {set_value, [{target,"password"},{value, ""}]}], Context)
     end;
 event(#postback{message={logoff, []}}, Context) ->
@@ -118,12 +114,12 @@ event(#postback{message={site_admin, [{site,Site}]}}, Context) ->
         case z_dispatcher:url_for(admin, SiteContext) of
             undefined ->
                 z_render:growl_error("This site does not have an admin url.", Context);
-            U -> 
+            U ->
                 Url = z_dispatcher:abs_url(U, SiteContext),
                 z_render:wire({redirect, [{location,Url}]}, Context)
         end
     catch
-        _:_ -> z_render:growl_error("Could not fetch the admin url, the site might not be running.", Context) 
+        _:_ -> z_render:growl_error("Could not fetch the admin url, the site might not be running.", Context)
     end.
 
 
@@ -159,7 +155,7 @@ render_update(SitesStatus, Context) ->
     Vars1 = z_notifier:foldl(zotonic_status_init, Vars, Context),
     Context1 = z_render:update("sites", #render{template="_sites.tpl", vars=Vars1}, Context),
     z_session_page:add_script(Context1).
-    
+
 notice(SiteName, Text, Context) ->
      mod_zotonic_status_vcs:notice(SiteName, Text, Context).
 
@@ -174,7 +170,7 @@ site_config(Site) ->
     end.
 
 get_sites() ->
-    lists:filter(fun(Site) -> 
+    lists:filter(fun(Site) ->
                     not lists:member(Site, z_sites_manager:get_builtin_sites())
                  end,
                  z_sites_manager:get_sites_all()).

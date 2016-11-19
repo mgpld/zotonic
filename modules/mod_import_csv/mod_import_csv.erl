@@ -6,9 +6,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,9 +25,10 @@
 
 %% interface functions
 -export([
-	observe_dropbox_file/2,
-	can_handle/3,
-	event/2,
+    observe_dropbox_file/2,
+    observe_admin_menu/3,
+    can_handle/3,
+    event/2,
     inspect_file/1,
     manage_schema/2
 ]).
@@ -39,6 +40,7 @@
 
 -include_lib("zotonic.hrl").
 -include_lib("include/import_csv.hrl").
+-include_lib("modules/mod_admin/include/admin_menu.hrl").
 
 %% @doc Handle a dropbox file when it is a tsv/csv file we know.
 observe_dropbox_file(#dropbox_file{filename=F}, Context) ->
@@ -58,13 +60,30 @@ observe_dropbox_file(#dropbox_file{filename=F}, Context) ->
             undefined
     end.
 
+%% @doc Add menu item to 'Content' admin menu
+-spec observe_admin_menu(atom(), list(), #context{}) -> list().
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
+    [
+        #menu_separator{
+            parent = admin_content,
+            visiblecheck = {acl, use, mod_import_csv}
+        },
+        #menu_item{
+            id = admin_import,
+            parent = admin_content,
+            label = ?__("Import content", Context),
+            url = {admin_import},
+            visiblecheck = {acl, use, mod_import_csv}
+        }|
+        Acc
+    ].
 
 %% @doc Uploading a CSV file through the web interface.
 event(#submit{message={csv_upload, []}}, Context) ->
     case z_acl:is_allowed(use, mod_import_csv, Context) of
         true ->
-            #upload{filename=OriginalFilename, tmpfile=TmpFile} = z_context:get_q_validated("upload_file", Context),
-            IsReset = z_convert:to_bool(z_context:get_q("reset", Context)), 
+            #upload{filename=OriginalFilename, tmpfile=TmpFile} = z_context:get_q_validated(<<"upload_file">>, Context),
+            IsReset = z_convert:to_bool(z_context:get_q(<<"reset">>, Context)),
 
             %% Move temporary file to processing directory
             Dir = z_path:files_subdir_ensure("processing", Context),
@@ -102,8 +121,8 @@ manage_schema(What, Context) ->
 
 handle_spawn(Def, IsReset, Context) ->
     {ok, Def1} = to_importing_dir(Def, Context),
-    ContextAsync = z_context:prune_for_async(Context), 
-    spawn(fun() -> 
+    ContextAsync = z_context:prune_for_async(Context),
+    spawn(fun() ->
             import_csv:import(Def1, IsReset, ContextAsync)
           end).
 
@@ -127,9 +146,9 @@ can_handle(OriginalFilename, DataFile, Context) ->
     case z_notifier:first(#import_csv_definition{basename=filename:basename(OriginalFilename), filename=DataFile}, Context) of
         {ok, #import_data_def{colsep=ColSep, skip_first_row=SkipFirstRow, columns=Columns, importdef=ImportDef}} ->
             {ok, #filedef{
-                        filename=DataFile, 
-                        file_size=filelib:file_size(DataFile), 
-                        colsep=ColSep, 
+                        filename=DataFile,
+                        file_size=filelib:file_size(DataFile),
+                        colsep=ColSep,
                         columns=Columns,
                         skip_first_row=SkipFirstRow,
                         importdef=ImportDef
@@ -142,7 +161,7 @@ can_handle(OriginalFilename, DataFile, Context) ->
             case inspect_file(DataFile) of
                 {ok, #filedef{columns=Cols} = FD} ->
                     case lists:member("name", Cols) andalso lists:member("category", Cols) of
-                        true -> 
+                        true ->
                             {ok, FD};
                         false ->
                             lager:info("Invalid CSV file, missing 'name' and/or 'category' columns: ~p", [Cols]),
@@ -168,9 +187,9 @@ inspect_file(Filename) ->
                         {ok, Cols, Sep} ->
                             Cols1 = [ to_property_name(Col) || Col <- Cols ],
                             {ok, #filedef{
-                                        filename=Filename, 
-                                        file_size=FSize, 
-                                        colsep=Sep, 
+                                        filename=Filename,
+                                        file_size=FSize,
+                                        colsep=Sep,
                                         columns=Cols1,
                                         skip_first_row=true,
                                         importdef=cols2importdef(Cols1)
@@ -190,7 +209,7 @@ utf8(S) ->
     case z_string:sanitize_utf8(S) of
         S ->
             S;
-        Stripped -> 
+        Stripped ->
             case eiconv:convert("Windows-1250", S) of
                 {ok, Utf8} -> Utf8;
                 {error, _} -> Stripped
@@ -242,7 +261,7 @@ parse_line([Sep|Rest], Sep, Col, Cols) ->
     parse_line(Rest, Sep, [], [parse_csv:cleanup_field(lists:reverse(Col))|Cols]);
 parse_line([C|Rest], Sep, Col, Cols) ->
     parse_line(Rest, Sep, [C|Col], Cols).
-    
+
 
 %%====================================================================
 %% Default import definitions
@@ -256,7 +275,7 @@ cols2importdef(Cols) ->
             % Field mapping
             [
              {"name", {concat, ["name_prefix", "name"]}}
-             | lists:filter(fun(X) -> 
+             | lists:filter(fun(X) ->
                                 X =/= undefined
                             end,
                             ImportDefMap)

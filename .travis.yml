@@ -1,28 +1,28 @@
 language: erlang
 otp_release:
+  - 19.0
+  - 18.3
   - 18.0
-  - 17.4
-  - R16B
-
 addons:
   apt:
     packages:
       - python-sphinx
       - enchant
-
-install: make all edocs
+before_script:
+  - psql -c 'CREATE USER zotonic; ALTER USER zotonic CREATEDB;' -U postgres
+install: echo "hi" # stub command; otherwise travis runs 'rebar get-deps'
 script:
   - make all edocs
   - make test
+  - pip install --user -r doc/requirements.txt
   - make -C doc/ stubs
   - make -C doc/ SPHINXOPTS='-nW' html
+  - ./rebar3 xref
 sudo: false
 branches:
   only:
     - master
-    - release-0.13.x
-    - release-0.12.x
-    - release-0.11.x
+    - 0.x
 notifications:
   email:
     # recipients:

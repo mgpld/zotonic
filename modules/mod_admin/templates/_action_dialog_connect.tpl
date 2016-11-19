@@ -4,9 +4,11 @@ params:
 - language (optional)
 - actions (optional)
 - stay (optional)
-- subject_id
+- subject_id or object_id
 - tabs_enabled (optional): list of tab names: ["new", "depiction", "find",  "upload", "url"]
 - tab (optional)
+- autoclose (optional - defaults to false)
+- nocatselect (optional - defaults to false)
 
 find params:
 - predicate (optional) (atom)
@@ -18,7 +20,7 @@ find params:
     language|default:q.language|default:z_language,
     actions|default:[],
     tab|default:q.tab|default:(tabs_enabled|first)|default:"find",
-    m.rsc[category].id|default:(m.predicate.object_category[predicate]|first|element:1)
+    m.rsc[q.category|default:category].id|default:(m.predicate.object_category[predicate]|first|element:1)
     as
     callback,
     language,
@@ -45,7 +47,7 @@ find params:
                     {% endif %}
                 {% endif %}
                 {% if not tabs_enabled or "find"|member:tabs_enabled %}
-                    <li {% if tab == "find" and not q.is_zmedia %}class="active"{% endif %}>
+                    <li {% if tab == "find" %}class="active"{% endif %}>
                         <a data-toggle="tab" href="#{{ #tab }}-find">{_ Find Page _}</a>
                     </li>
                 {% endif %}
@@ -57,7 +59,7 @@ find params:
                     {% endif %}
                 {% endif %}
                 {% if not tabs_enabled or "upload"|member:tabs_enabled %}
-                    <li {% if tab == "upload" and not q.is_zmedia %}class="active"{% endif %}>
+                    <li {% if tab == "upload" %}class="active"{% endif %}>
                         <a data-toggle="tab" href="#{{ #tab }}-upload">{_ Upload File _}</a>
                     </li>
                 {% endif %}
@@ -92,10 +94,12 @@ find params:
                     predicate=predicate
                     delegate=delegate
                     subject_id=subject_id
+                    object_id=object_id
                     is_active
                     title=""
                     cat=cat
                     nocatselect
+                    autoclose
                 %}
         {% else %}
             {% if not tabs_enabled or "depiction"|member:tabs_enabled %}
@@ -105,6 +109,7 @@ find params:
                         predicate=predicate
                         delegate=delegate
                         subject_id=subject_id
+                        object_id=object_id
                         is_active=(tab == "depiction")
                         title=""
                     %}
@@ -115,21 +120,22 @@ find params:
                     tab=#tab
                     predicate=predicate
                     delegate=delegate
-                    subject_id=subject_id 
-                    is_active=(not q.is_zmedia and tab == "find")
+                    subject_id=subject_id
+                    object_id=object_id
+                    is_active=(tab == "find")
                     title=""
                     cat=cat
                 %}
             {% endif %}
             {% if not tabs_enabled or "new"|member:tabs_enabled %}
                 {% if predicate.name /= "depiction" %}
-                    {% include
-                        "_action_dialog_connect_tab_new.tpl"
+                    {% include "_action_dialog_connect_tab_new.tpl"
                         tab=#tab
                         predicate=predicate
                         delegate=delegate
                         subject_id=subject_id
-                        title="" 
+                        object_id=object_id
+                        title=""
                         is_active=(tab == "new")
                         cat=cat
                     %}
@@ -141,8 +147,9 @@ find params:
                         tab=#tab
                         predicate=predicate
                         subject_id=subject_id
-                        title="" 
-                        is_active=(predicate.name=="depiction" and not is_zmedia and tab == "upload")
+                        object_id=object_id
+                        title=""
+                        is_active=(tab == "upload")
                     %}
                 {% endif %}
                 {% if not tabs_enabled or "url"|member:tabs_enabled %}
@@ -151,6 +158,7 @@ find params:
                         predicate=predicate
                         delegate=delegate
                         subject_id=subject_id
+                        object_id=object_id
                         is_active=(tab == "url")
                         title=""
                     %}
@@ -160,6 +168,7 @@ find params:
                     predicate=predicate
                     delegate=delegate
                     subject_id=subject_id
+                    object_id=object_id
                     title=""
                     delegate=delegate
                 %}

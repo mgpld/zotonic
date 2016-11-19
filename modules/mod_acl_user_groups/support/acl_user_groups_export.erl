@@ -1,7 +1,7 @@
-%% @copyright 2015 Marc Worrell
+%% @copyright 2015-2016 Marc Worrell
 %% @doc Import/export of all ACL rules, including the group and user hierarchies
 
-%% Copyright 2015 Marc Worrell
+%% Copyright 2015-2016 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,8 +26,10 @@
 
 %% @doc Import an export
 import({acl_export, 1, CGs, UGs, CGMenu, UGMenu, RscRules, ModRules}, Context) ->
-    lager:notice("[~p] ACL import by ~p: starting",
-                 [z_context:site(Context), z_acl:user(Context)]),
+    import({acl_export, 2, CGs, UGs, CGMenu, UGMenu, RscRules, ModRules, [], []}, Context);
+import({acl_export, 2, CGs, UGs, CGMenu, UGMenu, RscRules, ModRules, CollabRules, Configs}, Context) ->
+    lager:notice("ACL import by ~p: starting",
+                 [z_acl:user(Context)]),
     import_all(content_group, CGs, [], Context),
     import_all(acl_user_group, UGs, [], Context),
     CGMenu1 = menu_from_names(CGMenu, Context),
@@ -38,8 +40,13 @@ import({acl_export, 1, CGs, UGs, CGMenu, UGMenu, RscRules, ModRules}, Context) -
     m_hierarchy:ensure(acl_user_group, Context),
     m_acl_rule:import_rules(rsc, edit, RscRules, Context),
     m_acl_rule:import_rules(module, edit, ModRules, Context),
-    lager:notice("[~p] ACL import by ~p: done",
-                 [z_context:site(Context), z_acl:user(Context)]),
+    m_acl_rule:import_rules(collab, edit, CollabRules, Context),
+    lists:foreach(
+        fun({K,V}) ->
+            m_config:set_value(mod_acl_user_groups, K, V, Context)
+        end,
+        Configs),
+    lager:notice("ACL import by ~p: done", [z_acl:user(Context)]),
     ok.
 
 
@@ -48,18 +55,25 @@ import({acl_export, 1, CGs, UGs, CGMenu, UGMenu, RscRules, ModRules}, Context) -
 %% @todo Peform a dependency sort of all groups, so that content_group are inserted
 %%       in the correct order (ie the content groups of the content groups first)
 export(Context) ->
-    lager:notice("[~p] ACL export by ~p",
-                 [z_context:site(Context), z_acl:user(Context)]),
+    lager:notice("ACL export by ~p", [z_acl:user(Context)]),
     ensure_name(content_group, Context),
     ensure_name(acl_user_group, Context),
-    {acl_export, 1,
+    {acl_export, 2,
         fetch_all(content_group, Context),
         fetch_all(acl_user_group, Context),
         menu_to_names(m_hierarchy:menu(content_group, Context), Context),
         menu_to_names(m_hierarchy:menu(acl_user_group, Context), Context),
         m_acl_rule:ids_to_names(m_acl_rule:all_rules(rsc, edit, Context), Context),
-        m_acl_rule:ids_to_names(m_acl_rule:all_rules(module, edit, Context), Context)}.
+        m_acl_rule:ids_to_names(m_acl_rule:all_rules(module, edit, Context), Context),
+        m_acl_rule:ids_to_names(m_acl_rule:all_rules(collab, edit, Context), Context),
+        [ {K, m_config:get_value(mod_acl_user_groups, K, Context)} || K <- configs() ]
+    }.
 
+configs() ->
+    [
+        collab_group_update,
+        collab_group_link
+    ].
 
 % @doc Fetch all resources within the given category
 fetch_all(Category, Context) ->
@@ -68,7 +82,7 @@ fetch_all(Category, Context) ->
                         Ps = m_rsc:get(Id, Ctx),
                         Ps1 = cleanup_rsc(Ps),
                         Rsc = {rsc,
-                               m_rsc:is_a(Id, Ctx), 
+                               m_rsc:is_a(Id, Ctx),
                                m_rsc:p_no_acl(proplists:get_value(content_group_id, Ps), name, Ctx),
                                Ps1},
                         [Rsc | Acc]
@@ -109,8 +123,7 @@ import_1(Cat, {rsc, IsA, CGName, Ps0}, IdsAcc, Context) ->
     ],
     case m_rsc:rid(Name, Context) of
         undefined ->
-            lager:info("[~p] ACL export, inserting ~p with name ~p",
-                       [z_context:site(Context), Cat1, Name]),
+            lager:info("ACL export, inserting ~p with name ~p", [Cat1, Name]),
             case Name of
                 CGName ->
                     {ok, Id} = m_rsc:insert(Props, Context),
@@ -135,8 +148,8 @@ import_1(Cat, {rsc, IsA, CGName, Ps0}, IdsAcc, Context) ->
                     ],
                     case z_acl:rsc_editable(Id, Context) of
                         true ->
-                            lager:info("[~p] ACL export, updating ~p with name ~p",
-                                       [z_context:site(Context), Cat1, Name]),
+                            lager:info("ACL export, updating ~p with name ~p",
+                                       [Cat1, Name]),
                             {ok, Id} = m_rsc:update(Id, Props1, Context);
                         false ->
                             ok
@@ -164,8 +177,8 @@ ensure_content_group(CGName, IdsAcc, Context) ->
                         {title, CGName},
                         {name, CGName}
                     ],
-                    lager:info("[~p] ACL export, inserting content_group with name ~p",
-                               [z_context:site(Context), CGName]),
+                    lager:info("ACL export, inserting content_group with name ~p",
+                               [CGName]),
                     {ok, Id} = m_rsc:insert(Props, Context),
                     {Id, [{CGName,Id}|IdsAcc]};
                 Id ->
@@ -198,7 +211,7 @@ menu_from_names([{Name,Sub}|Rest], Acc, Context) ->
 
 %% @doc Ensure that all things of a category have an unique name.
 ensure_name(Cat, Context) ->
-    m_category:foreach(Cat, 
+    m_category:foreach(Cat,
                        fun(Id, Ctx) ->
                             m_rsc:ensure_name(Id, Ctx)
                        end,

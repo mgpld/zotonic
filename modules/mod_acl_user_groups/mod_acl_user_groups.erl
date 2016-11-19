@@ -21,7 +21,7 @@
 -mod_title("ACL User Groups").
 -mod_description("Organize users into hierarchical groups").
 -mod_prio(400).
--mod_schema(6).
+-mod_schema(9).
 -mod_depends([menu, mod_content_groups]).
 -mod_provides([acl]).
 
@@ -45,6 +45,7 @@
     observe_manage_data/2,
     observe_rsc_update_done/2,
     observe_rsc_delete/2,
+    observe_rsc_insert/3,
     name/1,
     manage_schema/2
 ]).
@@ -53,11 +54,11 @@
 -export([
     event/2,
 
+    observe_acl_is_owner/2,
     observe_acl_is_allowed/2,
     observe_acl_logon/2,
     observe_acl_logoff/2,
     observe_acl_context_authenticated/2,
-    observe_acl_rsc_update_check/3,
     observe_acl_add_sql_check/2,
 
     observe_hierarchy_updated/2
@@ -69,8 +70,8 @@
 
 %% gen_server state record
 -record(state, {
-            site, 
-            is_rebuild_publish=true, 
+            site,
+            is_rebuild_publish=true,
             is_rebuild_edit=true,
             rebuilder_pid,
             rebuilder_mref,
@@ -81,7 +82,7 @@
 
 
 event(#submit{message={delete_move, Args}}, Context) ->
-    ToUGId = z_convert:to_integer(z_context:get_q_validated("acl_user_group_id", Context)),
+    ToUGId = z_convert:to_integer(z_context:get_q_validated(<<"acl_user_group_id">>, Context)),
     {id, Id} = proplists:lookup(id, Args),
     Ids = [ Id | m_hierarchy:children('acl_user_group', Id, Context) ],
     case deletable(Ids, Context) andalso z_acl:rsc_editable(ToUGId, Context) of
@@ -213,6 +214,10 @@ deletable(Ids, Context) ->
     lists:all(fun(Id) -> z_acl:rsc_deletable(Id, Context) end, Ids).
 
 
+% @doc Per default users own their person record and creators own the created content.
+observe_acl_is_owner(#acl_is_owner{id=Id, user_id=Id}, _Context) -> true;
+observe_acl_is_owner(#acl_is_owner{user_id=UserId, creator_id=UserId}, _Context) -> true;
+observe_acl_is_owner(#acl_is_owner{}, _Context) -> undefined.
 
 observe_acl_is_allowed(AclIsAllowed, Context) ->
     acl_user_groups_checks:acl_is_allowed(AclIsAllowed, Context).
@@ -225,9 +230,6 @@ observe_acl_logoff(AclLogoff, Context) ->
 
 observe_acl_context_authenticated(_AclAuthenticated, Context) ->
     acl_user_groups_checks:acl_context_authenticated(Context).
-
-observe_acl_rsc_update_check(AclRscUpdateCheck, Props, Context) ->
-    acl_user_groups_checks:acl_rsc_update_check(AclRscUpdateCheck, Props, Context).
 
 observe_acl_add_sql_check(AclAddSQLCheck, Context) ->
     acl_user_groups_checks:acl_add_sql_check(AclAddSQLCheck, Context).
@@ -246,9 +248,21 @@ observe_manage_data(#manage_data{module = Module, props = {acl_rules, Rules}}, C
 observe_manage_data(#manage_data{}, _Context) ->
     undefined.
 
+%% @doc Add default content group when resource is inserted without one
+-spec observe_rsc_insert(#rsc_insert{}, list(), #context{}) -> list().
+observe_rsc_insert(#rsc_insert{}, Props, Context) ->
+    case proplists:get_value(content_group_id, Props) of
+        undefined ->
+            CategoryId = proplists:get_value(category_id, Props),
+            ContentGroupId = acl_user_groups_checks:default_content_group(CategoryId, Context),
+            [{content_group_id, ContentGroupId} | Props];
+        _ ->
+            Props
+    end.
+
 observe_rsc_update_done(#rsc_update_done{id=Id, pre_is_a=PreIsA, post_is_a=PostIsA}=M, Context) ->
     check_hasusergroup(Id, M#rsc_update_done.post_props, Context),
-    case  lists:member('acl_user_group', PreIsA) 
+    case  lists:member('acl_user_group', PreIsA)
         orelse lists:member('acl_user_group', PostIsA)
     of
         true -> m_hierarchy:ensure('acl_user_group', Context);
@@ -336,13 +350,17 @@ lookup1(TId, Key) ->
     end.
 
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_acl_user_groups,
                 parent=admin_auth,
                 label=?__("User groups", Context),
                 url={admin_menu_hierarchy, [{name, "acl_user_group"}]},
                 visiblecheck={acl, use, mod_acl_user_groups}},
+     #menu_item{id=admin_collaboration_groups,
+                parent=admin_auth,
+                label=?__("Collaboration groups", Context),
+                url={admin_overview_rsc, [{qcat, "acl_collaboration_group"}]}},
      #menu_item{id=admin_content_groups,
                 parent=admin_auth,
                 label=?__("Access control rules", Context),
@@ -352,7 +370,7 @@ observe_admin_menu(admin_menu, Acc, Context) ->
 
 
 name(Context) ->
-    z_utils:name_for_host(?MODULE, Context).    
+    z_utils:name_for_site(?MODULE, Context).
 
 %%====================================================================
 %% API
@@ -412,18 +430,18 @@ handle_info(rebuild, #state{rebuilder_pid=Pid} = State) when is_pid(Pid) ->
     {noreply, State};
 
 handle_info({'DOWN', MRef, process, _Pid, normal}, #state{rebuilder_mref=MRef} = State) ->
-    lager:debug("[mod_acl_user_groups] rebuilder for ~p finished.", 
+    lager:debug("[mod_acl_user_groups] rebuilder for ~p finished.",
                 [State#state.rebuilding]),
     State1 = State#state{
-                    rebuilding=undefined, 
-                    rebuilder_pid=undefined, 
+                    rebuilding=undefined,
+                    rebuilder_pid=undefined,
                     rebuilder_mref=undefined
                 },
     State2 = maybe_rebuild(State1),
     {noreply, State2};
 
 handle_info({'DOWN', MRef, process, _Pid, Reason}, #state{rebuilder_mref=MRef} = State) ->
-    lager:error("[mod_acl_user_groups] rebuilder for ~p down with reason ~p", 
+    lager:error("[mod_acl_user_groups] rebuilder for ~p down with reason ~p",
                 [State#state.rebuilding, Reason]),
     State1 = case State#state.rebuilding of
                 publish -> State#state{is_rebuild_publish=true};
@@ -431,8 +449,8 @@ handle_info({'DOWN', MRef, process, _Pid, Reason}, #state{rebuilder_mref=MRef} =
              end,
     timer:send_after(500, rebuild),
     {noreply, State1#state{
-                    rebuilding=undefined, 
-                    rebuilder_pid=undefined, 
+                    rebuilding=undefined,
+                    rebuilder_pid=undefined,
                     rebuilder_mref=undefined
                 }};
 
@@ -487,8 +505,8 @@ maybe_rebuild(#state{is_rebuild_edit=true} = State) ->
     {Pid, MRef} = start_rebuilder(edit, State#state.site),
     State#state{
         is_rebuild_edit=false,
-        rebuilder_pid=Pid, 
-        rebuilding=edit, 
+        rebuilder_pid=Pid,
+        rebuilding=edit,
         rebuilder_mref=MRef
     };
 maybe_rebuild(#state{} = State) ->
@@ -534,20 +552,22 @@ drop_old_ets([]) ->
 %%====================================================================
 
 manage_schema(Version, Context) ->
-    m_acl_rule:manage_schema(Version, Context),
-    case m_rsc:is_a(acl_user_group_managers, acl_user_group, Context) of
+    % Perform the next outside the transaction
+    ContextDb = z_context:prune_for_spawn(Context),
+    m_acl_rule:manage_schema(Version, ContextDb),
+    case m_rsc:is_a(acl_user_group_managers, acl_user_group, ContextDb) of
         true ->
             % Basic groups are known, assume hierarchy is ok.
-            manage_datamodel(Context),
-            m_hierarchy:ensure(acl_user_group, Context),
+            manage_datamodel(z_context:prune_for_database(ContextDb)),
+            m_hierarchy:ensure(acl_user_group, ContextDb),
             ok;
         false ->
             % Initial install - create a simple user group hierarchy to start with
-            manage_datamodel(Context),
+            manage_datamodel(z_context:prune_for_database(ContextDb)),
 
             % TODO: remove the above ACL groups from the Tree
-            R = fun(N) -> m_rsc:rid(N, Context) end,
-            Tree = m_hierarchy:menu(acl_user_group, Context),
+            R = fun(N) -> m_rsc:rid(N, ContextDb) end,
+            Tree = m_hierarchy:menu(acl_user_group, ContextDb),
             NewTree = [ {R(acl_user_group_anonymous),
                          [ {R(acl_user_group_members),
                             [ {R(acl_user_group_editors),
@@ -557,7 +577,7 @@ manage_schema(Version, Context) ->
                               } ]
                            } ]
                         } | Tree ],
-            m_hierarchy:save(acl_user_group, NewTree, Context)
+            m_hierarchy:save(acl_user_group, NewTree, ContextDb)
     end,
     ok.
 
@@ -570,6 +590,10 @@ manage_datamodel(Context) ->
                     {acl_user_group, meta,
                         [
                             {title, {trans, [{en, "User Group"}, {nl, "Gebruikersgroep"}]}}
+                        ]},
+                    {acl_collaboration_group, meta,
+                        [
+                            {title, {trans, [{en, "Collaboration Group"}, {nl, "Samenwerkingsgroep"}]}}
                         ]}
                 ],
 
@@ -591,11 +615,22 @@ manage_datamodel(Context) ->
 
             predicates=
                 [
-                    {hasusergroup, 
+                    {hasusergroup,
                         [{title, {trans, [{en, <<"In User Group">>},{nl, <<"In gebruikersgroep">>}]}}],
                         [{person, acl_user_group}]
+                    },
+                    {hascollabmember,
+                        [{title, {trans, [{en, <<"Member">>},{nl, <<"Lid">>}]}}],
+                        [{acl_collaboration_group, person}]
+                    },
+                    {hascollabmanager,
+                        [{title, {trans, [{en, <<"Manager">>},{nl, <<"Beheerder">>}]}}],
+                        [{acl_collaboration_group, person}]
                     }
-                ]
+                ],
+            data = [
+                {acl_rules, acl_default_rules:get_default_rules()}
+            ]
         },
         Context).
 
@@ -605,7 +640,7 @@ check_hasusergroup(UserId, P, Context) ->
         0 ->
             %% not submitted, do nothing
             ok;
-        _ -> 
+        _ ->
             GroupIds = lists:map(fun z_convert:to_integer/1, lists:filter(fun(<<>>) -> false; (_) -> true end,
                                                                           HasUserGroup)),
             PredId = m_predicate:name_to_id_check(hasusergroup, Context),

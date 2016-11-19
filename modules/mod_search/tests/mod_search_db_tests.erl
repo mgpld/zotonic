@@ -5,7 +5,7 @@
 
 
 wait_for(QueryId, ItemId) ->
-    receive 
+    receive
         {'$gen_cast',
          {#rsc_query_item{query_id=QueryId, match_id=ItemId}, _}} ->
             ok;
@@ -20,13 +20,15 @@ wait_for(QueryId, ItemId) ->
 
 
 query_hooks_test() ->
+    ok = z_sites_manager:await_startup(testsandboxdb),
     C = z_acl:sudo(z_context:new(testsandboxdb)),
 
     z_notifier:observe(rsc_query_item, self(), C),
-    
+
     %% Create a new query
     {ok, Query1} = m_rsc:insert([{category, 'query'},
                                  {title, <<"All featured articles">>},
+                                 {is_query_live, true},
                                  {'query', <<"cat=article\nis_featured">>}], C),
 
     %% Create an item which fits the query
@@ -49,13 +51,15 @@ query_hooks_test() ->
 
 
 search_query_notify_test() ->
-    C = z_acl:sudo(z_context:new(testsandbox)),
+    ok = z_sites_manager:await_startup(testsandboxdb),
+    C = z_acl:sudo(z_context:new(testsandboxdb)),
 
     Q = <<"cat=keyword\nis_featured">>,
 
     %% Create a new query
     {ok, Query1} = m_rsc:insert([{category, 'query'},
                                  {title, <<"All featured keywords">>},
+                                 {is_query_live, true},
                                  {'query', Q}], C),
 
     %% There's exactly one query

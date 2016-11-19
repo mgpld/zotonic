@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -35,6 +35,7 @@
     insert_survey_submission/5,
     survey_stats/2,
     survey_results/2,
+    survey_results_prompts/2,
     survey_results_sorted/3,
     prepare_results/2,
     single_result/4,
@@ -59,6 +60,10 @@ m_find_value(totals, #m{value=undefined} = M, _Context) ->
     M#m{value=totals};
 m_find_value(did_survey, #m{value=undefined} = M, _Context) ->
     M#m{value=did_survey};
+m_find_value(did_survey_results, #m{value=undefined} = M, _Context) ->
+    M#m{value=did_survey_results};
+m_find_value(did_survey_results_readable, #m{value=undefined} = M, _Context) ->
+    M#m{value=did_survey_results_readable};
 m_find_value(is_allowed_results_download, #m{value=undefined} = M, _Context) ->
     M#m{value=is_allowed_results_download};
 m_find_value(handlers, #m{value=undefined}, Context) ->
@@ -76,6 +81,25 @@ m_find_value(Id, #m{value=totals}, Context) ->
     survey_totals(Id, Context);
 m_find_value(Id, #m{value=did_survey}, Context) ->
     did_survey(Id, Context);
+m_find_value(Id, #m{value=did_survey_results}, Context) ->
+    {UserId, PersistentId} = case z_acl:user(Context) of
+                                undefined ->
+                                    {undefined, z_session:persistent_id(Context)};
+                                UId ->
+                                    {UId, undefined}
+                            end,
+    Answers = m_survey:single_result(Id, UserId, PersistentId, Context),
+    lists:flatten([ Vs || {_,Vs} <- Answers ]);
+m_find_value(Id, #m{value=did_survey_results_readable}, Context) ->
+    {UserId, PersistentId} = case z_acl:user(Context) of
+                                undefined ->
+                                    {undefined, z_session:persistent_id(Context)};
+                                UId ->
+                                    {UId, undefined}
+                            end,
+    Answers = m_survey:single_result(Id, UserId, PersistentId, Context),
+    Answers1 = lists:flatten([ Vs || {_,Vs} <- Answers ]),
+    survey_answer_prep:readable(Id, Answers1, Context);
 m_find_value(Id, #m{value=is_allowed_results_download}, Context) ->
     is_allowed_results_download(Id, Context).
 
@@ -107,18 +131,18 @@ did_survey(SurveyId, Context) ->
     case z_acl:user(Context) of
         undefined ->
             PersistentId = z_context:persistent_id(Context),
-            case z_db:q1("select id 
+            case z_db:q1("select id
                           from survey_answer
-                          where survey_id = $1 
+                          where survey_id = $1
                             and persistent = $2
                           limit 1", [z_convert:to_integer(SurveyId), PersistentId], Context) of
                 undefined -> false;
                 _ -> true
             end;
         UserId ->
-            case z_db:q1("select id 
+            case z_db:q1("select id
                           from survey_answer
-                          where survey_id = $1 
+                          where survey_id = $1
                             and user_id = $2
                           limit 1", [z_convert:to_integer(SurveyId), UserId], Context) of
                 undefined -> false;
@@ -131,7 +155,7 @@ did_survey(SurveyId, Context) ->
 insert_survey_submission(SurveyId, Answers, Context) ->
     {UserId, SubmissionId} = case z_convert:to_bool(m_rsc:p(SurveyId, survey_multiple, Context)) of
                                  true ->
-                                     {undefined, z_ids:id(30)};
+                                     {undefined, binary_to_list(z_ids:id(30))};
                                  false ->
                                      case z_acl:user(Context) of
                                          undefined ->
@@ -178,13 +202,13 @@ insert_answers(_SurveyId, _UserId, _PersistentId, _QuestionId, [], _Created, _Co
 insert_answers(SurveyId, UserId, PersistentId, QuestionId, [{Name, Answer}|As], Created, Context) ->
     IsAnonymous = z_convert:to_bool(m_rsc:p_no_acl(SurveyId, survey_anonymous, Context)),
     Args = case Answer of
-               {text, Text} -> 
+               {text, Text} ->
                   [SurveyId, UserId, PersistentId, IsAnonymous, QuestionId, Name, undefined, Text, Created];
                Value ->
                   [SurveyId, UserId, PersistentId, IsAnonymous, QuestionId, Name, z_convert:to_list(Value), undefined, Created]
            end,
-    z_db:q("insert into survey_answer (survey_id, user_id, persistent, is_anonymous, question, name, value, text, created) 
-                values ($1, $2, $3, $4, $5, $6, $7, $8, $9)", 
+    z_db:q("insert into survey_answer (survey_id, user_id, persistent, is_anonymous, question, name, value, text, created)
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                Args,
            Context),
     insert_answers(SurveyId, UserId, PersistentId, QuestionId, As, Created, Context).
@@ -197,7 +221,7 @@ prepare_results(SurveyId, Context) ->
             undefined;
         <<>> ->
             undefined;
-        undefined -> 
+        undefined ->
             undefined;
         Blocks ->
             Stats = survey_stats(SurveyId, Context),
@@ -225,26 +249,36 @@ prepare_result(Block, Stats, Context) ->
 prep_chart(_Type, _Block, undefined, _Context) ->
     undefined;
 prep_chart(Type, Block, Stats, Context) ->
-    M = mod_survey:module_name(Type),
-    M:prep_chart(Block, Stats, Context).
+    case mod_survey:module_name(Type) of
+        undefined ->
+            lager:warning("Not preparing chart for ~p because there is no known handler (~p)",
+                         [Type, Stats]),
+            undefined;
+        M ->
+            M:prep_chart(Block, Stats, Context)
+    end.
 
 
 
-%% @doc Fetch the aggregate answers of a survey. 
+%% @doc Fetch the aggregate answers of a survey.
 %% @spec survey_stats(int(), Context) -> [ {QuestionId, [{Name, [{Value,Count}] }] } ]
 survey_stats(SurveyId, Context) ->
     Rows = z_db:q("
                 select question, name, value, text
-                  from survey_answer 
-                  where survey_id = $1
-                  order by question, name", [z_convert:to_integer(SurveyId)], Context),
+                from survey_answer
+                where survey_id = $1
+                order by question, name",
+                [z_convert:to_integer(SurveyId)],
+                Context),
     group_questions(Rows, []).
 
 %% @private
 group_questions([], Acc) ->
     lists:reverse(Acc);
 group_questions([{Question,_,_,_}|_] = Answers, Acc) ->
-    {Qs,Answers1} = lists:splitwith(fun({Q,_,_,_}) -> Q =:= Question end, Answers),
+    {Qs,Answers1} = lists:splitwith(
+                        fun({Q,_,_,_}) -> Q =:= Question end,
+                        Answers),
     NVs = group_and_count_values(Qs),
     group_questions(Answers1, [{Question,NVs}|Acc]).
 
@@ -290,10 +324,10 @@ split_values_1([{undefined,undefined}|Vs], Acc) ->
 split_values_1([{V,undefined}|Vs], Acc) ->
     split_values_1(Vs, [V|Acc]);
 split_values_1([{undefined,Text}|Vs], Acc) ->
-    Ts = binary:split(Text, <<"#">>),
+    Ts = binary:split(Text, <<"#">>, [global]),
     split_values_1(Vs, Ts++Acc);
 split_values_1([{V,Text}|Vs], Acc) ->
-    Ts = binary:split(Text, <<"#">>),
+    Ts = binary:split(Text, <<"#">>, [global]),
     split_values_1(Vs, [V|Ts++Acc]).
 
 
@@ -323,29 +357,34 @@ get_questions(SurveyId, Context) ->
             undefined
     end.
 
-
 %% @doc Return all results of a survey
 survey_results(SurveyId, Context) ->
+    {Hs, _Promps, Data} = survey_results_prompts(SurveyId, Context),
+    [ Hs | Data ].
+
+%% @doc Return all results of a survey with separate names, prompts and data
+survey_results_prompts(SurveyId, Context) ->
     case get_questions(SurveyId, Context) of
         NQs when is_list(NQs) ->
             Rows = z_db:q("select user_id, persistent, is_anonymous, question, name, value, text, created
-                           from survey_answer 
+                           from survey_answer
                            where survey_id = $1
                            order by user_id, persistent", [z_convert:to_integer(SurveyId)], Context),
             Grouped = group_users(Rows),
-            IsAnonymous = z_convert:to_bool(m_rsc:p_no_acl(SurveyId, survey_anonymous, Context)), 
+            IsAnonymous = z_convert:to_bool(m_rsc:p_no_acl(SurveyId, survey_anonymous, Context)),
             UnSorted = [ user_answer_row(IsAnonymous, User, Created, Answers, NQs, Context) || {User, Created, Answers} <- Grouped ],
             Sorted = lists:sort(fun([_,_,A|_], [_,_,B|_]) -> A < B end, UnSorted), %% sort by created date
-            [
-                 lists:flatten([ <<"user_id">>, <<"anonymous">>, <<"created">>
-                                 | [ answer_header(proplists:get_value(type, B), B, Context) || {_,B} <- NQs ]
-                               ])
-                 | Sorted
-            ];
+            Hs = lists:flatten([ <<"user_id">>, <<"anonymous">>, <<"created">>
+                                 | [ answer_header(B, Context) || {_,B} <- NQs ]
+                               ]),
+            Prompts = lists:flatten([ <<>>, <<>>, <<>>
+                        | [ z_trans:lookup_fallback(answer_prompt(B), Context) || {_,B} <- NQs ]
+                      ]),
+            {Hs, Prompts, Sorted};
         undefined ->
-            []
+            {[], [], []}
     end.
-    
+
 %% @doc private
 group_users([]) ->
     [];
@@ -394,9 +433,9 @@ user_answer_row(_IsAnonymous, {user, _User, _Persistent, _UserAnonymous}, Create
 
 user_answer_row_1(Created, Answers, Questions, Context) ->
     [
-        case Created of 
+        case Created of
            undefined -> <<>>;
-           _ -> erlydtl_dateformat:format(Created, "Y-m-d H:i", Context)
+           _ -> z_datetime:format(Created, "Y-m-d H:i", Context)
         end
         | answer_row(Answers, Questions, Created, Context)
     ].
@@ -414,7 +453,7 @@ answer_row(Answers, Questions, Created, Context) ->
                         end || A <- Answers]
                end,
     lists:flatten([
-                   answer_row_question(proplists:get_all_values(QId, Answers1), 
+                   answer_row_question(proplists:get_all_values(QId, Answers1),
                                        Question,
                                        Context)
                    || {QId, Question} <- Questions
@@ -431,10 +470,18 @@ answer_row_question(Answer, Q, Context) ->
     end.
 
 %% @doc private
-answer_header(Type, Block, Context) ->
+answer_header(Block, Context) ->
+    Type = proplists:get_value(type, Block),
     case mod_survey:module_name(Type) of
         undefined -> [];
         M -> M:prep_answer_header(Block, Context)
+    end.
+
+answer_prompt(Block) ->
+    Type = proplists:get_value(type, Block),
+    case mod_survey:module_name(Type) of
+        undefined -> [];
+        _M -> proplists:get_value(prompt, Block, <<>>)
     end.
 
 
@@ -447,7 +494,7 @@ single_result(SurveyId, UserId, PersistentId, Context) ->
     Rows = z_db:q("SELECT question, name, value, text FROM survey_answer WHERE " ++ Clause ++ "AND survey_id = $2", Args ++ [z_convert:to_integer(SurveyId)], Context),
     lists:foldr(fun({QId, Name, Numeric, Text}, R) ->
                         Value = case z_utils:is_empty(Text) of
-                                    true -> Numeric; 
+                                    true -> Numeric;
                                     false -> Text
                                 end,
                         z_utils:prop_replace(QId, z_utils:prop_replace(Name, Value, proplists:get_value(QId, R, [])), R)
@@ -509,4 +556,4 @@ survey_totals(Id, Context) ->
             []
     end.
 
-                
+

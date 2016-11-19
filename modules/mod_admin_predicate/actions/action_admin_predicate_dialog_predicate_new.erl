@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -48,8 +48,8 @@ event(#postback{message={predicate_new_dialog, Title, Redirect}}, Context) ->
 
 
 event(#submit{message=predicate_new}, Context) ->
-    Title    = z_context:get_q("new_predicate_title", Context),
-    Redirect = z_context:get_q("redirect", Context),
+    Title    = z_context:get_q(<<"new_predicate_title">>, Context),
+    Redirect = z_context:get_q(<<"redirect">>, Context),
     {ok, Id} = m_predicate:insert(Title, Context),
 
     % Close the dialog and optionally redirect to the edit page of the new resource

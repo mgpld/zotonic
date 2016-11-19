@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,17 +23,17 @@
 chunk(undefined, _N, _Context) ->
     undefined;
 chunk(In, N, Context) ->
-    chunk1(erlydtl_runtime:to_list(In, Context), N, []).
-    
-    chunk1([], _, Acc) ->
-        lists:reverse(Acc);
-    chunk1(List, N, Acc) ->
-        {Chunk, List1} = chunk_take(List, N, []),
-        chunk1(List1, N, [Chunk|Acc]).
+    chunk1(z_template_compiler_runtime:to_list(In, Context), N, []).
 
-    chunk_take([], _, Acc) ->
-        {lists:reverse(Acc), []};
-    chunk_take(L, 0, Acc) ->
-        {lists:reverse(Acc), L};
-    chunk_take([H|T], N, Acc) ->
-        chunk_take(T, N-1, [H|Acc]).
+chunk1([], _, Acc) ->
+    lists:reverse(Acc);
+chunk1(List, N, Acc) ->
+    {Chunk, List1} = chunk_take(List, N, []),
+    chunk1(List1, N, [Chunk|Acc]).
+
+chunk_take([], _, Acc) ->
+    {lists:reverse(Acc), []};
+chunk_take(L, 0, Acc) ->
+    {lists:reverse(Acc), L};
+chunk_take([H|T], N, Acc) ->
+    chunk_take(T, N-1, [H|Acc]).

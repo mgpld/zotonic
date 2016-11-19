@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -53,7 +53,7 @@ observe_signup(#signup{id=UserId, props=Props, signup_props=SignupProps, request
 
 %% @doc Check if a module wants to redirect to the signup form.  Returns either {ok, Location} or undefined.
 observe_signup_url(#signup_url{props=Props, signup_props=SignupProps}, Context) ->
-    CheckId = z_ids:id(),
+    CheckId = binary_to_list(z_ids:id()),
     z_session:set(signup_xs, {CheckId, Props, SignupProps}, Context),
     {ok, z_dispatcher:url_for(signup, [{xs, CheckId}], Context)}.
 
@@ -97,7 +97,7 @@ signup_existing(UserId, Props, SignupProps, RequestConfirm, Context) ->
 request_verification(UserId, Context) ->
     Unverified = [ R || R <- m_identity:get_rsc(UserId, Context), proplists:get_value(is_verified, R) == false ],
     request_verification(UserId, Unverified, false, Context).
-    
+
     request_verification(_, [], false, _Context) ->
         {error, no_verifiable_identities};
     request_verification(_, [], true, _Context) ->
@@ -119,7 +119,7 @@ check_signup(Props, SignupProps, Context) ->
         {ok, Props1, SignupProps1} ->
             UserId = proplists:get_value(user_id, SignupProps),
             case check_identity(UserId, SignupProps1, Context) of
-                ok -> 
+                ok ->
                     case check_props(Props1, Context) of
                         ok -> {ok, Props1, SignupProps1};
                         {error, _} = Error -> Error
@@ -180,18 +180,18 @@ maybe_add_depiction(Id, Props, Context) ->
                 Url when Url =/= <<>>, Url =/= [], Url =/= undefined ->
                     case m_media:insert_url(Url, z_acl:logon(Id, Context)) of
                         {ok, MediaId} ->
-                            lager:info("[~p] Added depiction from depiction_url for ~p: ~p", 
-                                       [z_context:site(Context), Id, Url]),
+                            lager:info("Added depiction from depiction_url for ~p: ~p",
+                                       [Id, Url]),
                             m_edge:insert(Id, depiction, MediaId, Context);
                         {error, _} = Error ->
-                            lager:warning("[~p] Could not insert depiction_url for ~p: ~p", 
-                                          [z_context:site(Context), Id, Url]),
+                            lager:warning("Could not insert depiction_url for ~p: ~p",
+                                          [Id, Url]),
                             Error
                     end;
                 _ ->
                     ok
             end;
-        _ -> 
+        _ ->
             ok
     end.
 
@@ -221,10 +221,8 @@ ensure_identity(Id, {Type, Key, IsUnique, IsVerified}, Context) when is_binary(K
 props_to_rsc(Props, IsVerified, Context) ->
     Category = z_convert:to_atom(m_config:get_value(mod_signup, member_category, person, Context)),
     ContentGroup = z_convert:to_atom(m_config:get_value(mod_signup, content_group, undefined, Context)),
-    VisibleFor = z_convert:to_integer(m_config:get_value(mod_signup, member_visible_for, 0, Context)),
     Props1 = [
         {is_published, IsVerified},
-        {visible_for, VisibleFor},
         {content_group, ContentGroup},
         {category, Category},
         {is_verified_account, IsVerified},
@@ -233,7 +231,7 @@ props_to_rsc(Props, IsVerified, Context) ->
         | Props
     ],
     case proplists:is_defined(title, Props1) of
-        true -> 
+        true ->
             Props1;
         false ->
             Name = [
@@ -286,7 +284,6 @@ manage_schema(install, _Context) ->
         resources=[
             {signup_tos, text, [
                             {is_published, true},
-                            {visible_for, 0},
                             {page_path, "/terms"},
                             {title, "Terms of Service"},
                             {summary, <<"These Terms of Service (\"Terms\") govern your access to and use of the services and COMPANY’s web sites (the \"Services\"), and any information, text, graphics, or other materials uploaded, downloaded or appearing on the Services (collectively referred to as \"Content\"). Your access to and use of the Services is conditioned on your acceptance of and compliance with these Terms. By accessing or using the Services you agree to be bound by these Terms.">>},
@@ -294,7 +291,6 @@ manage_schema(install, _Context) ->
                         ]},
             {signup_privacy, text, [
                             {is_published, true},
-                            {visible_for, 0},
                             {page_path, "/privacy"},
                             {title, "Privacy Policy"},
                             {summary, <<"This Privacy Policy describes COMPANY’s policies and procedures on the collection, use and disclosure of your information. COMPANY receives your information through our various web sites, SMS, APIs, services and third-parties (\"Services\"). When using any of our Services you consent to the collection, transfer, manipulation, storage, disclosure and other uses of your information as described in this Privacy Policy. Irrespective of which country that you reside in or create information from, your information may be used by COMPANY in any country where COMPANY operates.">>},

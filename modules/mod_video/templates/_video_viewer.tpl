@@ -4,13 +4,11 @@
 		<img src="/lib/images/processing.gif" />
 		<span>{_ Converting _} …</span>
 	</div>
-	{% javascript %}
-		{% wire action={connect 
-					signal={medium_update id=props.id} 
-					action={replace template="_video_viewer.tpl" target=#video options=options id=props.id}
-			}
-		%}
-	{% endjavascript %}
+    {% javascript %}
+        {% wire type={mqtt topic=props.id}
+                action={replace template="_video_viewer.tpl" target=#video options=options id=props.id}
+        %}
+    {% endjavascript %}
 {% elseif props.is_video_broken %}
 	{% image props.preview_filename width=options.width height=options.height class=options.class %}
 {% elseif props.filename %}
@@ -18,9 +16,9 @@
 			controls="controls" preload="none"
 			width="{{ props.width }}" height="{{ props.height }}">
 		<source type="{{ props.mime }}" src="{% url media_inline star=props.filename %}" />
-		<object style="max-width: 100%; height: auto;" 
-				width="{{ props.width }}" height="{{ props.height }}" 
-				type="application/x-shockwave-flash" 
+		<object style="max-width: 100%; height: auto;"
+				width="{{ props.width }}" height="{{ props.height }}"
+				type="application/x-shockwave-flash"
 				data="{% url lib star='me/flashmediaelement.swf' %}">
 			<param name="movie" value="{% url lib star='me/flashmediaelement.swf' %}" />
 			<param name="flashvars" value="controls=true&amp;file={% url media_inline star=props.filename %}" />

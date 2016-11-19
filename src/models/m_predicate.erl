@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,7 +28,7 @@
     m_find_value/3,
     m_to_list/2,
     m_value/2,
-    
+
     is_predicate/2,
     is_used/2,
     id_to_name/2,
@@ -83,7 +83,7 @@ m_value(#m{}, Context) ->
 
 %% @doc Test if the property is the name of a predicate
 %% @spec is_predicate(Pred, Context) -> bool()
-is_predicate(Id, Context) when is_integer(Id) -> 
+is_predicate(Id, Context) when is_integer(Id) ->
     case m_rsc:p(Id, category_id, Context) of
         undefined -> false;
         CatId ->
@@ -109,12 +109,12 @@ id_to_name(Id, Context) when is_integer(Id) ->
     F = fun() ->
                 {L,R} = cat_bounds(Context),
                 case z_db:q1("
-                            select r.name 
-                            from rsc r 
-                                join hierarchy c 
+                            select r.name
+                            from rsc r
+                                join hierarchy c
                                 on r.category_id = c.id and c.name = '$category'
-                            where r.id = $1 
-                              and $2 <= c.nr 
+                            where r.id = $1
+                              and $2 <= c.nr
                               and c.nr <= $3", [Id, L, R], Context) of
                     undefined -> {error, {unknown_predicate, Id}};
                     Name -> {ok, z_convert:to_atom(Name)}
@@ -122,7 +122,7 @@ id_to_name(Id, Context) when is_integer(Id) ->
         end,
     z_depcache:memo(F, {predicate_name, Id}, ?DAY, [predicate], Context).
 
-    
+
 %% @doc Return the id of the predicate
 %% @spec name_to_id(Pred, Context) -> {ok, int()} | {error, Reason}
 name_to_id(Name, Context) ->
@@ -176,9 +176,9 @@ all(Context) ->
     F = fun() ->
                 {L,R} = cat_bounds(Context),
                 Preds = z_db:assoc_props("
-                                select * 
+                                select *
                                 from rsc r
-                                    join hierarchy c 
+                                    join hierarchy c
                                     on r.category_id = c.id and c.name = '$category'
                                 where $1 <= c.nr
                                   and c.nr <= $2
@@ -197,7 +197,7 @@ all(Context) ->
 
 
 %% @doc Insert a new predicate, sets some defaults.
-%% @spec insert(Title, Context) -> {ok, Id} | {error, Reason}
+-spec insert(binary()|list(), #context{}) -> {ok, integer()} | {error, any()}.
 insert(Title, Context) ->
     Name = z_string:to_name(Title),
     Uri  = "http://zotonic.net/predicate/" ++ Name,
@@ -207,11 +207,10 @@ insert(Title, Context) ->
         {uri, Uri},
         {category, predicate},
         {group, admins},
-        {is_published, true},
-        {visible_for, 0}
+        {is_published, true}
     ],
     case m_rsc:insert(Props, Context) of
-        {ok, Id} -> 
+        {ok, Id} ->
             flush(Context),
             {ok, Id};
         {error, Reason} ->
@@ -224,17 +223,20 @@ flush(Context) ->
     z_depcache:flush(predicate, Context).
 
 
-%% @doc Update a predicate, save the reversed flag, reset the list of valid subjects and objects.
-%% @spec update_noflush(Id, Subjects, Objects, Context) -> void()
+%% @doc Reset the list of valid subjects and objects.
+-spec update_noflush(integer(), list(), list(), #context{}) -> ok.
 update_noflush(Id, Subjects, Objects, Context) ->
-    SubjectIds = [ z_convert:to_integer(N) || N <- Subjects, N /= [], N /= <<>> ],
-    ObjectIds = [ z_convert:to_integer(N) || N <- Objects, N /= [], N /= <<>> ],
-    F = fun(Ctx) ->
-        update_predicate_category(Id, true, SubjectIds, Ctx),
-        update_predicate_category(Id, false, ObjectIds, Ctx),
-        ok
-    end,
-    ok = z_db:transaction(F, Context).
+    SubjectIds0 = [ m_rsc:rid(N, Context) || N <- Subjects, N /= [], N /= <<>> ],
+    ObjectIds0 = [ m_rsc:rid(N, Context) || N <- Objects, N /= [], N /= <<>> ],
+    SubjectIds = [ N || N <- SubjectIds0, N =/= undefined ],
+    ObjectIds = [ N || N <- ObjectIds0, N =/= undefined ],
+    ok = z_db:transaction(
+        fun(Ctx) ->
+            update_predicate_category(Id, true, SubjectIds, Ctx),
+            update_predicate_category(Id, false, ObjectIds, Ctx),
+            ok
+        end,
+        Context).
 
 
 update_predicate_category(Id, IsSubject, CatIds, Context) ->
@@ -258,7 +260,7 @@ object_category(Id, Context) ->
         case name_to_id(Id, Context) of
             {ok, PredId} ->
                 z_db:q("select category_id from predicate_category where predicate_id = $1 and is_subject = false", [PredId], Context);
-            _ -> 
+            _ ->
                 []
         end
     end,
@@ -273,7 +275,7 @@ subject_category(Id, Context) ->
         case name_to_id(Id, Context) of
             {ok, PredId} ->
                 z_db:q("select category_id from predicate_category where predicate_id = $1 and is_subject = true", [PredId], Context);
-            _ -> 
+            _ ->
                 []
         end
     end,
@@ -284,7 +286,7 @@ subject_category(Id, Context) ->
 for_subject(Id, Context) ->
     {L,R} = cat_bounds(Context),
     ValidIds = z_db:q("
-                select p.predicate_id 
+                select p.predicate_id
                 from predicate_category p,
                      hierarchy pc,
                      rsc r,
@@ -295,7 +297,7 @@ for_subject(Id, Context) ->
                   and rc.name = '$category'
                   and rc.nr >= pc.lft
                   and rc.nr <= pc.rght
-                  and r.id = $1 
+                  and r.id = $1
                   and is_subject = true
                 ", [Id], Context),
     Valid = [ ValidId || {ValidId} <- ValidIds ],
@@ -308,8 +310,8 @@ for_subject(Id, Context) ->
                 ", [L, R], Context),
     NoRestriction = [ NoRestrictionId || {NoRestrictionId} <- NoRestrictionIds ],
     Valid ++ NoRestriction.
-                
-    
+
+
 
 
 %% @doc Return the id of the predicate category
@@ -320,4 +322,4 @@ cat_id(Context) ->
 -spec cat_bounds(#context{}) -> {integer(),integer()}.
 cat_bounds(Context) ->
     m_category:get_range(cat_id(Context), Context).
-        
+

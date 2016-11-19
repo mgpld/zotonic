@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -86,7 +86,7 @@ get1(Notification, UserId, ResourceId, Context) ->
 
 % @doc Insert a new e-mail address, return the created unique e-mail address
 insert(Notification, UserId, ResourceId, Context) ->
-	Recipient = z_string:to_lower(z_ids:id(12)),
+	Recipient = binary_to_list(z_ids:random_id('az09', 12)),
 	case z_db:q1("select count(*) from email_receive_recipient where recipient = $1", [Recipient], Context) of
 		1 ->
 			insert(Notification, UserId, ResourceId, Context);
@@ -99,9 +99,7 @@ insert(Notification, UserId, ResourceId, Context) ->
 				{ok, Recipient}
 			catch
 				throw:{error, {error,error,<<"23503">>,_Msg,_Detail} = Error} ->
-					lager:warning(z_context:lager_md(Context),
-								  "[~p] Error on creating a new e-mail address ~p",
-								  [z_context:site(Context), Error]),
+					lager:warning("Error on creating a new e-mail address ~p", [Error]),
 					{error, notfound}
 			end
 	end.

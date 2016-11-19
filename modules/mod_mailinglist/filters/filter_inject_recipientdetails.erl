@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -40,7 +40,7 @@ inject_recipientdetails(Body, Recipient, _Context) ->
                           [{email, proplists:get_value(email, Recipient)}]
                   end,
             Val1 = lists:filter(fun({_, V}) -> not(z_utils:is_empty(V)) end, Val),
-            Part = [$?, [ [z_utils:url_encode(z_convert:to_list(K)), $=, z_utils:url_encode(z_convert:to_list(V)), $\\, $&] || {K, V} <- Val1] ],
+            Part = [$?, [ [z_url:url_encode(z_convert:to_list(K)), $=, z_url:url_encode(z_convert:to_list(V)), $\\, $&] || {K, V} <- Val1] ],
             Part1 = lists:flatten(Part),
             Part2 = lists:reverse(tl(lists:reverse(Part1))),
             iolist_to_binary(re:replace(Body, "##\"", Part2 ++ "\"", [global]));

@@ -30,7 +30,7 @@
     merge_delete/3,
 
     flush/2,
-    
+
     normalize_props/3,
     normalize_props/4,
 
@@ -57,14 +57,14 @@
 insert(Props, Context) ->
     insert(Props, [{escape_texts, true}], Context).
 
--spec insert(list(), list()|boolean(), #context{}) -> {ok, integer()}.
+-spec insert(list(), list() | boolean(), #context{}) -> {ok, integer()}.
 insert(Props, Options, Context) ->
     PropsDefaults = props_defaults(Props, Context),
     update(insert_rsc, PropsDefaults, Options, Context).
 
 
 %% @doc Delete a resource
--spec delete(integer(), #context{}) -> ok.
+-spec delete(m_rsc:resource(), #context{}) -> ok | {error, atom()}.
 delete(Id, Context) when is_integer(Id), Id /= 1 ->
     case z_acl:rsc_deletable(Id, Context) of
         true ->
@@ -76,20 +76,21 @@ delete(Id, Context) when is_integer(Id), Id /= 1 ->
             end;
         false ->
             throw({error, eacces})
-    end.
-
+    end;
+delete(Name, Context) when Name /= undefined ->
+    delete(m_rsc:rid(Name, Context), Context).
 
 %% @doc Delete a resource, no check on rights etc is made. This is called by m_category:delete/3
 %% @throws {error, Reason}
--spec delete_nocheck(integer(), #context{}) -> ok.
+-spec delete_nocheck(m_rsc:resource(), #context{}) -> ok.
 delete_nocheck(Id, Context) ->
-    delete_nocheck(Id, undefined, Context).
+    delete_nocheck(m_rsc:rid(Id, Context), undefined, Context).
 
-delete_nocheck(Id, OptFollowUpId, Context) ->
+delete_nocheck(Id, OptFollowUpId, Context) when is_integer(Id) ->
     Referrers = m_edge:subjects(Id, Context),
     CatList = m_rsc:is_a(Id, Context),
     Props = m_rsc:get(Id, Context),
-    
+
     F = fun(Ctx) ->
         z_notifier:notify_sync(#rsc_delete{id=Id, is_a=CatList}, Ctx),
         m_rsc_gone:gone(Id, OptFollowUpId, Ctx),
@@ -113,12 +114,14 @@ delete_nocheck(Id, OptFollowUpId, Context) ->
     ok.
 
 %% @doc Merge two resources, delete the losing resource.
--spec merge_delete(integer(), integer(), #context{}) -> ok | {error, term()}.
+-spec merge_delete(m_rsc:resource(), m_rsc:resource(), #context{}) -> ok | {error, term()}.
 merge_delete(WinnerId, WinnerId, _Context) ->
     ok;
 merge_delete(_WinnerId, 1, _Context) ->
     throw({error, eacces});
-merge_delete(WinnerId, LoserId, Context) when is_integer(WinnerId), is_integer(LoserId) ->
+merge_delete(_WinnerId, admin, _Context) ->
+    throw({error, eacces});
+merge_delete(WinnerId, LoserId, Context) ->
     case z_acl:rsc_deletable(LoserId, Context)
         andalso z_acl:rsc_editable(WinnerId, Context)
     of
@@ -127,7 +130,7 @@ merge_delete(WinnerId, LoserId, Context) when is_integer(WinnerId), is_integer(L
                 true ->
                     m_category:delete(LoserId, WinnerId, Context);
                 false ->
-                    merge_delete_nocheck(WinnerId, LoserId, Context)
+                    merge_delete_nocheck(m_rsc:rid(WinnerId, Context), m_rsc:rid(LoserId, Context), Context)
             end;
         false ->
             throw({error, eacces})
@@ -144,7 +147,7 @@ merge_delete_nocheck(WinnerId, LoserId, Context) ->
     PropsLooser = m_rsc:get(LoserId, Context),
     ok = delete_nocheck(LoserId, WinnerId, Context),
     case merge_copy_props(WinnerId, PropsLooser, Context) of
-        [] -> 
+        [] ->
             ok;
         UpdProps ->
             {ok, _} = update(WinnerId, UpdProps, [{escape_texts, false}], Context)
@@ -153,9 +156,9 @@ merge_delete_nocheck(WinnerId, LoserId, Context) ->
 
 move_creator_modifier_ids(WinnerId, LoserId, Context) ->
     Ids = z_db:q("select id
-                  from rsc 
+                  from rsc
                   where (creator_id = $1 or modifier_id = $1)
-                    and id <> $1", 
+                    and id <> $1",
                  [LoserId],
                  Context),
     z_db:q("update rsc set creator_id = $1 where creator_id = $2",
@@ -177,7 +180,7 @@ merge_copy_props(WinnerId, Props, Context) ->
 
 merge_copy_props(_WinnerId, [], Acc, _Context) ->
     lists:reverse(Acc);
-merge_copy_props(WinnerId, [{P,_}|Ps], Acc, Context) 
+merge_copy_props(WinnerId, [{P,_}|Ps], Acc, Context)
     when P =:= creator; P =:= creator_id; P =:= modifier; P =:= modifier_id;
          P =:= created; P =:= modified; P =:= version;
          P =:= id; P =:= is_published; P =:= is_protected; P =:= is_dependent;
@@ -200,16 +203,16 @@ merge_copy_props(WinnerId, [{P,_} = PV|Ps], Acc, Context) ->
 flush(Id, Context) ->
     CatList = m_rsc:is_a(Id, Context),
     flush(Id, CatList, Context).
-    
+
 flush(Id, CatList, Context) ->
-    z_depcache:flush(Id, Context),
+    z_depcache:flush(m_rsc:rid(Id, Context), Context),
     [ z_depcache:flush(Cat, Context) || Cat <- CatList ],
     ok.
 
 
 %% @doc Duplicate a resource, creating a new resource with the given title.
 %% @throws {error, Reason}
--spec duplicate(integer(), list(), #context{}) -> {ok, integer()}.
+-spec duplicate(m_rsc:resource(), list(), #context{}) -> {ok, m_rsc:resource_id()} | {error, term()}.
 duplicate(Id, DupProps, Context) ->
     case z_acl:rsc_visible(Id, Context) of
         true ->
@@ -238,17 +241,17 @@ duplicate(Id, DupProps, Context) ->
 %% @doc Update a resource
 %% @spec update(Id, Props, Context) -> {ok, Id}
 %% @throws {error, Reason}
--spec update(integer()|insert_rsc, list(), #context{}) -> {ok, integer()} | {error, term()}.
+-spec update(m_rsc:resource() | insert_rsc, list(), #context{}) -> {ok, integer()} | {error, term()}.
 update(Id, Props, Context) ->
     update(Id, Props, [], Context).
 
--spec update(integer()|insert_rsc, list(), list()|boolean(), #context{}) -> {ok, integer()} | {error, term()}.
+%% @doc Update a resource
+-spec update(m_rsc:resource() | insert_rsc, list(), list() | boolean(), #context{}) -> {ok, integer()} | {error, term()}.
 update(Id, Props, false, Context) ->
     update(Id, Props, [{escape_texts, false}], Context);
 update(Id, Props, true, Context) ->
     update(Id, Props, [{escape_texts, true}], Context);
 
-%% @doc Resource updater function
 %% [Options]: {escape_texts, true|false (default: true}, {acl_check: true|false (default: true)}
 %% {escape_texts, false} checks if the texts are escaped, and if not then it will escape. This prevents "double-escaping" of texts.
 update(Id, Props, Options, Context) when is_integer(Id) orelse Id =:= insert_rsc ->
@@ -261,17 +264,19 @@ update(Id, Props, Options, Context) when is_integer(Id) orelse Id =:= insert_rsc
                         andalso z_acl:is_admin(Context),
         expected = proplists:get_value(expected, Options, [])
     },
-    update_imported_check(RscUpd, Props, Context).
+    update_imported_check(RscUpd, Props, Context);
+update(Id, Props, Options, Context) ->
+    update(m_rsc:name_to_id_check(Id, Context), Props, Options, Context).
 
 update_imported_check(#rscupd{is_import=true, id=Id} = RscUpd, Props, Context) when is_integer(Id) ->
     case m_rsc:exists(Id, Context) of
         false ->
-            {ok, CatId} = m_category:name_to_id(other, Context), 
+            {ok, CatId} = m_category:name_to_id(other, Context),
             1 = z_db:q("insert into rsc (id, creator_id, is_published, category_id)
-                        values ($1, $2, false, $3)", 
-                       [Id, z_acl:user(Context), CatId], 
+                        values ($1, $2, false, $3)",
+                       [Id, z_acl:user(Context), CatId],
                        Context);
-        true -> 
+        true ->
             ok
     end,
     update_editable_check(RscUpd, Props, Context);
@@ -317,7 +322,7 @@ update_result({ok, NewId, OldProps, NewProps, OldCatList, IsCatInsert}, #rscupd{
     end,
     case proplists:get_value(uri, NewProps) of
         undefined -> nop;
-        Uri -> z_depcache:flush({rsc_uri, z_convert:to_list(Uri)}, Context)
+        Uri -> z_depcache:flush({rsc_uri, z_convert:to_binary(Uri)}, Context)
     end,
 
     % Flush category caches if a category is inserted.
@@ -360,11 +365,7 @@ update_transaction_fun_props(#rscupd{id=Id} = RscUpd, Func, Context) ->
                                 props_filter(
                                     props_trim(UpdateProps), [], Context),
                                 RscUpd),
-            AclCheckedProps = case z_acl:rsc_update_check(Id, EditableProps, Context) of
-                                 L when is_list(L) -> L;
-                                 {error, Reason} -> throw({error, Reason})
-                              end,
-            AutogeneratedProps = props_autogenerate(Id, AclCheckedProps, Context),
+            AutogeneratedProps = props_autogenerate(Id, EditableProps, Context),
             SafeProps = case RscUpd#rscupd.is_escape_texts of
                             true -> z_sanitize:escape_props(AutogeneratedProps, Context);
                             false -> z_sanitize:escape_props_check(AutogeneratedProps, Context)
@@ -427,7 +428,7 @@ update_transaction_fun_insert(#rscupd{id=Id} = RscUpd, Props, Raw, UpdateProps, 
                             [{creator_id, Id} | Props1];
                         CreatorId when is_integer(CreatorId) ->
                             [{creator_id, CreatorId} | Props1 ];
-                        undefined -> 
+                        undefined ->
                             Props1
                     end;
                 false ->
@@ -465,13 +466,13 @@ update_transaction_fun_db(RscUpd, Id, Props, Raw, IsABefore, IsCatInsert, Contex
     UpdateProps1 = set_if_normal_update(RscUpd, modified, erlang:universaltime(), UpdateProps),
     UpdateProps2 = set_if_normal_update(RscUpd, modifier_id, z_acl:user(Context), UpdateProps1),
     {IsChanged, UpdatePropsN} = z_notifier:foldr(#rsc_update{
-                                            action=case RscUpd#rscupd.id of 
-                                                        insert_rsc -> insert; 
+                                            action=case RscUpd#rscupd.id of
+                                                        insert_rsc -> insert;
                                                         _ -> update
                                                    end,
-                                            id=Id, 
+                                            id=Id,
                                             props=Raw
-                                        }, 
+                                        },
                                         {false, UpdateProps2},
                                         Context),
 
@@ -481,7 +482,7 @@ update_transaction_fun_db(RscUpd, Id, Props, Raw, IsABefore, IsCatInsert, Contex
                             UpdatePropsN;
                         CatId ->
                             CatNr = z_db:q1("select nr
-                                             from hierarchy 
+                                             from hierarchy
                                              where id = $1
                                                and name = '$category'",
                                             [CatId],
@@ -561,11 +562,11 @@ preflight_check(_Id, [], _Context) ->
     ok;
 preflight_check(Id, [{name, Name}|T], Context) when Name =/= undefined ->
     case z_db:q1("select count(*) from rsc where name = $1 and id <> $2", [Name, Id], Context) of
-        0 -> 
+        0 ->
             preflight_check(Id, T, Context);
         _N ->
-            lager:warning("[~p] Trying to insert duplicate name ~p", 
-                          [z_context:site(Context), Name]), 
+            lager:warning("Trying to insert duplicate name ~p",
+                          [Name]),
             throw({error, duplicate_name})
     end;
 preflight_check(Id, [{page_path, Path}|T], Context) when Path =/= undefined ->
@@ -573,8 +574,7 @@ preflight_check(Id, [{page_path, Path}|T], Context) when Path =/= undefined ->
         0 ->
             preflight_check(Id, T, Context);
         _N ->
-            lager:warning("[~p] Trying to insert duplicate page_path ~p", 
-                          [z_context:site(Context), Path]), 
+            lager:warning("Trying to insert duplicate page_path ~p", [Path]),
             throw({error, duplicate_page_path})
     end;
 preflight_check(Id, [{uri, Uri}|T], Context) when Uri =/= undefined ->
@@ -582,15 +582,14 @@ preflight_check(Id, [{uri, Uri}|T], Context) when Uri =/= undefined ->
         0 ->
             preflight_check(Id, T, Context);
         _N ->
-            lager:warning("[~p] Trying to insert duplicate uri ~p", 
-                          [z_context:site(Context), Uri]), 
+            lager:warning("Trying to insert duplicate uri ~p", [Uri]),
             throw({error, duplicate_uri})
     end;
 preflight_check(Id, [{'query', Query}|T], Context) ->
     Valid = case m_rsc:is_a(Id, 'query', Context) of
                 true ->
                     try
-                        search_query:search(search_query:parse_query_text(z_html:unescape(Query)), Context), 
+                        search_query:search(search_query:parse_query_text(z_html:unescape(Query)), Context),
                         true
                     catch
                         _: {error, {_, _}} ->
@@ -610,7 +609,7 @@ throw_if_category_not_allowed(_Id, _SafeProps, false, _Context) ->
     ok;
 throw_if_category_not_allowed(insert_rsc, SafeProps, _True, Context) ->
     case proplists:get_value(category_id, SafeProps) of
-        undefined -> 
+        undefined ->
             throw({error, nocategory});
         CatId ->
             throw_if_category_not_allowed_1(undefined, CatId, Context)
@@ -630,7 +629,7 @@ throw_if_category_not_allowed_1(_PrevCatId, CatId, Context) ->
     CategoryName = m_category:id_to_name(CatId, Context),
     case z_acl:is_allowed(insert, #acl_rsc{category=CategoryName}, Context) of
         true -> ok;
-        _False -> throw({error, eaccess})
+        _False -> throw({error, eacces})
     end.
 
 
@@ -678,7 +677,7 @@ props_filter([{page_path, Path}|T], Acc, Context) ->
                 Empty when Empty == undefined; Empty == []; Empty == <<>> ->
                     props_filter(T, [{page_path, undefined} | Acc], Context);
                 _ ->
-                    P = [ $/ | string:strip(z_utils:url_path_encode(Path), both, $/) ],
+                    P = [ $/ | string:strip(z_url:url_path_encode(Path), both, $/) ],
                     props_filter(T, [{page_path, P} | Acc], Context)
             end;
         false ->
@@ -695,42 +694,26 @@ props_filter([{slug, Slug}|T], Acc, Context) ->
 props_filter([{custom_slug, P}|T], Acc, Context) ->
     props_filter(T, [{custom_slug, z_convert:to_bool(P)} | Acc], Context);
 
-props_filter([{B, P}|T], Acc, Context) 
+props_filter([{B, P}|T], Acc, Context)
     when  B =:= is_published; B =:= is_featured; B=:= is_protected;
           B =:= is_dependent; B =:= is_query_live; B =:= date_is_all_day;
-          B =:= is_website_redirect; B =:= is_page_path_multiple ->
+          B =:= is_website_redirect; B =:= is_page_path_multiple;
+          B =:= is_authoritative ->
     props_filter(T, [{B, z_convert:to_bool(P)} | Acc], Context);
 
-props_filter([{is_authoritative, P}|T], Acc, Context) ->
-    case z_acl:is_allowed(use, mod_admin_config, Context) of
-        true ->
-            props_filter(T, [{is_authoritative, z_convert:to_bool(P)} | Acc], Context);
-        false ->
-            props_filter(T, Acc, Context)
-    end;
-
-props_filter([{P, DT}|T], Acc, Context) 
-    when P =:= created; P =:= modified; 
+props_filter([{P, DT}|T], Acc, Context)
+    when P =:= created; P =:= modified;
          P =:= date_start; P =:= date_end;
          P =:= publication_start; P =:= publication_end  ->
     props_filter(T, [{P,z_datetime:to_datetime(DT)}|Acc], Context);
 
-props_filter([{P, Id}|T], Acc, Context) 
+props_filter([{P, Id}|T], Acc, Context)
     when P =:= creator_id; P =:= modifier_id ->
     case m_rsc:rid(Id, Context) of
         undefined ->
             props_filter(T, Acc, Context);
         RId ->
             props_filter(T, [{P,RId}|Acc], Context)
-    end;
-
-props_filter([{visible_for, Vis}|T], Acc, Context) ->
-    VisibleFor = z_convert:to_integer(Vis),
-    case VisibleFor of
-        N when N >= 0 ->
-            props_filter(T, [{visible_for, N} | Acc], Context);
-        _ ->
-            props_filter(T, Acc, Context)
     end;
 
 props_filter([{category, CatName}|T], Acc, Context) ->
@@ -741,8 +724,8 @@ props_filter([{category_id, CatId}|T], Acc, Context) ->
         true ->
             props_filter(T, [{category_id, CatId1}|Acc], Context);
         false ->
-            lager:error("[~p] Ignoring unknown category '~p' in update, using 'other' instead.",
-                        [z_context:site(Context), CatId]),
+            lager:error("Ignoring unknown category '~p' in update, using 'other' instead.",
+                        [CatId]),
             props_filter(T, [{category_id,m_rsc:rid(other, Context)}|Acc], Context)
     end;
 
@@ -751,8 +734,7 @@ props_filter([{content_group, undefined}|T], Acc, Context) ->
 props_filter([{content_group, CgName}|T], Acc, Context) ->
     case m_rsc:rid(CgName, Context) of
         undefined ->
-            lager:error("[~p] Ignoring unknown content group '~p' in update.",
-                        [z_context:site(Context), CgName]),
+            lager:error("Ignoring unknown content group '~p' in update.", [CgName]),
             props_filter(T, Acc, Context);
         CgId ->
             props_filter([{content_group_id, CgId}|T], Acc, Context)
@@ -761,16 +743,17 @@ props_filter([{content_group_id, undefined}|T], Acc, Context) ->
     props_filter(T, [{content_group_id, undefined}|Acc], Context);
 props_filter([{content_group_id, CgId}|T], Acc, Context) ->
     CgId1 = m_rsc:rid(CgId, Context),
-    case m_rsc:is_a(CgId1, content_group, Context) of
+    case m_rsc:is_a(CgId1, content_group, Context)
+        orelse m_rsc:is_a(CgId1, acl_collaboration_group, Context)
+    of
         true ->
             props_filter(T, [{content_group_id, CgId1}|Acc], Context);
         false ->
-            lager:error("[~p] Ignoring unknown content group '~p' in update.",
-                        [z_context:site(Context), CgId]),
+            lager:error("Ignoring unknown content group '~p' in update.", [CgId]),
             props_filter(T, Acc, Context)
     end;
 
-props_filter([{Location, P}|T], Acc, Context) 
+props_filter([{Location, P}|T], Acc, Context)
     when Location =:= location_lat; Location =:= location_lng ->
     X = try
             z_convert:to_float(P)
@@ -780,15 +763,37 @@ props_filter([{Location, P}|T], Acc, Context)
     props_filter(T, [{Location, X} | Acc], Context);
 
 props_filter([{pref_language, Lang}|T], Acc, Context) ->
-    Lang1 = case z_trans:to_language_atom(Lang) of
+    Lang1 = case z_language:to_language_atom(Lang) of
                 {ok, LangAtom} -> LangAtom;
                 {error, not_a_language} -> undefined
             end,
     props_filter(T, [{pref_language, Lang1} | Acc], Context);
 
+props_filter([{language, Langs}|T], Acc, Context) ->
+    props_filter(T, [{language, filter_languages(Langs)}|Acc], Context);
+
 props_filter([{_Prop, _V}=H|T], Acc, Context) ->
     props_filter(T, [H|Acc], Context).
 
+
+%% Filter all given languages, drop unknown languages.
+%% Ensure that the languages are a list of atoms.
+filter_languages([]) -> [];
+filter_languages(<<>>) -> [];
+filter_languages(Lang) when is_binary(Lang); is_atom(Lang) ->
+    filter_languages([Lang]);
+filter_languages([C|_] = Lang) when is_integer(C) ->
+    filter_languages([Lang]);
+filter_languages([L|_] = Langs) when is_list(L); is_binary(L); is_atom(L) ->
+    lists:foldr(
+            fun(Lang, Acc) ->
+                case z_language:to_language_atom(Lang) of
+                    {ok, LangAtom} -> [LangAtom|Acc];
+                    {error, not_a_language} -> Acc
+                end
+            end,
+            [],
+            Langs).
 
 %% @doc Automatically modify some props on update.
 %% @spec props_autogenerate(Id, Props1, Context) -> Props2
@@ -833,25 +838,25 @@ props_defaults(Props, Context) ->
 props_filter_protected(Props, RscUpd) ->
     IsNormal = is_normal_update(RscUpd),
     lists:filter(fun
-                    ({K, _}) -> not is_protected(K, IsNormal) 
+                    ({K, _}) -> not is_protected(K, IsNormal)
                  end,
                  Props).
 
 
 to_slug(undefined, _Context) -> undefined;
 to_slug({trans, _} = Tr, Context) -> to_slug(z_trans:lookup_fallback(Tr, en, Context), Context);
-to_slug(B, _Context) when is_binary(B) -> truncate_slug(z_string:to_slug(B)); 
+to_slug(B, _Context) when is_binary(B) -> truncate_slug(z_string:to_slug(B));
 to_slug(X, Context) -> to_slug(z_convert:to_binary(X), Context).
 
 truncate_slug(<<Slug:78/binary, _/binary>>) -> Slug;
 truncate_slug(Slug) -> Slug.
 
 %% @doc Map property names to an atom, fold pivot and computed fields together for later filtering.
-map_property_name(IsImport, P) when not is_list(P) -> map_property_name(IsImport, z_convert:to_list(P));
-map_property_name(_IsImport, "computed_"++_) -> computed_xxx;
-map_property_name(_IsImport, "pivot_"++_) -> pivot_xxx;
-map_property_name(false, P) when is_list(P) -> erlang:list_to_existing_atom(P);
-map_property_name(true,  P) when is_list(P) -> erlang:list_to_atom(P).
+map_property_name(IsImport, P) when not is_binary(P) -> map_property_name(IsImport, z_convert:to_binary(P));
+map_property_name(_IsImport, <<"computed_", _/binary>>) -> computed_xxx;
+map_property_name(_IsImport, <<"pivot_", _/binary>>) -> pivot_xxx;
+map_property_name(false, P) when is_binary(P) -> binary_to_existing_atom(P, utf8);
+map_property_name(true,  P) when is_binary(P) -> binary_to_atom(P, utf8).
 
 
 %% @doc Properties that can't be updated with m_rsc_update:update/3 or m_rsc_update:insert/2
@@ -899,10 +904,10 @@ recombine_dates(Id, Props, Context) ->
     Dates4 = lists:foldl(
                     fun({Name, {S, E}}, Acc) ->
                         [
-                            {Name++"_start", S},
-                            {Name++"_end", E} 
+                            {<<Name/binary, "_start">>, S},
+                            {<<Name/binary, "_end">>, E}
                             | Acc
-                        ] 
+                        ]
                     end,
                     Dates3,
                     DateGroups2),
@@ -916,9 +921,9 @@ maybe_dates_to_utc(Id, Dates, Props, Context) ->
     IsAllDay = is_all_day(Id, Props, Context),
     [ maybe_to_utc(IsAllDay, NameDT,Context) || NameDT <- Dates ].
 
-maybe_to_utc(true, {"date_start", _Date} = D, _Context) ->
+maybe_to_utc(true, {<<"date_start">>, _Date} = D, _Context) ->
     D;
-maybe_to_utc(true, {"date_end", _Date} = D, _Context) ->
+maybe_to_utc(true, {<<"date_end">>, _Date} = D, _Context) ->
     D;
 maybe_to_utc(_IsAllDay, {Name, Date}, Context) ->
     {Name, z_datetime:to_utc(Date, Context)}.
@@ -926,7 +931,7 @@ maybe_to_utc(_IsAllDay, {Name, Date}, Context) ->
 is_all_day(Id, Props, Context) ->
     case proplists:get_value(date_is_all_day, Props) of
         undefined ->
-            case proplists:get_value("date_is_all_day", Props) of
+            case proplists:get_value(<<"date_is_all_day">>, Props) of
                 undefined ->
                     case is_integer(Id) of
                         false ->
@@ -944,13 +949,13 @@ is_all_day(Id, Props, Context) ->
 
 collect_empty_date_groups([], Acc, Null) ->
     {Acc, Null};
-collect_empty_date_groups([{"publication", _} = R|T], Acc, Null) ->
+collect_empty_date_groups([{<<"publication">>, _} = R|T], Acc, Null) ->
     collect_empty_date_groups(T, [R|Acc], Null);
 collect_empty_date_groups([{Name, {
                             {{undefined, undefined, undefined}, {undefined, undefined, undefined}},
                             {{undefined, undefined, undefined}, {undefined, undefined, undefined}}
                             }}|T], Acc, Null) ->
-    collect_empty_date_groups(T, Acc, [{Name++"_start", undefined}, {Name++"_end", undefined} | Null]);
+    collect_empty_date_groups(T, Acc, [{<<Name/binary, "_start">>, undefined}, {<<Name/binary, "_end">>, undefined} | Null]);
 collect_empty_date_groups([H|T], Acc, Null) ->
     collect_empty_date_groups(T, [H|Acc], Null).
 
@@ -967,15 +972,15 @@ collect_empty_dates([H|T], Acc, Null) ->
 
 recombine_dates_1([], Dates, Acc) ->
     {Dates, Acc};
-recombine_dates_1([{"dt:"++K,V}|T], Dates, Acc) ->
-    [Part, End, Name] = string:tokens(K, ":"),
+recombine_dates_1([{<<"dt:",K/binary>>,V}|T], Dates, Acc) ->
+    [Part, End, Name] = binary:split(K, <<":">>, [global]),
     Dates1 = recombine_date(Part, End, Name, V, Dates),
     recombine_dates_1(T, Dates1, Acc);
 recombine_dates_1([H|T], Dates, Acc) ->
     recombine_dates_1(T, Dates, [H|Acc]).
 
     recombine_date(Part, End, Name, undefined, Dates) ->
-        recombine_date(Part, End, Name, "", Dates);
+        recombine_date(Part, End, Name, <<>>, Dates);
     recombine_date(Part, _End, Name, V, Dates) ->
         Date = case proplists:get_value(Name, Dates) of
             undefined ->
@@ -983,27 +988,27 @@ recombine_dates_1([H|T], Dates, Acc) ->
             D ->
                 D
         end,
-        Date1 = recombine_date_part(Date, Part, to_date_value(Part, string:strip(V))),
+        Date1 = recombine_date_part(Date, Part, to_date_value(Part, z_string:trim(V))),
         lists:keystore(Name, 1, Dates, {Name, Date1}).
 
-    recombine_date_part({{_Y,M,D},{H,I,S}}, "y", V) -> {{V,M,D},{H,I,S}};
-    recombine_date_part({{Y,_M,D},{H,I,S}}, "m", V) -> {{Y,V,D},{H,I,S}};
-    recombine_date_part({{Y,M,_D},{H,I,S}}, "d", V) -> {{Y,M,V},{H,I,S}};
-    recombine_date_part({{Y,M,D},{_H,I,S}}, "h", V) -> {{Y,M,D},{V,I,S}};
-    recombine_date_part({{Y,M,D},{H,_I,S}}, "i", V) -> {{Y,M,D},{H,V,S}};
-    recombine_date_part({{Y,M,D},{H,I,_S}}, "s", V) -> {{Y,M,D},{H,I,V}};
-    recombine_date_part({{Y,M,D},{_H,_I,S}}, "hi", {H,I,_S}) -> {{Y,M,D},{H,I,S}};
-    recombine_date_part({{Y,M,D},_Time}, "his", {_,_,_} = V) -> {{Y,M,D},V};
-    recombine_date_part({_Date,{H,I,S}}, "ymd", {_,_,_} = V) -> {V,{H,I,S}}.
+    recombine_date_part({{_Y,M,D},{H,I,S}}, <<"y">>, V) -> {{V,M,D},{H,I,S}};
+    recombine_date_part({{Y,_M,D},{H,I,S}}, <<"m">>, V) -> {{Y,V,D},{H,I,S}};
+    recombine_date_part({{Y,M,_D},{H,I,S}}, <<"d">>, V) -> {{Y,M,V},{H,I,S}};
+    recombine_date_part({{Y,M,D},{_H,I,S}}, <<"h">>, V) -> {{Y,M,D},{V,I,S}};
+    recombine_date_part({{Y,M,D},{H,_I,S}}, <<"i">>, V) -> {{Y,M,D},{H,V,S}};
+    recombine_date_part({{Y,M,D},{H,I,_S}}, <<"s">>, V) -> {{Y,M,D},{H,I,V}};
+    recombine_date_part({{Y,M,D},{_H,_I,S}}, <<"hi">>, {H,I,_S}) -> {{Y,M,D},{H,I,S}};
+    recombine_date_part({{Y,M,D},_Time}, <<"his">>, {_,_,_} = V) -> {{Y,M,D},V};
+    recombine_date_part({_Date,{H,I,S}}, <<"ymd">>, {_,_,_} = V) -> {V,{H,I,S}}.
 
-    to_date_value(Part, V) when Part == "ymd" orelse Part == "his"->
-        case string:tokens(V, "-/: ") of
-            [] -> {undefined, undefined, undefined};
+    to_date_value(Part, V) when Part =:= <<"ymd">>; Part =:= <<"his">> ->
+        case binary:split(V, [<<"-">>,<<"/">>,<<":">>,<<" ">>], [global]) of
+            [<<>>] -> {undefined, undefined, undefined};
             [Y,M,D] -> {to_int(Y), to_int(M), to_int(D)}
         end;
-    to_date_value("hi", V) ->
-        case string:tokens(V, "-/: ") of
-            [] -> {undefined, undefined, undefined};
+    to_date_value(<<"hi">>, V) ->
+        case binary:split(V, [<<"-">>, <<"/">>, <<":">>, <<" ">>], [global]) of
+            [<<>>] -> {undefined, undefined, undefined};
             [H] -> {to_int(H), 0, undefined};
             [H,I] -> {to_int(H), to_int(I), undefined}
         end;
@@ -1016,9 +1021,9 @@ group_dates(Dates) ->
     group_dates([], Groups, Acc) ->
         {Acc, Groups};
     group_dates([{Name,D}|T], Groups, Acc) ->
-        case lists:suffix("_start", Name) of
+        case binary:longest_common_suffix([<<"_start">>, Name]) =:= size(<<"_start">>) of
             true ->
-                Base = lists:sublist(Name, length(Name) - 6),
+                Base = binary:part(Name, 0, size(Name) - size(<<"_start">>)),
                 Range = case proplists:get_value(Base, Groups) of
                     {_Start, End} ->
                         { D, End };
@@ -1029,9 +1034,9 @@ group_dates(Dates) ->
                 group_dates(T, Groups1, Acc);
 
             false ->
-                case lists:suffix("_end", Name) of
+                case binary:longest_common_suffix([<<"_end">>, Name]) =:= size(<<"_end">>) of
                     true ->
-                        Base = lists:sublist(Name, length(Name) - 4),
+                        Base = binary:part(Name, 0, size(Name) - size(<<"_end">>)),
                         Range = case proplists:get_value(Base, Groups) of
                             {Start, _End} ->
                                 { Start, D };
@@ -1105,7 +1110,7 @@ to_int(A) ->
 %% e.g. m_rsc_update:props_languages([{"foo$en", x}, {"bar$nl", x}]) -> ["en", "nl"]
 props_languages(Props) ->
     lists:foldr(fun({Key, _}, Acc) ->
-                        case string:tokens(z_convert:to_list(Key), [$$]) of
+                        case binary:split(z_convert:to_binary(Key), <<"$">>, [global]) of
                             [_, Lang] ->
                                 case lists:member(Lang, Acc) of
                                     true -> Acc;
@@ -1121,22 +1126,22 @@ recombine_languages(Props, Context) ->
     case props_languages(Props) of
         [] ->
             Props;
-        L -> 
-            Cfg = [ atom_to_list(Code) || Code <- config_langs(Context) ],
+        L ->
+            Cfg = [ atom_to_binary(Code, utf8) || Code <- config_langs(Context) ],
             L1 = filter_langs(edited_languages(Props, L), Cfg),
             {LangProps, OtherProps} = comb_lang(Props, L1, [], []),
-            LangProps ++ [{language, [list_to_atom(Lang) || Lang <- L1]}|proplists:delete("language", OtherProps)]
+            LangProps ++ [{language, [binary_to_atom(Lang, 'utf8') || Lang <- L1]}|proplists:delete(<<"language">>, OtherProps)]
     end.
 
     %% @doc Fetch all the edited languages, from 'language' inputs or a merged 'language' property
     edited_languages(Props, PropLangs) ->
-        case proplists:is_defined("language", Props) of
+        case proplists:is_defined(<<"language">>, Props) of
             true ->
-                proplists:get_all_values("language", Props);
+                proplists:get_all_values(<<"language">>, Props);
             false ->
                 case proplists:get_value(language, Props) of
                     L when is_list(L) ->
-                        [ z_convert:to_list(Lang) || Lang <- L ];
+                        [ z_convert:to_binary(Lang) || Lang <- L ];
                     undefined ->
                         PropLangs
                 end
@@ -1144,8 +1149,8 @@ recombine_languages(Props, Context) ->
 
     comb_lang([], _L1, LAcc, OAcc) ->
         {LAcc, OAcc};
-    comb_lang([{P,V}|Ps], L1, LAcc, OAcc) when is_list(P) ->
-        case string:tokens(P, "$") of
+    comb_lang([{P,V}|Ps], L1, LAcc, OAcc) when is_binary(P) ->
+        case binary:split(P, <<"$">>) of
             [P1,Lang] ->
                 case lists:member(Lang, L1) of
                     true -> comb_lang(Ps, L1, append_langprop(P1, Lang, V, LAcc), OAcc);
@@ -1159,7 +1164,7 @@ recombine_languages(Props, Context) ->
 
 
     append_langprop(P, Lang, V, Acc) ->
-        Lang1 = list_to_atom(Lang),
+        {ok, Lang1} = z_language:to_language_atom(Lang),
         case proplists:get_value(P, Acc) of
             {trans, Tr} ->
                 Tr1 = [{Lang1, z_convert:to_binary(V)}|Tr],
@@ -1173,7 +1178,7 @@ recombine_blocks(Props, OrgProps, Context) ->
     recombine_blocks_import(Props1, OrgProps, Context).
 
 recombine_blocks_form(Props, OrgProps, Context) ->
-    {BPs, Ps} = lists:partition(fun({"block-"++ _, _}) -> true; (_) -> false end, Props),
+    {BPs, Ps} = lists:partition(fun({<<"block-", _/binary>>, _}) -> true; (_) -> false end, Props),
     case BPs of
         [] ->
             case proplists:get_value(blocks, Props) of
@@ -1186,10 +1191,10 @@ recombine_blocks_form(Props, OrgProps, Context) ->
         _ ->
             Keys = block_ids(OrgProps, []),
             Dict = lists:foldr(
-                            fun ({"block-", _}, Acc) -> 
+                            fun ({<<"block-">>, _}, Acc) ->
                                     Acc;
-                                ({"block-"++Name, Val}, Acc) ->
-                                    Ts = string:tokens(Name, "-"),
+                                ({<<"block-", Name/binary>>, Val}, Acc) ->
+                                    Ts = binary:split(Name, <<"-">>, [global]),
                                     BlockId = iolist_to_binary(tl(lists:reverse(Ts))),
                                     BlockField = lists:last(Ts),
                                     dict:append(BlockId, {BlockField, Val}, Acc)
@@ -1201,14 +1206,14 @@ recombine_blocks_form(Props, OrgProps, Context) ->
     end.
 
 recombine_blocks_import(Props, _OrgProps, Context) ->
-    {BPs, Ps} = lists:partition(fun({"blocks."++ _, _}) -> true; (_) -> false end, Props),
+    {BPs, Ps} = lists:partition(fun({<<"blocks.", _/binary>>, _}) -> true; (_) -> false end, Props),
     case BPs of
         [] ->
             Props;
         _ ->
             {Dict,Keys} = lists:foldr(
-                            fun({"blocks."++Name, Val}, {Acc,KeyAcc}) ->
-                                [BlockId,BlockField] = string:tokens(Name, "."),
+                            fun({<<"blocks.", Name/binary>>, Val}, {Acc,KeyAcc}) ->
+                                [BlockId,BlockField] = binary:split(Name, <<".">>, [global]),
                                 KeyAcc1 = case lists:member(BlockId, KeyAcc) of
                                             true -> KeyAcc;
                                             false -> [ BlockId | KeyAcc ]
@@ -1221,10 +1226,10 @@ recombine_blocks_import(Props, _OrgProps, Context) ->
             [{blocks, Blocks++proplists:get_value(blocks, Ps, [])} | proplists:delete(blocks, Ps) ]
     end.
 
-block_ids([], Acc) -> 
+block_ids([], Acc) ->
     lists:reverse(Acc);
-block_ids([{"block-"++Name,_}|Rest], Acc) when Name =/= [] ->
-    Ts = string:tokens(Name, "-"),
+block_ids([{<<"block-", Name/binary>>,_}|Rest], Acc) when Name =/= <<>> ->
+    Ts = binary:split(Name, <<"-">>, [global]),
     BlockId = iolist_to_binary(tl(lists:reverse(Ts))),
     case lists:member(BlockId, Acc) of
         true -> block_ids(Rest, Acc);
@@ -1279,7 +1284,7 @@ filter_langs(L, Cfg) ->
                  end,
                  L).
 
-    
+
 
 config_langs(Context) ->
     case m_config:get(i18n, language_list, Context) of
@@ -1309,18 +1314,16 @@ update_page_path_log(RscId, OldProps, NewProps, Context) ->
 
 
 test() ->
-    [{"publication_start",{{2009,7,9},{0,0,0}}},
-          {"publication_end",?ST_JUTTEMIS},
-          {"plop","hello"}]
+    [{<<"publication_start">>,{{2009,7,9},{0,0,0}}},
+     {<<"publication_end">>,?ST_JUTTEMIS},
+     {<<"plop">>,<<"hello">>}]
      = recombine_dates(insert_rsc, [
-        {"dt:y:0:publication_start", "2009"},
-        {"dt:m:0:publication_start", "7"},
-        {"dt:d:0:publication_start", "9"},
-        {"dt:y:1:publication_end", ""},
-        {"dt:m:1:publication_end", ""},
-        {"dt:d:1:publication_end", ""},
-        {"plop", "hello"}
+        {<<"dt:y:0:publication_start">>, <<"2009">>},
+        {<<"dt:m:0:publication_start">>, <<"7">>},
+        {<<"dt:d:0:publication_start">>, <<"9">>},
+        {<<"dt:y:1:publication_end">>, <<"">>},
+        {<<"dt:m:1:publication_end">>, <<"">>},
+        {<<"dt:d:1:publication_end">>, <<"">>},
+        {<<"plop">>, <<"hello">>}
     ], z_context:new_tests()),
     ok.
-
-

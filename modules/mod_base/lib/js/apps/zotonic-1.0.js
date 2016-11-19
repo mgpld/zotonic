@@ -25,7 +25,6 @@ Based on nitrogen.js which is copyright 2008-2009 Rusty Klophaus
 
 // Client state
 var z_language              = "en";
-var z_ua                    = "desktop";
 var z_pageid                = '';
 var z_userid;
 var z_editor;
@@ -33,21 +32,22 @@ var z_editor;
 // Session state
 var z_session_valid         = false;
 var z_session_restart_count = 0;
+var z_session_reload_check  = false;
 
 // Transport to/from server
+var z_websocket_host;
 var z_ws                    = false;
 var z_ws_pong_count         = 0;
 var z_ws_ping_timeout;
 var z_ws_ping_interval;
 var z_comet;
-var z_stream_host;
-var z_stream_starter;
-var z_stream_start_timeout;
-var z_websocket_host;
-var z_default_form_postback = false;
-var z_page_unloading        = false;
+var z_comet_poll_timeout;
 var z_comet_reconnect_timeout = 1000;
 var z_comet_poll_count      = 0;
+var z_stream_starter;
+var z_stream_start_timeout;
+var z_default_form_postback = false;
+var z_page_unloading        = false;
 var z_transport_check_timer;
 var z_transport_queue       = [];
 var z_transport_acks        = [];
@@ -76,7 +76,7 @@ function z_set_page_id( page_id, user_id )
 {
     ubf.add_spec('z_msg_v1', [
         "qos", "dup", "msg_id", "timestamp", "content_type", "delegate",
-        "push_queue", "ua_class", "session_id", "page_id",
+        "push_queue", "session_id", "page_id",
         "data"
         ]);
     ubf.add_spec('z_msg_ack', [
@@ -129,6 +129,15 @@ function z_set_page_id( page_id, user_id )
             setTimeout(function() { pubzub.publish("~pagesession/pageinit", page_id); }, 10);
         }
     }
+    $(window).bind("pageshow", function(event) {
+        // After back button on iOS / Safari
+        if (typeof event.originalEvent == 'object' && event.originalEvent.persisted) {
+            z_page_unloading = false;
+            setTimeout(function() {
+                z_stream_onreload();
+            }, 10);
+        }
+    });
     $(window).bind('beforeunload', function() {
         z_page_unloading = true;
 
@@ -227,6 +236,27 @@ function z_dialog_alert(options)
     });
 }
 
+function z_dialog_overlay_open(options)
+{
+    var $overlay = $('.modal-overlay');
+    if ($overlay.length > 0) {
+        $overlay
+            .html(options.html)
+            .show();
+    } else {
+        html = '<div class="modal-overlay">' +
+               '<a href="#close" class="modal-overlay-close" onclick="z_dialog_overlay_close()">&times;</a>' +
+               options.html +
+               '</div>';
+        $('body').append(html);
+    }
+}
+
+function z_dialog_overlay_close()
+{
+    $('.modal-overlay').remove();
+}
+
 /* Growl messages
 ---------------------------------------------------------- */
 
@@ -319,7 +349,7 @@ function z_session_restart(invalid_page_id)
         z_session_valid = false;
         z_session_restart_count = 0;
     }
-    setTimeout(function() { z_session_restart_check(invalid_page_id); }, 500);
+    setTimeout(function() { z_session_restart_check(invalid_page_id); }, 50);
 }
 
 function z_session_restart_check(invalid_page_id)
@@ -330,7 +360,7 @@ function z_session_restart_check(invalid_page_id)
                 z_session_invalid_reload(z_pageid);
             } else {
                 z_session_restart_count++;
-                z_transport('session', 'ubf', 'ensure', {is_expect_cookie: true});
+                z_transport('session', 'ubf', 'ensure', {transport: "ajax"});
             }
         } else {
             setTimeout(function() { z_session_restart_check(invalid_page_id); }, 200);
@@ -423,13 +453,27 @@ function z_transport_session_status(data, msg)
             if (window.z_sid) {
                 window.z_sid = undefined;
             }
-            z_session_restart(z_pageid);
+            if (z_session_reload_check) {
+                z_reload();
+            } else {
+                z_session_reload_check = false;
+                z_session_restart(z_pageid);
+            }
             break;
         case 'page_invalid':
-            z_session_restart(z_pageid);
+            if (z_session_reload_check) {
+                z_reload();
+            } else {
+                z_session_reload_check = false;
+                z_session_restart(z_pageid);
+            }
             break;
         case 'ok':
             z_session_valid = true;
+            if (z_session_reload_check) {
+                z_session_reload_check = false;
+                z_stream_restart();
+            }
             break;
         default:
             if (typeof data == 'object') {
@@ -466,11 +510,7 @@ function z_transport(delegate, content_type, data, options)
     options.transport = options.transport || '';
 
     if (typeof options.qos == 'undefined') {
-        if (options.ack) {
-            options.qos = 1;
-        } else {
-            options.qos = 0;
-        }
+        options.qos = 1;
     }
     var msg = {
             "_record": "z_msg_v1",
@@ -480,7 +520,6 @@ function z_transport(delegate, content_type, data, options)
             "timestamp": timestamp,
             "content_type": z_transport_content_type(content_type),
             "delegate": z_transport_delegate(delegate),
-            "ua_class": ubf.constant(z_ua),
             "page_id": z_pageid,
             "session_id": window.z_sid || undefined,
             "data": data
@@ -587,12 +626,19 @@ function z_transport_incoming_msg(msg)
         case 'z_msg_ack':
             if (!z_websocket_pong(msg) && typeof z_transport_acks[msg.msg_id] == 'object') {
                 var ack = z_transport_acks[msg.msg_id];
-                delete z_transport_acks[msg.msg_id];
-
-                clearTimeout(ack.timeout_timer);
-                if (typeof ack.options.ack == 'function') {
-                    ack.options.ack(msg, ack.options);
+                if (msg.result == 'overload') {
+                    clearTimeout(ack.timeout_timer);
+                    z_transport_requeue(msg.msg_id);
+                    z_transport_overload();
+                } else {
+                    delete z_transport_acks[msg.msg_id];
+                    clearTimeout(ack.timeout_timer);
+                    if (typeof ack.options.ack == 'function') {
+                        ack.options.ack(msg, ack.options);
+                    }
                 }
+            } else if (msg.result == 'overload') {
+                z_transport_overload();
             }
             break;
         default:
@@ -638,19 +684,7 @@ function z_transport_timeout(msg_id)
 {
     if (typeof z_transport_acks[msg_id] == 'object') {
         if (z_transport_acks[msg_id].timeout_count++ < TRANSPORT_TRIES) {
-            // Requeue the request (if it is not waiting in the queue)
-            if (!z_transport_acks[msg_id].is_queued) {
-                z_transport_acks[msg_id].msg.dup = true;
-                z_transport_queue.push({
-                    msg: z_transport_acks[msg_id].msg,
-                    msg_id: msg_id,
-                    options: z_transport_acks[msg_id].options || {}
-                });
-                z_transport_acks[msg_id].is_queued = true;
-            }
-            z_transport_acks[msg_id].timeout_timer = setTimeout(function() {
-                z_transport_timeout(msg_id);
-            }, z_transport_acks[msg_id].options.timeout);
+            z_transport_requeue(msg_id);
         } else {
             // Final timeout, remove from all queues
             if (z_transport_acks[msg_id].fail) {
@@ -667,6 +701,27 @@ function z_transport_timeout(msg_id)
             delete z_transport_acks[msg_id];
         }
     }
+}
+
+function z_transport_requeue(msg_id)
+{
+    // Reset timeout for retransmission
+    clearTimeout(z_transport_acks[msg_id].timeout_timer);
+    z_transport_acks[msg_id].timeout_timer = setTimeout(function() {
+        z_transport_timeout(msg_id);
+    }, z_transport_acks[msg_id].options.timeout);
+
+    // Requeue the request (if it is not waiting in the queue)
+    if (!z_transport_acks[msg_id].is_queued) {
+        z_transport_acks[msg_id].msg.dup = true;
+        z_transport_acks[msg_id].is_queued = true;
+        z_transport_queue.push({
+            msg: z_transport_acks[msg_id].msg,
+            msg_id: msg_id,
+            options: z_transport_acks[msg_id].options || {}
+        });
+    }
+    z_transport_check();
 }
 
 function z_transport_incoming_data_decode(type, data)
@@ -766,20 +821,34 @@ function z_postback_opt_qs(extraParams)
 
 function z_transport_check()
 {
-    if (z_transport_queue.length > 0)
-    {
+    if (z_transport_queue.length > 0 && !z_transport_check_timer) {
         // Delay transport messages till the z_pageid is initialized.
         if (z_pageid !== '') {
             var qmsg = z_transport_queue.shift();
-
             if (z_transport_acks[qmsg.msg_id]) {
                 z_transport_acks[qmsg.msg_id].is_queued = false;
             }
             z_do_transport(qmsg);
         } else if (!z_transport_check_timer) {
-            z_transport_check_timer = setTimeout(function() { z_transport_check_timer = undefined; z_transport_check(); }, 50);
+            z_transport_check_timer_restart(50);
         }
     }
+}
+
+function z_transport_overload()
+{
+    z_transport_check_timer_restart(1000);
+}
+
+function z_transport_check_timer_restart(timeout)
+{
+    if (z_transport_check_timer) {
+        clearTimeout(z_transport_check_timer);
+    }
+    z_transport_check_timer = setTimeout(function() {
+        z_transport_check_timer = undefined;
+        z_transport_check();
+    }, timeout);
 }
 
 function z_do_transport(qmsg)
@@ -796,7 +865,7 @@ function z_ajax(options, data)
 {
     z_start_spinner();
     $.ajax({
-        url: '/postback',
+        url: '/postback?transport='+options.transport,
         type: 'post',
         data: data,
         dataType: 'ubf text',
@@ -882,43 +951,76 @@ function z_progress(id, value)
 
 function z_reload(args)
 {
-    var page = $('#logon_form input[name="page"]');
-    z_start_spinner();
-    if (page.length > 0 && page.val() !== "") {
-        window.location.href = window.location.protocol+"//"+window.location.host+page.val();
-    } else {
-        if (typeof args == "undefined")
-            window.location.reload(true);
-        else {
-            var qs = ensure_name_value(args);
-            var href;
+    var page = $('#logon_form input[name="page"]'),
+        qs = ensure_name_value(args),
+        rewriteUrl,
+        newLanguage,
+        href,
+        re,
+        pathname,
+        parts;
 
-            if (qs.length == 1 &&  typeof args.z_language == "string") {
-                if (  window.location.pathname.substring(0,2+z_language.length) == "/"+z_language+"/") {
-                    href = window.location.protocol+"//"+window.location.host
-                            +"/"+args.z_language+"/"
-                            +window.location.pathname.substring(2+args.z_language.length);
-                } else {
-                    href = window.location.protocol+"//"+window.location.host
-                            +"/"+args.z_language
-                            +window.location.pathname;
-                }
-                if (window.location.search == "")
-                    window.location.href = href;
-                else
-                    window.location.href = href + "?" + window.location.search;
+    z_start_spinner();
+    if (page.length > 0 && page.val() !== "" && page.val() !== '#reload') {
+        window.location.href = window.location.protocol
+            + "//"
+            + window.location.host
+            + page.val();
+    } else {
+        if (typeof args === "undefined") {
+            window.location.reload(true);
+            return;
+        }
+        newLanguage = args.z_language;
+        if (typeof newLanguage === "string") {
+            rewriteUrl = Boolean(args["z_rewrite_url"]);
+            // Add or remove language from URL:
+            pathname = window.location.pathname.substring(1);
+            if (z_language) {
+                // Remove current language
+                re = new RegExp("^" + z_language);
+                pathname = pathname.replace(re, "");
+            }
+            // Get path parts
+            parts = pathname.split("/")
+                .filter(function(p) {
+                    return p !== "";
+                });
+            if (rewriteUrl) {
+                // Add language to start
+                parts.unshift(newLanguage);
+            }
+            href = window.location.protocol
+                + "//"
+                + window.location.host
+                + "/"
+                + parts.join("/")
+                + ((rewriteUrl && (pathname === "" || pathname === "/")) ? "/" : "")
+        } else {
+            href = window.location.protocol
+                + "//"
+                + window.location.host
+                + window.location.pathname;
+        }
+        if (window.location.search == "") {
+            window.location.href = href;
+        } else {
+            // remove z_language and z_rewrite_url, keep other query params
+            var kvs;
+            kvs = window.location.search.substring(1)
+                .split(/[&;]/)
+                .map(function(kv) {
+                    return (kv.match("^z_language") || kv.match("^z_rewrite_url"))
+                        ? ""
+                        : kv;
+                })
+                .filter(function(kv) {
+                    return kv !== "";
+                });
+            if (kvs === "") {
+                window.location.href = href;
             } else {
-                href = window.location.protocol+"//"+window.location.host+window.location.pathname;
-                if (window.location.search == "") {
-                    window.location.href = href + '?' + $.param(qs);
-                } else {
-                    var loc_qs = $.parseQuery();
-                    for (var prop in loc_qs) {
-                        if (typeof loc_qs[prop] != "undefined" && typeof args[prop] == "undefined")
-                            qs.push({name: prop, value: loc_qs[prop]});
-                    }
-                    window.location.href = href+"?" + $.param(qs);
-                }
+                window.location.href = href + "?" + kvs.join("&");
             }
         }
     }
@@ -965,23 +1067,26 @@ function z_editor_init()
     }
 }
 
-function z_editor_add($element)
+function z_editor_add(element)
 {
     if (z_editor !== undefined) {
+        var $element = (typeof element == "string") ? $(element) : element;
         z_editor.add($element);
     }
 }
 
-function z_editor_save($element)
+function z_editor_save(element)
 {
     if (z_editor !== undefined) {
+        var $element = (typeof element == "string") ? $(element) : element;
         z_editor.save($element);
     }
 }
 
-function z_editor_remove($element)
+function z_editor_remove(element)
 {
     if (z_editor !== undefined) {
+        var $element = (typeof element == "string") ? $(element) : element;
         z_editor.remove($element);
     }
 }
@@ -1011,23 +1116,37 @@ function z_tinymce_remove($element)
 /* Comet long poll or WebSockets connection
 ---------------------------------------------------------- */
 
-function z_stream_start(host, websocket_host)
+function z_stream_start(_host, websocket_host)
 {
     if (!z_session_valid) {
         setTimeout(function() {
-            z_stream_start(host, websocket_host);
+            z_stream_start(_host, websocket_host);
         }, 100);
     } else {
-        z_stream_host = host;
         z_websocket_host = websocket_host || window.location.host;
         z_stream_restart();
     }
 }
 
+function z_stream_onreload()
+{
+    if (z_ws) {
+        try { z_ws.close(); } catch (e) { }
+        z_ws = undefined;
+    }
+    if (z_comet) {
+        try { z_comet.abort(); } catch(e) { }
+        z_comet = undefined;
+    }
+    z_session_reload_check = true;
+    z_page_unloading = false;
+    z_transport('session', 'ubf', 'check', { transport: 'ajax' });
+}
+
 function z_stream_restart()
 {
     if (z_websocket_host) {
-        setTimeout(function() { z_comet_start(); }, 1000);
+        z_timeout_comet_poll_ajax(1000);
         if ("WebSocket" in window) {
             setTimeout(function() { z_websocket_start(); }, 200);
         }
@@ -1037,11 +1156,6 @@ function z_stream_restart()
 function z_stream_is_connected()
 {
     return z_websocket_is_connected() || z_comet_is_connected();
-}
-
-function z_comet_start()
-{
-    z_comet_poll_ajax();
 }
 
 function z_comet_poll_ajax()
@@ -1057,7 +1171,6 @@ function z_comet_poll_ajax()
                 "timestamp": new Date().getTime(),
                 "content_type": ubf.constant("ubf"),
                 "delegate": ubf.constant('$comet'),
-                "ua_class": ubf.constant(z_ua),
                 "page_id": z_pageid,
                 "session_id": window.z_sid || undefined,
                 "data": z_comet_poll_count
@@ -1103,7 +1216,11 @@ function z_comet_is_connected()
 
 function z_timeout_comet_poll_ajax(timeout)
 {
-    setTimeout(function() {
+    if (z_comet_poll_timeout) {
+        clearTimeout(z_comet_poll_timeout);
+    }
+    z_comet_poll_timeout = setTimeout(function() {
+        z_comet_poll_timeout = false;
         z_comet_reconnect_timeout = 1000;
         z_comet_poll_ajax();
     }, timeout);
@@ -1160,7 +1277,6 @@ function z_websocket_ping()
                     "timestamp": new Date().getTime(),
                     "content_type": ubf.constant("ubf"),
                     "delegate": ubf.constant('$ping'),
-                    "ua_class": ubf.constant(z_ua),
                     "page_id": z_pageid,
                     "session_id": window.z_sid || undefined,
                     "data": z_ws_pong_count
@@ -1375,6 +1491,7 @@ function z_sorter(sortBlock, sortOptions, sortPostbackInfo)
         var $source = $(ui.sender);
         $target.data('z_sort_tag', $source.data('z_drag_tag'));
     };
+    sortOptions.helper = 'clone';
     $(sortBlock).sortable(sortOptions);
 }
 
@@ -2196,7 +2313,7 @@ $.extend({
 
 /**
  * A simple querystring parser.
- * Example usage: var q = $.parseQuery(); q.fooreturns  "bar" if query contains "?foo=bar"; multiple values are added to an array.
+ * Example usage: var q = $.parseQuery(); q.foo returns "bar" if query contains "?foo=bar"; multiple values are added to an array.
  * Values are unescaped by default and plus signs replaced with spaces, or an alternate processing function can be passed in the params object .
  * http://actingthemaggot.com/jquery
  *

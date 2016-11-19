@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -77,14 +77,14 @@ observe_media_stillimage(#media_stillimage{props=Props}, Context) ->
 
 %% @doc Part of the {% script %} rendering in templates
 observe_scomp_script_render(#scomp_script_render{is_nostartup=false}, Context) ->
-    DefaultFormPostback = z_render:make_postback_info("", "submit", undefined, undefined, undefined, Context),
+    DefaultFormPostback = z_render:make_postback_info(<<>>, <<"submit">>, undefined, undefined, undefined, Context),
     [<<"z_init_postback_forms();\nz_default_form_postback = \"">>, DefaultFormPostback, $", $; ];
 observe_scomp_script_render(#scomp_script_render{is_nostartup=true}, _Context) ->
     [].
 
 %% @doc Check if there is a controller or template matching the path.
 observe_dispatch(#dispatch{path=Path}, Context) ->
-    case m_rsc:page_path_to_id(z_utils:url_path_encode(Path), Context) of
+    case m_rsc:page_path_to_id(z_url:url_path_encode(Path), Context) of
         {ok, Id} ->
             {ok, Id};
         {redirect, Id} ->
@@ -94,8 +94,8 @@ observe_dispatch(#dispatch{path=Path}, Context) ->
         {error, _} ->
             Last = last(Path),
             Template= case Last of
-                         $/ -> "static/"++Path++"index.tpl";
-                         _ -> "static/"++Path++".tpl"
+                         $/ -> <<"static/", Path/binary, "index.tpl">>;
+                         _ -> <<"static/", Path/binary, ".tpl">>
                       end,
             case z_module_indexer:find(template, Template, Context) of
                 {ok, _} ->
@@ -105,14 +105,14 @@ observe_dispatch(#dispatch{path=Path}, Context) ->
                         bindings=[{path, Path}, {is_static, true}]
                     }};
                 {error, _} ->
-                    % Check again, assuming the path is a directory (without trailing $/) 
+                    % Check again, assuming the path is a directory (without trailing $/)
                     case Last of
-                        $/ -> 
+                        $/ ->
                             undefined;
                         $. ->
                             undefined;
                         _ ->
-                            Template1 = "static/"++Path++"/index.tpl",
+                            Template1 = <<"static/", Path/binary, "/index.tpl">>,
                             case z_module_indexer:find(template, Template1, Context) of
                                 {ok, _} ->
                                     {ok, #dispatch_match{
@@ -127,8 +127,8 @@ observe_dispatch(#dispatch{path=Path}, Context) ->
             end
     end.
 
-last([]) -> $/;
-last(Path) -> lists:last(Path).
+last(<<>>) -> $/;
+last(Path) -> binary:last(Path).
 
 
 %%====================================================================

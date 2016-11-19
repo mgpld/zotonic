@@ -1,20 +1,30 @@
-.. Zotonic documentation master file, created by
-   sphinx-quickstart on Tue Sep 11 07:05:17 2012.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
 Zotonic |version| documentation
 ===============================
 
-Welcome to the Zotonic documentation!
-This describes Zotonic |version|, last updated |today|.
+Welcome to the documentation for `Zotonic <http://zotonic.com>`_, the Erlang web
+framework! This describes |version|, last updated |today|.
 
-The latest docs are also available in a `PDF version <http://zotonic.com/download/zotonic-docs>`_.
+Organization
+------------
+
+The documentation is divided into the following parts:
+
+* The :ref:`user-guide` is an introduction to the Zotonic CMS for end users
+  such as administrators and editors.
+* The :ref:`developer-guide` is the technical handbook for developers building
+  websites with Zotonic. It guides you through all aspects of the framework.
+* The :ref:`guide-cookbook` are a collection of recipes that show you how to
+  solve reoccurring problems.
+* :ref:`best-practices` as formulated by the Zotonic core team.
+* The :ref:`reference` is a complete and detailed overview of all Zotonic
+  components.
+
 
 User Guide
 ----------
 
-An non-technical introduction to the Zotonic CMS for end users.
+An introduction to the Zotonic CMS for end users such as administrators and
+editors.
 
 .. toctree::
    :maxdepth: 2
@@ -24,8 +34,8 @@ An non-technical introduction to the Zotonic CMS for end users.
 Developer Guide
 ---------------
 
-The handbook for all Zotonic developers. It guides you through all aspects of
-the framework.
+The technical handbook for developers building websites with Zotonic. It guides
+you through all aspects of the framework.
 
 .. toctree::
    :maxdepth: 2
@@ -42,7 +52,7 @@ A collection of recipes that show you how to solve reoccurring problems.
 
    cookbook/index
 
-Best practices
+Best Practices
 --------------
 
 Best practices as formulated by the Zotonic core team.
@@ -50,13 +60,12 @@ Best practices as formulated by the Zotonic core team.
 .. toctree::
    :maxdepth: 1
 
-   best-practices/creating-sites
-   best-practices/templates
+   best-practices/index
 
 Reference
 ---------
 
-A complete overview of all Zotonic components.
+A complete and detailed overview of all Zotonic components.
 
 .. toctree::
    :maxdepth: 2
@@ -68,7 +77,6 @@ Indices and tables
 
 * :ref:`genindex`
 * :doc:`glossary`
-* :ref:`search`
 
 
 .. add files here that should not be part of any other toc tree
@@ -79,4 +87,3 @@ Indices and tables
    :hidden:
 
    glossary
-   ref/controllers/acl_options

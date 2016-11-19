@@ -22,8 +22,10 @@
 -module(z_utils).
 -include("zotonic.hrl").
 
--export (
-   [are_equal/2,
+-export([
+    get_value/2,
+    get_value/3,
+    are_equal/2,
     assert/2,
     encode_value/2,
     decode_value/2,
@@ -58,14 +60,13 @@
     js_object/1,
     js_object/2,
     js_object/3,
-    json_escape/1,
     lib_dir/0,
     lib_dir/1,
     wildcard/1,
     wildcard/2,
     filter_dot_files/1,
     list_dir_recursive/1,
-    name_for_host/2,
+    name_for_site/2,
     only_digits/1,
     only_letters/1,
     is_iolist/1,
@@ -87,17 +88,19 @@
     now_msec/0,
     flush_message/1,
     ensure_existing_module/1,
-    generate_username/2,
+    generate_username/2
+]).
 
-    %% Deprecated, see z_url.erl
-    url_path_encode/1,
-    url_encode/1,
-    url_decode/1,
-    percent_encode/1,
-    url_reserved_char/1,
-    url_unreserved_char/1,
-    url_valid_char/1
-   ]).
+
+get_value(Key, Map) when is_map(Map) ->
+    maps:get(Key, Map, undefined);
+get_value(Key, Map) when is_list(Map) ->
+    proplists:get_value(Key, Map, undefined).
+
+get_value(Key, Map, Default) when is_map(Map) ->
+    maps:get(Key, Map, Default);
+get_value(Key, Map, Default) when is_list(Map) ->
+    proplists:get_value(Key, Map, Default).
 
 
 %%% FORMAT %%%
@@ -107,12 +110,10 @@ f(S, Args) -> lists:flatten(io_lib:format(S, Args)).
 
 %% @doc Return an abspath to a directory relative to the application root.
 lib_dir() ->
-    {ok, Path} = zotonic_app:get_path(),
-    Path.
+    zotonic_app:get_path().
 
 lib_dir(Dir) ->
-    {ok, Path} = zotonic_app:get_path(),
-    filename:join([Path, Dir]).
+    filename:join([lib_dir(), Dir]).
 
 %% @doc filename:wildcard version which filters dotfiles like unix does
 wildcard(Wildcard) ->
@@ -172,7 +173,7 @@ erase_process_dict() ->
 
 %% 50 usec on core2duo 2GHz
 encode_value(Value, Context) ->
-    Salt = z_ids:id(),
+    Salt = binary_to_list(z_ids:id()), %% convert to list for backwards compatibility
     Secret = z_ids:sign_key(Context),
     base64:encode(
       term_to_binary({Value, Salt, crypto:hmac(sha, Secret, term_to_binary([Value, Salt]))})
@@ -217,7 +218,7 @@ checksum_assert(Data, Checksum, Context) ->
 %%% PICKLE / UNPICKLE %%%
 pickle(Data, Context) ->
     BData = erlang:term_to_binary(Data),
-    Nonce = crypto:rand_bytes(4),
+    Nonce = z_ids:rand_bytes(4),
     Sign  = z_ids:sign_key(Context),
     SData = <<BData/binary, Nonce:4/binary>>,
     <<Mac:16/binary>> = crypto:hmac(md5, Sign, SData),
@@ -232,8 +233,7 @@ depickle(Data, Context) ->
         erlang:binary_to_term(BData)
     catch
         _M:_E ->
-            lager:error("[~p] Postback data invalid, could not depickle: ~p",
-                        [z_context:site(Context), Data]),
+            lager:error("Postback data invalid, could not depickle: ~p", [Data]),
             erlang:throw({checksum_invalid, Data})
     end.
 
@@ -241,17 +241,6 @@ depickle(Data, Context) ->
 %%% HEX ENCODE and HEX DECODE
 hex_encode(Value) -> z_url:hex_encode(Value).
 hex_decode(Value) -> z_url:hex_decode(Value).
-
-
-%%% URL ENCODE %%%
-url_encode(S) -> z_url:url_encode(S).
-url_decode(S) -> z_url:url_decode(S).
-url_path_encode(L) -> z_url:url_path_encode(L).
-percent_encode(S) -> z_url:percent_encode(S).
-
-url_valid_char(C) -> z_url:url_valid_char(C).
-url_reserved_char(C) -> z_url:url_reserved_char(C).
-url_unreserved_char(C) -> z_url:url_unreserved_char(C).
 
 
 %% @spec os_filename(String) -> String
@@ -416,11 +405,6 @@ js_prop_value(pattern, [$/|T]=List, OptContext) ->
 js_prop_value(_, Int, _OptContext) when is_integer(Int) -> integer_to_list(Int);
 js_prop_value(_, {trust, Value}, _OptContext) -> Value;
 js_prop_value(_, Value, OptContext) -> [$",js_escape(Value, OptContext),$"].
-
-
-%% @doc Deprecated: moved to z_json.
-json_escape(A) ->
-    z_json:json_escape(A).
 
 
 only_letters([]) ->
@@ -626,24 +610,27 @@ set_nth(N, V, L) when N >= 1 ->
 
 
 %% @doc Simple randomize of a list. Not good quality, but good enough for us
+-spec randomize(list()) -> list().
 randomize(List) ->
-    <<A1:32, B1:32, C1:32>> = crypto:rand_bytes(12),
-    random:seed({A1,B1,C1}),
     D = lists:map(fun(A) ->
-                          {random:uniform(), A}
+                     {crypto:rand_uniform(1,1000000), A}
                   end, List),
     {_, D1} = lists:unzip(lists:keysort(1, D)),
     D1.
 
+%% @doc Take randomly max N elements from a list.
+-spec randomize(integer(), list()) -> list().
 randomize(N, List) ->
     split(N, randomize(List)).
 
+%% @doc Take max N elements from a list.
+-spec split(integer(), list()) -> list().
 split(N, L) ->
     split(N,L,[]).
 
 split(_N, [], Acc) ->
     {lists:reverse(Acc), []};
-split(0, Rest, Acc) ->
+split(N, Rest, Acc) when N =< 0 ->
     {lists:reverse(Acc), Rest};
 split(N, [A|Rest], Acc) ->
     split(N-1, Rest, [A|Acc]).
@@ -808,11 +795,11 @@ are_equal(_Arg1, _Arg2) ->
 
 
 %% @doc Return the name used in the context of a hostname
--spec name_for_host(Name :: atom(), atom() | #context{}) -> atom().
-name_for_host(Name, #context{} = Host) ->
-    name_for_host(Name, z_context:site(Host));
-name_for_host(Name, Host) ->
-    z_convert:to_atom(z_convert:to_list(Name) ++ [$$, z_convert:to_list(Host)]).
+-spec name_for_site(Name :: atom(), atom() | #context{}) -> atom().
+name_for_site(Name, #context{} = Context) ->
+    name_for_site(Name, z_context:site(Context));
+name_for_site(Name, Site) when is_atom(Site) ->
+    z_convert:to_atom(z_convert:to_list(Name) ++ [$$, z_convert:to_list(Site)]).
 
 
 %% @doc Ensure that the given string matches an existing module. Used to prevent
@@ -879,7 +866,7 @@ generate_username1(Name, Context) ->
     end.
 
 generate_username2(Name, Context) ->
-    N = integer_to_list(z_ids:number() rem 1000),
+    N = integer_to_list(z_ids:number(999)),
     case m_identity:lookup_by_username(Name++N, Context) of
         undefined -> Name;
         _ -> generate_username2(Name, Context)

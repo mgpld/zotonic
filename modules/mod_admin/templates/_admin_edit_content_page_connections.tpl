@@ -31,10 +31,11 @@
                     callback=callback
                     action=action
                     unlink_action=unlink_action
+                    undo_message_id="unlink-undo-message"
                     list_id=list_id
                     is_editable=is_editable
                 %}
-           
+
                 <hr />
             {% endifnotequal %}
         {% endif %}

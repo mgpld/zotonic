@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,17 +33,17 @@
 -include_lib("zotonic.hrl").
 
 % Check every 10 minutes if we have anything to handle.
-% Check every 100msec when working through a backlog. 
+% Check every 100msec when working through a backlog.
 -define(CLEANUP_TIMEOUT_LONG, 600000).
 -define(CLEANUP_TIMEOUT_SHORT, 100).
 -define(CLEANUP_BATCH_SIZE, 100).
 
--record(state, {host}).
+-record(state, {site :: atom()}).
 
 
 %% @doc Force a check, useful after known edge operations.
 check(Context) ->
-    Name = z_utils:name_for_host(?MODULE, Context),
+    Name = z_utils:name_for_site(?MODULE, Context),
     gen_server:call(Name, check, infinity).
 
 
@@ -52,11 +52,11 @@ check(Context) ->
 %%====================================================================
 %% @spec start_link() -> {ok,Pid} | ignore | {error,Error}
 %% @doc Starts the server
-start_link() -> 
+start_link() ->
     start_link([]).
 start_link(Args) when is_list(Args) ->
-    {host, Host} = proplists:lookup(host, Args),
-    Name = z_utils:name_for_host(?MODULE, Host),
+    {site, Site} = proplists:lookup(site, Args),
+    Name = z_utils:name_for_site(?MODULE, Site),
     gen_server:start_link({local, Name}, ?MODULE, Args, []).
 
 %%====================================================================
@@ -69,12 +69,12 @@ start_link(Args) when is_list(Args) ->
 %%                     {stop, Reason}
 %% @doc Initiates the server.
 init(Args) ->
-    {host, Host} = proplists:lookup(host, Args),
+    {site, Site} = proplists:lookup(site, Args),
     lager:md([
-        {site, Host},
+        {site, Site},
         {module, ?MODULE}
       ]),
-    {ok, #state{host=Host}, ?CLEANUP_TIMEOUT_LONG}.
+    {ok, #state{site=Site}, ?CLEANUP_TIMEOUT_LONG}.
 
 %% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
 %%                                      {reply, Reply, State, Timeout} |
@@ -83,7 +83,7 @@ init(Args) ->
 %%                                      {stop, Reason, Reply, State} |
 %%                                      {stop, Reason, State}
 handle_call(check, _From, State) ->
-    case do_check(State#state.host) of
+    case do_check(State#state.site) of
         {ok, 0} = OK ->
             {reply, OK, State, ?CLEANUP_TIMEOUT_LONG};
         {ok, _} = OK ->
@@ -102,7 +102,7 @@ handle_call(Message, _From, State) ->
 %%                                  {noreply, State, Timeout} |
 %%                                  {stop, Reason, State}
 handle_cast(check, State) ->
-    case do_check(State#state.host) of
+    case do_check(State#state.site) of
         {ok, 0} ->
             {noreply, State, ?CLEANUP_TIMEOUT_LONG};
         {ok, _} ->
@@ -146,16 +146,22 @@ code_change(_OldVsn, State, _Extra) ->
 %% support functions
 %%====================================================================
 
-do_check(Host) ->
-    Context = z_acl:sudo(z_context:new(Host)),
-    do_check_1(z_db:q("
-                    select id,op,subject_id,predicate,object_id,edge_id
-                    from edge_log
-                    order by id
-                    limit $1",
-                    [?CLEANUP_BATCH_SIZE],
-                    Context),
-               Context).
+do_check(Site) ->
+    try
+        Context = z_acl:sudo(z_context:new(Site)),
+        do_check_1(z_db:q("
+                        select id,op,subject_id,predicate,object_id,edge_id
+                        from edge_log
+                        order by id
+                        limit $1",
+                        [?CLEANUP_BATCH_SIZE],
+                        Context),
+                   Context)
+    catch
+        exit:{timeout, _} -> {ok, 0};
+        throw:{error, econnrefused} -> false
+    end.
+
 
 do_check_1([], _Context) ->
     {ok, 0};
@@ -164,9 +170,9 @@ do_check_1(Rs, Context) ->
     lists:foreach(fun(RscId) ->
                     z_depcache:flush(RscId, Context)
                   end,
-                  RscIds), 
+                  RscIds),
     lists:foreach(fun({_Id,Op,SubjectId,Predicate,ObjectId,EdgeId}) ->
-                    PredName = z_convert:to_atom(Predicate), 
+                    PredName = z_convert:to_atom(Predicate),
                     do_edge_notify(Op, SubjectId, PredName, ObjectId, EdgeId, Context)
                   end, Rs),
     Ranges = z_utils:ranges([ element(1,R) || R <- Rs ]),
@@ -199,7 +205,7 @@ do_edge_notify(<<"INSERT">>, SubjectId, PredName, ObjectId, EdgeId, Context) ->
 maybe_delete_dependent(Id, Context) ->
     case m_rsc:p_no_acl(Id, is_dependent, Context) of
         true ->
-            Key = iolist_to_binary([<<"delete_if_unconnected-">>, integer_to_list(Id)]), 
+            Key = iolist_to_binary([<<"delete_if_unconnected-">>, integer_to_list(Id)]),
             z_pivot_rsc:insert_task_after(20, ?MODULE, delete_if_unconnected, Key, [Id], Context);
         _False ->
             ok
@@ -207,7 +213,7 @@ maybe_delete_dependent(Id, Context) ->
 
 delete_if_unconnected(Id, Context) ->
     case z_db:q_row("select r.is_dependent, r.is_protected, e.object_id
-                     from rsc r 
+                     from rsc r
                           left join edge e on e.object_id = r.id
                      where r.is_dependent
                        and r.id = $1

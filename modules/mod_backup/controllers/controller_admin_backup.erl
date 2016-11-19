@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,14 +20,14 @@
 -author("Marc Worrell <marc@worrell.nl>").
 
 -export([
-    is_authorized/2,
+    is_authorized/1,
     event/2
 ]).
 
 -include_lib("controller_html_helper.hrl").
 
-is_authorized(ReqData, Context) ->
-    z_admin_controller_helper:is_authorized(mod_backup, ReqData, Context).
+is_authorized(Context) ->
+    z_admin_controller_helper:is_authorized(mod_backup, Context).
 
 
 html(Context) ->
@@ -49,11 +49,11 @@ event(#submit{message={restore, Args}}, Context) ->
     {id, Id} = proplists:lookup(id, Args),
     case z_acl:rsc_editable(Id, Context) of
         true ->
-            #upload{filename=_Filename, tmpfile=Tmpfile} = z_context:get_q_validated("file", Context),
-            {ok, Data} = file:read_file(Tmpfile), 
+            #upload{filename=_Filename, tmpfile=Tmpfile} = z_context:get_q_validated(<<"file">>, Context),
+            {ok, Data} = file:read_file(Tmpfile),
             case catch z_notifier:first(#rsc_upload{id=Id, format=bert, data=Data}, Context) of
                 {ok, NewId} ->
-                    z_render:wire([{dialog_close, []}, 
+                    z_render:wire([{dialog_close, []},
                                    {redirect, [{dispatch, admin_edit_rsc}, {id,NewId}]}], Context);
                 undefined ->
                     z_render:growl_error(?__("Sorry, there is no mudule that can import this.", Context), Context);
@@ -63,15 +63,15 @@ event(#submit{message={restore, Args}}, Context) ->
                     z_render:growl_error(?__("Sorry, there was an error replacing your page.", Context), Context)
             end;
         false ->
-            z_render:growl_error(?__("Sorry, you don't have permission to change this page.", Context), Context) 
+            z_render:growl_error(?__("Sorry, you don't have permission to change this page.", Context), Context)
     end.
 
 set_config(What, Context) ->
     case z_acl:is_admin(Context) of
-        true -> 
-            m_config:set_value(mod_backup, What, z_context:get_q("triggervalue", Context), Context),
+        true ->
+            m_config:set_value(mod_backup, What, z_context:get_q(<<"triggervalue">>, Context), Context),
             z_render:growl(?__("Changed configuration.", Context), Context);
         false ->
-            z_render:growl_error(?__("Sorry, you have no permission to change the configuration.", Context), Context) 
+            z_render:growl_error(?__("Sorry, you have no permission to change the configuration.", Context), Context)
     end.
 

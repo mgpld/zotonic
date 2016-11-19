@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ z_language }}">
     <head>
         <meta charset="utf-8" />
         <title>{% block title %}{_ Admin _}{% endblock %} &mdash; {{ m.config.site.title.value|default:"Zotonic" }} Admin</title>
@@ -9,7 +9,6 @@
 
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta name="description" content="" />
-        <meta name="author" content="Arjan Scherpenisse" />
 
         {% lib
             "admin-bootstrap3/css/bootstrap.min.css"
@@ -26,6 +25,7 @@
             "css/zotonic-admin.css"
         %}
 
+        {% all include "_html_head.tpl" %}
         {% all include "_html_head_admin.tpl" %}
 
         {% include "_js_include_jquery.tpl" %}
@@ -48,20 +48,17 @@
 
     <div class="admin-container">
         {% block content %}{% endblock %}
-        {% include "_admin_footer.tpl" %}
     </div>
+
+    {% include "_admin_footer.tpl" %}
 
     {% include "_admin_js_include.tpl" %}
     {% block js_extra %}{% endblock %}
 
-    {% script %}
+    {% block html_body_admin %}{% all include "_html_body_admin.tpl" %}{% endblock %}
 
     {% block editor %}{% endblock %}
 
-    {% block html_body_admin %}{% all include "_html_body_admin.tpl" %}{% endblock %}
-
-    {% block ua_probe %}
-        {% include "_ua_probe.tpl"%}
-    {% endblock %}
+    {% script %}
 </body>
 </html>

@@ -1,10 +1,8 @@
 %% @author Arjan Scherpenisse <arjan@miraclethings.nl>
-%% @copyright 2014 Arjan Scherpenisse
+%% @copyright 2014, 2016 Arjan Scherpenisse
 %%
 %% @doc Compilation of Zotonic files
 
-%% Copyright 2014 Arjan Scherpenisse
-%%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
@@ -126,15 +124,8 @@ compile_worker_process(Options, Parent) ->
             ok
     end.
 
-compile_dirs() ->
-    compile_zotonic_dirs() ++ compile_user_dirs().
-
 compile_zotonic_dirs() ->
     [
-     "*.erl",
-     "src/*.erl",
-     "src/*/*.erl",
-     "src/tests/erlydtl/*.erl",
      "modules/*/*.erl",
      "modules/*/*/*.erl",
      "modules/*/deps/*/src/*.erl",
@@ -153,8 +144,8 @@ compile_zotonic_dirs() ->
 
 compile_user_dirs() ->
     application:load(zotonic),
-    {ok, Modules} = application:get_env(zotonic, user_modules_dir),
-    {ok, Sites} = application:get_env(zotonic, user_sites_dir),
+    Modules = user_modules_dir(),
+    Sites = user_sites_dir(),
     [
      %% External modules
      Modules ++ "/*/*.erl",
@@ -170,20 +161,18 @@ compile_user_dirs() ->
 
 compile_options() ->
     application:load(zotonic),
-    {ok, Sites} = application:get_env(zotonic, user_sites_dir),
-    {ok, Modules} = application:get_env(zotonic, user_modules_dir),
-    [{i, "include"},
-     {i, "deps/webzmachine/include"},
-     {i, Modules},
-     {i, Sites},
-     {outdir, "ebin"},
+    [{i, filename:join(os:getenv("ZOTONIC"), "include")},
+     {i, filename:join(os:getenv("ZOTONIC"), "deps/webzmachine/include")},
+     {i, user_modules_dir()},
+     {i, user_sites_dir()},
+     {outdir, zotonic_ebin_dir()},
      {parse_transform, lager_transform},
      nowarn_deprecated_type,
      debug_info] ++ platform_defines_r17up().
 
 compile_user_options() ->
     application:load(zotonic),
-    Outdir = application:get_env(zotonic, user_ebin_dir, "ebin"),
+    Outdir = application:get_env(zotonic, user_ebin_dir, zotonic_ebin_dir()),
     [ {outdir, Outdir} | compile_options()].
 
 platform_defines_r17up() ->
@@ -193,6 +182,15 @@ platform_defines_r17up() ->
         nomatch ->
             []
     end.
+
+zotonic_ebin_dir() ->
+    "_build/default/lib/zotonic/ebin".
+
+user_modules_dir() ->
+    application:get_env(zotonic, user_modules_dir, "user/modules").
+
+user_sites_dir() ->
+    application:get_env(zotonic, user_sites_dir, "user/sites").
 
 %% @doc For a list of glob patterns, split all patterns which contain
 %% /*/* up in more patterns, so that we can parallelize it even more.

@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,32 +27,32 @@
 
 
 datamodel() ->
-    [
-        {categories, [
+    #datamodel{
+        categories = [
             {mailinglist, undefined, [
                             {title, "Mailing list"},
                             {summary, "Mailing lists are used to send pages to groups of people."}
                         ]}
-        ]},
+        ],
 
         % Any resource with an e-mail address can be a subscriber of a mailinglist
-        {predicates, [
+        predicates = [
             {subscriberof,
                  [{title, <<"Subscriber of">>}],
                  [{person, mailinglist}, {location, mailinglist}]},
              {exsubscriberof,
                   [{title, <<"Ex-subscriber of">>}],
                   [{person, mailinglist}, {location, mailinglist}]}
-        ]},
+        ],
 
-        {resources, [
+        resources = [
             {mailinglist_test, mailinglist, [
                             {visible_for, 1},
                             {title, "Test mailing list"},
                             {summary, "This list is used for testing. Anyone who can see this mailing list can post to it. It should not be visible for the world."}
                         ]}
-        ]}
-    ].
+        ]
+    }.
 
 
 

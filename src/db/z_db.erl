@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,7 +28,7 @@
 -export([
 
     has_connection/1,
-         
+
     transaction/2,
     transaction/3,
     transaction_clear/1,
@@ -72,14 +72,18 @@
     create_table/3,
     drop_table/2,
     flush/1,
-    
+
     assert_table_name/1,
-    prepare_cols/2
+    prepare_cols/2,
+
+    ensure_database/2,
+    ensure_schema/2,
+    schema_exists_conn/2
 ]).
 
 
 -include_lib("zotonic.hrl").
--include_lib("deps/epgsql/include/epgsql.hrl").
+-include_lib("epgsql/include/epgsql.hrl").
 
 -compile([{parse_transform, lager_transform}]).
 
@@ -97,23 +101,17 @@ transaction(Function, Options, Context) ->
                     {rollback, {deadlock, Trace2}};
                 {rollback, {{badmatch, {error, {error, error,<<"40P01">>, _, _}}}, Trace2}} ->
                     {rollback, {deadlock, Trace2}};
-                Other -> 
+                Other ->
                     Other
             end,
     case Result of
         {rollback, {deadlock, Trace}} = DeadlockError ->
             case proplists:get_value(noretry_on_deadlock, Options) of
                 true ->
-                    ?zWarning(
-                        io_lib:format("DEADLOCK on database transaction, NO RETRY '~p'", [Trace]),
-                        Context
-                    ),
+                    lager:warning("DEADLOCK on database transaction, NO RETRY '~p'", [Trace]),
                     DeadlockError;
                 _False ->
-                    ?zWarning(
-                        io_lib:format("DEADLOCK on database transaction, will retry '~p'", [Trace]),
-                        Context
-                    ),
+                    lager:warning("DEADLOCK on database transaction, will retry '~p'", [Trace]),
                     % Sleep random time, then retry transaction
                     timer:sleep(z_ids:number(100)),
                     transaction(Function, Options, Context)
@@ -160,8 +158,8 @@ transaction1(Function, #context{dbc=undefined} = Context) ->
 transaction1(Function, Context) ->
     % Nested transaction, only keep the outermost transaction
     Function(Context).
-    
-    
+
+
 %% @doc Clear any transaction in the context, useful when starting a thread with this context.
 transaction_clear(#context{dbc=undefined} = Context) ->
     Context;
@@ -188,7 +186,7 @@ get_connection(Context) ->
 %% @doc Transaction handler safe function for releasing a db connection
 return_connection(C, Context=#context{dbc=undefined}) ->
     z_db_pool:return_connection(C, Context);
-return_connection(_C, _Context) -> 
+return_connection(_C, _Context) ->
     ok.
 
 %% @doc Apply function F with a connection as parameter. Make sure the
@@ -196,17 +194,17 @@ return_connection(_C, _Context) ->
 with_connection(F, Context) ->
     with_connection(F, get_connection(Context), Context).
 
-    with_connection(F, none, _Context) -> 
-        F(none);
-    with_connection(F, Connection, Context) when is_pid(Connection) -> 
-        exometer:update([zotonic, Context#context.host, db, requests], 1),
-        try
-            {Time, Result} = timer:tc(F, [Connection]),
-            exometer:update([zotonic, Context#context.host, db, duration], Time),
-            Result
-        after
-            return_connection(Connection, Context)
-	end.
+with_connection(F, none, _Context) ->
+    F(none);
+with_connection(F, Connection, Context) when is_pid(Connection) ->
+    exometer:update([zotonic, z_context:site(Context), db, requests], 1),
+    try
+        {Time, Result} = timer:tc(F, [Connection]),
+        exometer:update([zotonic, z_context:site(Context), db, duration], Time),
+        Result
+    after
+        return_connection(Connection, Context)
+end.
 
 
 assoc_row(Sql, Context) ->
@@ -226,7 +224,7 @@ assoc_props_row(Sql, Parameters, Context) ->
         [Row|_] -> Row;
         [] -> undefined
     end.
-    
+
 
 %% @doc Return property lists of the results of a query on the database in the Context
 %% @spec assoc(SqlQuery, Context) -> Rows
@@ -240,10 +238,13 @@ assoc(Sql, #context{} = Context, Timeout) when is_integer(Timeout) ->
 
 assoc(Sql, Parameters, Context, Timeout) ->
     DbDriver = z_context:db_driver(Context),
-    F = fun(C) when C =:= none -> [];
+    F = fun
+       (none) -> [];
 	   (C) ->
-                {ok, Result} = assoc1(DbDriver, C, Sql, Parameters, Timeout),
-                Result
+            case assoc1(DbDriver, C, Sql, Parameters, Timeout) of
+                {ok, Result} when is_list(Result) ->
+                    Result
+            end
 	end,
     with_connection(F, Context).
 
@@ -258,10 +259,13 @@ assoc_props(Sql, #context{} = Context, Timeout) when is_integer(Timeout) ->
 
 assoc_props(Sql, Parameters, Context, Timeout) ->
     DbDriver = z_context:db_driver(Context),
-    F = fun(C) when C =:= none -> [];
-	   (C) ->
-                {ok, Result} = assoc1(DbDriver, C, Sql, Parameters, Timeout),
-                merge_props(Result)
+    F = fun
+        (none) -> [];
+	    (C) ->
+            case assoc1(DbDriver, C, Sql, Parameters, Timeout) of
+                {ok, Result} when is_list(Result) ->
+                    merge_props(Result)
+            end
 	end,
     with_connection(F, Context).
 
@@ -275,17 +279,18 @@ q(Sql, #context{} = Context, Timeout) when is_integer(Timeout) ->
     q(Sql, [], Context, Timeout).
 
 q(Sql, Parameters, Context, Timeout) ->
-    F = fun(C) when C =:= none -> [];
-	   (C) ->
-                DbDriver = z_context:db_driver(Context),
-                case DbDriver:equery(C, Sql, Parameters, Timeout) of
-                    {ok, _Affected, _Cols, Rows} -> Rows;
-                    {ok, _Cols, Rows} -> Rows;
-                    {ok, Rows} -> Rows;
-                    {error, Reason} = Error ->
-                        lager:error("[~p] z_db error ~p in query ~p with ~p", [z_context:site(Context), Reason, Sql, Parameters]),
-                        throw(Error) 
-                end
+    F = fun
+        (none) -> [];
+	    (C) ->
+            DbDriver = z_context:db_driver(Context),
+            case DbDriver:equery(C, Sql, Parameters, Timeout) of
+                {ok, _Affected, _Cols, Rows} when is_list(Rows) -> Rows;
+                {ok, _Cols, Rows} when is_list(Rows) -> Rows;
+                {ok, Value} when is_list(Value); is_integer(Value) -> Value;
+                {error, Reason} = Error ->
+                    lager:error("z_db error ~p in query ~p with ~p", [Reason, Sql, Parameters]),
+                    throw(Error)
+            end
 	end,
     with_connection(F, Context).
 
@@ -298,16 +303,17 @@ q1(Sql, #context{} = Context, Timeout) when is_integer(Timeout) ->
     q1(Sql, [], Context, Timeout).
 
 q1(Sql, Parameters, Context, Timeout) ->
-    F = fun(C) when C =:= none -> undefined;
-           (C) ->
-                DbDriver = z_context:db_driver(Context),
-                case equery1(DbDriver, C, Sql, Parameters, Timeout) of
-                    {ok, Value} -> Value;
-                    {error, noresult} -> undefined;
-                    {error, Reason} = Error ->
-                        lager:error("[~p] z_db error ~p in query ~p with ~p", [z_context:site(Context), Reason, Sql, Parameters]),
-                        throw(Error) 
-                end
+    F = fun
+        (none) -> undefined;
+        (C) ->
+            DbDriver = z_context:db_driver(Context),
+            case equery1(DbDriver, C, Sql, Parameters, Timeout) of
+                {ok, Value} -> Value;
+                {error, noresult} -> undefined;
+                {error, Reason} = Error ->
+                    lager:error("z_db error ~p in query ~p with ~p", [Reason, Sql, Parameters]),
+                    throw(Error)
+            end
     end,
     with_connection(F, Context).
 
@@ -336,7 +342,7 @@ squery(Sql, Context, Timeout) when is_integer(Timeout) ->
 
 equery(Sql, Context) ->
     equery(Sql, [], Context).
-    
+
 equery(Sql, Parameters, #context{} = Context) ->
     equery(Sql, Parameters, Context, ?TIMEOUT);
 equery(Sql, #context{} = Context, Timeout) when is_integer(Timeout) ->
@@ -368,11 +374,11 @@ insert(Table, Context) ->
 %% @doc Insert a row, setting the fields to the props.  Unknown columns are serialized in the props column.
 %% When the table has an 'id' column then the new id is returned.
 %% @spec insert(Table::atom(), Props::proplist(), Context) -> {ok, Id} | Error
-insert(Table, [], Context) ->  
+insert(Table, [], Context) ->
     insert(Table, Context);
 insert(Table, Props, Context) when is_atom(Table) ->
     insert(atom_to_list(Table), Props, Context);
-insert(Table, Props, Context) ->  
+insert(Table, Props, Context) ->
     assert_table_name(Table),
     Cols = column_names(Table, Context),
     InsertProps = prepare_cols(Cols, Props),
@@ -380,13 +386,13 @@ insert(Table, Props, Context) ->
     InsertProps1 = case proplists:get_value(props, InsertProps) of
         undefined ->
             InsertProps;
-        PropsCol -> 
+        PropsCol ->
             lists:keystore(props, 1, InsertProps, {props, ?DB_PROPS(cleanup_props(PropsCol))})
     end,
-    
+
     %% Build the SQL insert statement
     {ColNames,Parameters} = lists:unzip(InsertProps1),
-    Sql = "insert into \""++Table++"\" (\"" 
+    Sql = "insert into \""++Table++"\" (\""
              ++ string:join([ atom_to_list(ColName) || ColName <- ColNames ], "\", \"")
              ++ "\") values ("
              ++ string:join([ [$$ | integer_to_list(N)] || N <- lists:seq(1, length(Parameters)) ], ", ")
@@ -404,8 +410,8 @@ insert(Table, Props, Context) ->
 			 {ok, IdVal} -> IdVal;
 			 {error, noresult} -> undefined;
              {error, Reason} = Error ->
-                lager:error("[~p] z_db error ~p in query ~p with ~p", [z_context:site(Context), Reason, FinalSql, Parameters]),
-                throw(Error) 
+                lager:error("z_db error ~p in query ~p with ~p", [Reason, FinalSql, Parameters]),
+                throw(Error)
 		     end,
 		{ok, Id}
 	end,
@@ -440,14 +446,14 @@ update(Table, Id, Parameters, Context) ->
         {ColNames,Params} = lists:unzip(UpdateProps1),
         ColNamesNr = lists:zip(ColNames, lists:seq(2, length(ColNames)+1)),
 
-        Sql = "update \""++Table++"\" set " 
+        Sql = "update \""++Table++"\" set "
                  ++ string:join([ "\"" ++ atom_to_list(ColName) ++ "\" = $" ++ integer_to_list(Nr) || {ColName, Nr} <- ColNamesNr ], ", ")
                  ++ " where id = $1",
         case equery1(DbDriver, C, Sql, [Id | Params]) of
             {ok, _RowsUpdated} = Ok -> Ok;
             {error, Reason} = Error ->
-                lager:error("[~p] z_db error ~p in query ~p with ~p", [z_context:site(Context), Reason, Sql, [Id | Params]]),
-                throw(Error) 
+                lager:error("z_db error ~p in query ~p with ~p", [Reason, Sql, [Id | Params]]),
+                throw(Error)
         end
     end,
     with_connection(F, Context).
@@ -461,19 +467,19 @@ delete(Table, Id, Context) ->
     assert_table_name(Table),
     DbDriver = z_context:db_driver(Context),
     F = fun(C) ->
-        Sql = "delete from \""++Table++"\" where id = $1", 
+        Sql = "delete from \""++Table++"\" where id = $1",
         case equery1(DbDriver, C, Sql, [Id]) of
             {ok, _RowsDeleted} = Ok -> Ok;
             {error, Reason} = Error ->
-                lager:error("[~p] z_db error ~p in query ~p with ~p", [z_context:site(Context), Reason, Sql, [Id]]),
-                throw(Error) 
-        end            
+                lager:error("z_db error ~p in query ~p with ~p", [Reason, Sql, [Id]]),
+                throw(Error)
+        end
 	end,
     with_connection(F, Context).
 
 
 
-%% @doc Read a row from a table, the row must have a column with the name 'id'.  
+%% @doc Read a row from a table, the row must have a column with the name 'id'.
 %% The props column contents is merged with the other properties returned.
 %% @spec select(Table, Id, Context) -> {ok, Row}
 select(Table, Id, Context) when is_atom(Table) ->
@@ -482,15 +488,15 @@ select(Table, Id, Context) ->
     assert_table_name(Table),
     DbDriver = z_context:db_driver(Context),
     F = fun(C) ->
-		Sql = "select * from \""++Table++"\" where id = $1 limit 1", 
+		Sql = "select * from \""++Table++"\" where id = $1 limit 1",
 		assoc1(DbDriver, C, Sql, [Id], ?TIMEOUT)
 	end,
     {ok, Row} = with_connection(F, Context),
-    
+
     Props = case Row of
         [R] ->
             case proplists:get_value(props, R) of
-                PropsCol when is_list(PropsCol) -> 
+                PropsCol when is_list(PropsCol) ->
                     lists:keydelete(props, 1, R) ++ PropsCol;
                 _ ->
                     R
@@ -504,7 +510,7 @@ select(Table, Id, Context) ->
 %% @doc Remove all undefined props, translate texts to binaries.
 cleanup_props(Ps) when is_list(Ps) ->
     [ {K,to_binary_string(V)} || {K,V} <- Ps, V /= undefined ];
-cleanup_props(P) -> 
+cleanup_props(P) ->
     P.
 
     to_binary_string([]) -> [];
@@ -515,7 +521,7 @@ cleanup_props(P) ->
         end;
     to_binary_string({trans, Tr}) ->
         {trans, [ {Lang,to_binary(V)} || {Lang,V} <- Tr ]};
-    to_binary_string(V) -> 
+    to_binary_string(V) ->
         V.
 
     to_binary(L) when is_list(L) -> list_to_binary(L);
@@ -528,12 +534,12 @@ prepare_cols(Cols, Props) ->
     case PProps of
         [] ->
             CProps;
-        _  -> 
+        _  ->
             PPropsMerged = case proplists:is_defined(props, CProps) of
                             true ->
                                 FReplace = fun ({P,_} = T, L) -> lists:keystore(P, 1, L, T) end,
                                 lists:foldl(FReplace, proplists:get_value(props, CProps), PProps);
-                            false -> 
+                            false ->
                                 PProps
                            end,
             [{props, PPropsMerged} | proplists:delete(props, CProps)]
@@ -557,7 +563,7 @@ columns(Table, Context) ->
     Db = proplists:get_value(dbdatabase, Options),
     Schema = proplists:get_value(dbschema, Options),
     case z_depcache:get({columns, Db, Schema, Table}, Context) of
-        {ok, Cols} -> 
+        {ok, Cols} ->
             Cols;
         _ ->
             Cols = q("  select column_name, data_type, character_maximum_length, is_nullable, column_default
@@ -570,7 +576,7 @@ columns(Table, Context) ->
             z_depcache:set({columns, Db, Schema, Table}, Cols1, ?YEAR, [{database, Db}], Context),
             Cols1
     end.
-    
+
 
     columns1({<<"id">>, <<"integer">>, undefined, Nullable, <<"nextval(", _/binary>>}) ->
         #column_def{
@@ -588,7 +594,7 @@ columns(Table, Context) ->
             is_nullable = z_convert:to_bool(Nullable),
             default = column_default(Default)
         }.
-    
+
     column_default(undefined) -> undefined;
     column_default(<<"nextval(", _/binary>>) -> undefined;
     column_default(Default) -> binary_to_list(Default).
@@ -617,9 +623,9 @@ update_sequence(Table, Ids, Context) ->
     assert_table_name(Table),
     DbDriver = z_context:db_driver(Context),
     Args = lists:zip(Ids, lists:seq(1, length(Ids))),
-    F = fun(C) when C =:= none -> 
+    F = fun(C) when C =:= none ->
 		[];
-	   (C) -> 
+	   (C) ->
 		[ {ok, _} = equery1(DbDriver, C, "update \""++Table++"\" set seq = $2 where id = $1", tuple_to_list(Arg)) || Arg <- Args ]
 	   end,
     with_connection(F, Context).
@@ -645,14 +651,14 @@ ensure_database(Site, Options) ->
                     ok;
                 false ->
                     AnonOptions = proplists:delete(dbpassword, Options),
-                    lager:warning("[~p] Creating database ~p with options: ~p", [Site, Database, AnonOptions]),
+                    lager:warning("Creating database ~p with options: ~p", [Database, AnonOptions]),
                     create_database(Site, PgConnection, Database)
             end,
             close_connection(PgConnection),
             Result;
         {error, Reason} = Error ->
-            lager:error("[~p] Cannot create database ~p because user ~p cannot connect to the 'postgres' database: ~p", 
-                        [Site, Database, proplists:get_value(dbuser, Options), Reason]),
+            lager:error("Cannot create database ~p because user ~p cannot connect to the 'postgres' database: ~p",
+                        [Database, proplists:get_value(dbuser, Options), Reason]),
             Error
     end.
 
@@ -660,11 +666,11 @@ ensure_schema(Site, Options) ->
     Database = proplists:get_value(dbdatabase, Options),
     Schema = proplists:get_value(dbschema, Options),
     {ok, DbConnection} = open_connection(Database, Options),
-    Result = case schema_exists(DbConnection, Schema) of
+    Result = case schema_exists_conn(DbConnection, Schema) of
         true ->
             ok;
         false ->
-            lager:warning("[~p] Creating schema ~p in database ~p", [Site, Schema, Database]),
+            lager:warning("Creating schema ~p in database ~p", [Schema, Database]),
             create_schema(Site, DbConnection, Schema)
     end,
     close_connection(DbConnection),
@@ -681,10 +687,10 @@ open_connection(DatabaseName, Options) ->
             {database, DatabaseName}
         ]
     ).
-    
+
 close_connection(Connection) ->
     epgsql:close(Connection).
-    
+
 %% @doc Check whether database exists
 -spec database_exists(epgsql:connection(), string()) -> boolean().
 database_exists(Connection, Database) ->
@@ -700,59 +706,59 @@ database_exists(Connection, Database) ->
 
 %% @doc Create a database
 -spec create_database(atom(), epgsql:connection(), string()) -> ok | {error, term()}.
-create_database(Site, Connection, Database) ->
+create_database(_Site, Connection, Database) ->
     %% Use template0 to prevent ERROR: new encoding (UTF8) is incompatible with
     %% the encoding of the template database (SQL_ASCII)
     case epgsql:equery(
-        Connection, 
-        "CREATE DATABASE \"" ++ Database ++ "\" ENCODING = 'UTF8' TEMPLATE template0" 
-    ) of  
+        Connection,
+        "CREATE DATABASE \"" ++ Database ++ "\" ENCODING = 'UTF8' TEMPLATE template0"
+    ) of
         {error, Reason} = Error ->
-            lager:error("[~p] z_db error ~p when creating database ~p", [Site, Reason, Database]),
+            lager:error("z_db error ~p when creating database ~p", [Reason, Database]),
             Error;
         {ok, _, _} ->
             ok
     end.
-    
+
 %% @doc Check whether schema exists
--spec schema_exists(epgsql:connection(), string()) -> boolean().
-schema_exists(Connection, Schema) ->
-    {ok, _, [{Count}]} = epgsql:equery(
+-spec schema_exists_conn(epgsql:connection(), string()) -> boolean().
+schema_exists_conn(Connection, Schema) ->
+    {ok, _, [{IsExisting}]} = epgsql:equery(
         Connection,
-        "select count(*) from information_schema.schemata where schema_name = $1",
+        "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1)",
         [Schema]
     ),
-    case z_convert:to_integer(Count) of
-        0 -> false;
-        1 -> true
-    end.
+    IsExisting.
 
 %% @doc Create a schema
 -spec create_schema(atom(), epgsql:connection(), string()) -> ok | {error, term()}.
-create_schema(Site, Connection, Schema) ->
+create_schema(_Site, Connection, Schema) ->
     %% Use template0 to prevent ERROR: new encoding (UTF8) is incompatible with
     %% the encoding of the template database (SQL_ASCII)
     case epgsql:equery(
-        Connection, 
+        Connection,
         "CREATE SCHEMA \"" ++ Schema ++ "\""
-    ) of  
-        {error, Reason} = Error ->
-            lager:error("[~p] z_db error ~p when creating schema ~p", [Site, Reason, Schema]),
-            Error;
+    ) of
         {ok, _, _} ->
-            ok
-    end.    
-    
+            ok;
+        {error, {error, error, <<"42P06">>, _Msg, []}} ->
+            lager:warning("schema already exists ~p", [Schema]),
+            ok;
+        {error, Reason} = Error ->
+            lager:error("z_db error ~p when creating schema ~p", [Reason, Schema]),
+            Error
+    end.
+
 %% @doc Check the information schema if a certain table exists in the context database.
 -spec table_exists(string(), #context{}) -> boolean().
 table_exists(Table, Context) ->
     Options = z_db_pool:get_database_options(Context),
     Db = proplists:get_value(dbdatabase, Options),
     Schema = proplists:get_value(dbschema, Options),
-    case q1("   select count(*) 
-                from information_schema.tables 
-                where table_catalog = $1 
-                  and table_name = $2 
+    case q1("   select count(*)
+                from information_schema.tables
+                where table_catalog = $1
+                  and table_name = $2
                   and table_schema = $3
                   and table_type = 'BASE TABLE'", [Db, Table, Schema], Context) of
         1 -> true;
@@ -829,7 +835,7 @@ merge_props(undefined) ->
     undefined;
 merge_props(List) ->
     merge_props(List, []).
-    
+
 merge_props([], Acc) ->
     lists:reverse(Acc);
 merge_props([R|Rest], Acc) ->

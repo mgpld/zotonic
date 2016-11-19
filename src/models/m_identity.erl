@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,11 +23,16 @@
 
 -behaviour(gen_model).
 
+-type password() :: iodata().
+-type bcrypt_hash() :: {bcrypt, binary()}.
+-type sha1_salted_hash() :: {hash, binary(), binary()}.
+-type hash() :: bcrypt_hash() | sha1_salted_hash().
+
 -export([
     m_find_value/3,
     m_to_list/2,
     m_value/2,
-    
+
     is_user/2,
     get_username/1,
     get_username/2,
@@ -37,6 +42,7 @@
     ensure_username_pw/2,
     check_username_pw/3,
     hash/1,
+    needs_rehash/1,
     hash_is_equal/2,
     get/2,
     get_rsc/2,
@@ -59,7 +65,7 @@
 	set_by_type/5,
 	delete_by_type/3,
     delete_by_type_and_key/4,
-	
+
     insert/4,
     insert/5,
     insert_unique/4,
@@ -69,10 +75,12 @@
     set_verified/2,
     set_verified/4,
     is_verified/2,
-    
+
     delete/2,
     merge/3,
-    is_reserved_name/1
+    is_reserved_name/1,
+    is_peer_whitelisted/1,
+    is_ip_whitelisted/2
 ]).
 
 -export([
@@ -119,8 +127,9 @@ m_value(#m{value=V}, _Context) ->
 
 
 %% @doc Check if the resource has any credentials that will make him/her an user
+-spec is_user(m_rsc:resource(), #context{}) -> boolean().
 is_user(Id, Context) ->
-    case z_db:q1("select count(*) from identity where rsc_id = $1 and type in ('username_pw', 'openid')", [Id], Context) of
+    case z_db:q1("select count(*) from identity where rsc_id = $1 and type in ('username_pw', 'openid')", [m_rsc:rid(Id, Context)], Context) of
         0 -> false;
         _ -> true
     end.
@@ -135,16 +144,19 @@ get_username(Context) ->
 
 %% @doc Return the username of the resource id, undefined if no username
 %% @spec get_username(ResourceId, Context) -> Username | undefined
+-spec get_username(m_rsc:resource(), #context{}) -> binary() | undefined.
 get_username(Id, Context) ->
-    z_db:q1("select key from identity where rsc_id = $1 and type = 'username_pw'", [Id], Context).
+    z_db:q1("select key from identity where rsc_id = $1 and type = 'username_pw'", [m_rsc:rid(Id, Context)], Context).
 
 
 %% @doc Delete an username from a resource.
-%% @spec delete_username(ResourceId, Context) -> void
-delete_username(Id, Context) when is_integer(Id), Id /= 1 ->
-    case z_acl:is_allowed(delete, Id, Context) orelse z_acl:user(Context) == Id of
-        true ->  
-            z_db:q("delete from identity where rsc_id = $1 and type = 'username_pw'", [Id], Context),
+-spec delete_username(m_rsc:resource(), #context{}) -> ok | {error, eacces}.
+delete_username(1, _Context) ->
+    throw({error, admin_username_cannot_be_deleted});
+delete_username(Id, Context) ->
+    case z_acl:is_allowed(delete, Id, Context) orelse z_acl:is_allowed(update, Id, Context) of
+        true ->
+            z_db:q("delete from identity where rsc_id = $1 and type = 'username_pw'", [m_rsc:rid(Id, Context)], Context),
             z_mqtt:publish(["~site", "rsc", Id, "identity"], {identity, <<"username_pw">>}, Context),
             ok;
         false ->
@@ -155,7 +167,7 @@ delete_username(Id, Context) when is_integer(Id), Id /= 1 ->
 %% @doc Change the username of the resource id, only possible if there is already an username/password set
 %% @spec set_username(ResourceId, Username, Context) -> ok | {error, Reason}
 set_username(Id, Username, Context) ->
-    case z_acl:is_allowed(use, mod_admin_identity, Context) orelse z_acl:user(Context) == Id of
+    case z_acl:is_allowed(use, mod_admin_identity, Context) orelse z_acl:is_allowed(update, Id, Context) of
         true ->
             Username1 = z_string:to_lower(Username),
             case is_reserved_name(Username1) of
@@ -163,10 +175,10 @@ set_username(Id, Username, Context) ->
                     {error, eexist};
                 false ->
                     F = fun(Ctx) ->
-                        UniqueTest = z_db:q1("select count(*) from identity where type = 'username_pw' and rsc_id <> $1 and key = $2", [Id, Username1], Ctx),
+                        UniqueTest = z_db:q1("select count(*) from identity where type = 'username_pw' and rsc_id <> $1 and key = $2", [m_rsc:rid(Id, Context), Username1], Ctx),
                         case UniqueTest of
                             0 ->
-                                case z_db:q("update identity set key = $2 where rsc_id = $1 and type = 'username_pw'", [Id, Username1], Ctx) of
+                                case z_db:q("update identity set key = $2 where rsc_id = $1 and type = 'username_pw'", [m_rsc:rid(Id, Context), Username1], Ctx) of
                                     1 -> ok;
                                     0 -> {error, enoent};
                                     {error, _} -> {error, eexist} % assume duplicate key error?
@@ -183,19 +195,19 @@ set_username(Id, Username, Context) ->
 
 
 %% @doc Set the username/password of a resource.  Replaces any existing username/password.
-%% @spec set_username_pw(RscId, Username, Password, Context) -> ok | {error, Reason}
+-spec set_username_pw(m_rsc:resource(), string(), string(), #context{}) -> ok | {error, Reason :: term()}.
 set_username_pw(1, _, _, _) ->
     throw({error, admin_password_cannot_be_set});
-set_username_pw(Id, Username, Password, Context) when is_integer(Id) ->
-    case z_acl:is_allowed(use, mod_admin_identity, Context) orelse z_acl:user(Context) == Id of
+set_username_pw(Id, Username, Password, Context) ->
+    case z_acl:is_allowed(use, mod_admin_identity, Context) orelse z_acl:is_allowed(update, Id, Context) of
         true ->
             Username1 = z_string:trim(z_string:to_lower(Username)),
-            set_username_pw_1(Id, Username1, Password, Context);
+            set_username_pw_1(m_rsc:rid(Id, Context), Username1, Password, Context);
         false ->
             {error, eacces}
     end.
 
-set_username_pw_1(Id, Username, Password, Context) ->
+set_username_pw_1(Id, Username, Password, Context) when is_integer(Id) ->
     Hash = hash(Password),
     case z_db:transaction(fun(Ctx) -> set_username_pw_trans(Id, Username, Hash, Ctx) end, Context) of
         ok ->
@@ -204,8 +216,8 @@ set_username_pw_1(Id, Username, Password, Context) ->
             z_depcache:flush(Id, Context),
             ok;
         {rollback, {{error, _} = Error, _Trace} = ErrTrace} ->
-            lager:error("[~p] set_username_pw error for ~p, setting username ~p: ~p", 
-                        [z_context:site(Context), Username, ErrTrace]),
+            lager:error("set_username_pw error for ~p, setting username ~p: ~p",
+                        [Username, ErrTrace]),
             Error;
         {error, _} = Error ->
             Error
@@ -213,14 +225,14 @@ set_username_pw_1(Id, Username, Password, Context) ->
 
 set_username_pw_trans(Id, Username, Hash, Context) ->
     case z_db:q("
-                update identity 
+                update identity
                 set key = $2,
                     propb = $3,
                     is_verified = true,
                     modified = now()
                 where type = 'username_pw'
-                  and rsc_id = $1", 
-                [Id, Username, ?DB_PROPS(Hash)], 
+                  and rsc_id = $1",
+                [Id, Username, ?DB_PROPS(Hash)],
                 Context)
     of
         0 ->
@@ -228,13 +240,13 @@ set_username_pw_trans(Id, Username, Hash, Context) ->
                 true ->
                     {rollback, {error, eexist}};
                 false ->
-                    UniqueTest = z_db:q1("select count(*) from identity where type = 'username_pw' and key = $1", 
+                    UniqueTest = z_db:q1("select count(*) from identity where type = 'username_pw' and key = $1",
                                          [Username],
                                          Context),
                     case UniqueTest of
                         0 ->
-                            1 = z_db:q("insert into identity (rsc_id, is_unique, is_verified, type, key, propb) 
-                                        values ($1, true, true, 'username_pw', $2, $3)", 
+                            1 = z_db:q("insert into identity (rsc_id, is_unique, is_verified, type, key, propb)
+                                        values ($1, true, true, 'username_pw', $2, $3)",
                                         [Id, Username, {term, Hash}],
                                         Context),
                             z_db:q("update rsc set creator_id = id where id = $1 and creator_id <> id", [Id], Context),
@@ -243,22 +255,24 @@ set_username_pw_trans(Id, Username, Hash, Context) ->
                             {rollback, {error, eexist}}
                     end
             end;
-        1 -> 
+        1 ->
             ok
     end.
 
 %% @doc Ensure that the user has an associated username and password
 %% @spec ensure_username_pw(RscId, Context) -> ok | {error, Reason}
+-spec ensure_username_pw(m_rsc:resource(), #context{}) -> ok | {error, term()}.
 ensure_username_pw(1, _Context) ->
     throw({error, admin_password_cannot_be_set});
 ensure_username_pw(Id, Context) ->
     case z_acl:is_allowed(use, mod_admin_identity, Context) orelse z_acl:user(Context) == Id of
         true ->
-            case z_db:q1("select count(*) from identity where type = 'username_pw' and rsc_id = $1", [Id], Context) of
+            RscId = m_rsc:rid(Id, Context),
+            case z_db:q1("select count(*) from identity where type = 'username_pw' and rsc_id = $1", [RscId], Context) of
                 0 ->
-                    Username = generate_username(Id, Context),
-                    Password = z_ids:id(),
-                    set_username_pw(Id, Username, Password, Context);
+                    Username = generate_username(RscId, Context),
+                    Password = binary_to_list(z_ids:id()),
+                    set_username_pw(RscId, Username, Password, Context);
                 _N ->
                     ok
             end;
@@ -294,7 +308,7 @@ base_username(Id, Context) ->
     case nospace(z_string:trim(T1)) of
         <<>> ->
             case nospace(m_rsc:p_no_acl(Id, title, Context)) of
-                <<>> -> z_convert:to_binary(z_ids:identifier(6));
+                <<>> -> z_ids:identifier(6);
                 Title -> Title
             end;
         Name ->
@@ -322,16 +336,29 @@ nodash(S) ->
 
 
 
-%% @doc Return the rsc_id with the given username/password.  
+%% @doc Return the rsc_id with the given username/password.
 %%      If succesful then updates the 'visited' timestamp of the entry.
-%% @spec check_username_pw(Username, Password, Context) -> {ok, Id} | {error, Reason}
+-spec check_username_pw(binary() | string(), binary() | string(), #context{}) -> {ok, m_rsc:resource_id()} | {error, term()}.
 check_username_pw(<<"admin">>, Password, Context) ->
     check_username_pw("admin", Password, Context);
 check_username_pw("admin", Empty, _Context) when Empty =:= []; Empty =:= <<>> ->
     {error, password};
 check_username_pw("admin", Password, Context) ->
     Password1 = z_convert:to_list(Password),
-    case m_site:get(admin_password, Context) of
+    case z_convert:to_list(m_site:get(admin_password, Context)) of
+        "admin" ->
+            % Only allow default password from whitelisted ip addresses
+            case is_peer_whitelisted(Context) of
+                true ->
+                    z_db:q("update identity set visited = now() where id = 1", Context),
+                    {ok, 1};
+                false ->
+                    lager:error(
+                        "admin login with default password from non whitelisted ip address ~p",
+                        [m_req:get(peer, Context)]
+                    ),
+                    {error, peer_not_whitelisted}
+            end;
         Password1 ->
             z_db:q("update identity set visited = now() where id = 1", Context),
             {ok, 1};
@@ -352,6 +379,58 @@ check_username_pw(Username, Password, Context) ->
             check_hash(RscId, Username, Password, Hash, Context)
     end.
 
+%% @doc Check if the tcp/ip peer address is a whitelisted ip address
+is_peer_whitelisted(Context) ->
+    Peer = z_convert:to_list(m_req:get(peer, Context)),
+    is_ip_whitelisted(Peer, Context).
+
+is_ip_whitelisted(IP, Context) ->
+    Whitelist = string:tokens(z_convert:to_list(ip_whitelist(Context)), ","),
+    ip_match(IP, Whitelist).
+
+ip_match(_Peer, []) ->
+    false;
+ip_match(Peer, [Peer|_IPs]) ->
+    true;
+ip_match(Peer, [IP|IPs]) ->
+    case string:tokens(IP, "/") of
+        [IPVal,Bits] ->
+            {ok, MatchAdr} = inet:parse_address(IPVal),
+            {ok, PeerAdr} = inet:parse_address(Peer),
+            BitsNr = z_convert:to_integer(Bits),
+            case ip_match_mask(PeerAdr, MatchAdr, BitsNr) of
+                true -> true;
+                false -> ip_match(Peer, IPs)
+            end;
+        _ ->
+            ip_match(Peer, IPs)
+    end.
+
+ip_match_mask({_,_,_,_} = Peer, {_,_,_,_} = Match, Bits) ->
+    ip_match_mask_1(Peer, Match, 32-Bits);
+ip_match_mask({_,_,_,_,_,_,_,_} = Peer, {_,_,_,_,_,_,_,_} = Match, Bits) ->
+    ip_match_mask_1(Peer, Match, 128-Bits);
+ip_match_mask(_, _, _) ->
+    false.
+
+ip_match_mask_1(PeerAdr, MatchAdr, MaskBits) ->
+    NetMask = ((1 bsl 128) - 1) bsl MaskBits,
+    (to_ip_number(MatchAdr) band NetMask) =:= (to_ip_number(PeerAdr) band NetMask).
+
+to_ip_number({A,B,C,D}) ->
+    ((((A * 256) + B) * 256) + C) * 256 + D;
+to_ip_number({A,B,C,D,E,F,G,H}) ->
+    (((((((((A * 65536) + B) * 65536) + C) * 65536 + D) * 65536 + E) * 65536 + F) * 65536) + G) * 65536 + H.
+
+ip_whitelist(Context) ->
+    SiteWhitelist = m_config:get_value(site, ip_whitelist, Context),
+    case z_utils:is_empty(SiteWhitelist) of
+        true ->
+            z_config:get(ip_whitelist);
+        false ->
+            SiteWhitelist
+    end.
+
 %% @doc Check is the password belongs to an user with the given e-mail address.
 %%      Multiple users can have the same e-mail address, so multiple checks are needed.
 %%      If succesful then updates the 'visited' timestamp of the entry.
@@ -367,10 +446,10 @@ check_email_pw_1([], _Email, _Password, _Context) ->
     {error, password};
 check_email_pw_1([Idn|Rest], Email, Password, Context) ->
     UserId = proplists:get_value(rsc_id, Idn),
-    Row = z_db:q_row("select rsc_id, key, propb from identity where type = 'username_pw' and rsc_id = $1", 
+    Row = z_db:q_row("select rsc_id, key, propb from identity where type = 'username_pw' and rsc_id = $1",
                      [UserId], Context),
     case Row of
-        undefined -> 
+        undefined ->
             check_email_pw_1(Rest, Email, Password, Context);
         {RscId, Username, Hash} ->
             case check_hash(RscId, Username, Password, Hash, Context) of
@@ -391,11 +470,11 @@ lookup_by_rememberme_token(Token, Context) ->
     end.
 
 %% @doc Find the 'rememberme' cookie value for the user, generate a new one if not found.
--spec get_rememberme_token(pos_integer(), #context{}) -> {ok, binary()}.
+-spec get_rememberme_token(m_rsc:resource(), #context{}) -> {ok, binary()}.
 get_rememberme_token(UserId, Context) ->
     case z_db:q1("select key from identity
                   where type = 'rememberme'
-                    and rsc_id = $1", [UserId], Context) of
+                    and rsc_id = $1", [m_rsc:rid(UserId, Context)], Context) of
         undefined ->
             reset_rememberme_token(UserId, Context);
         Token ->
@@ -403,7 +482,7 @@ get_rememberme_token(UserId, Context) ->
     end.
 
 %% @doc Reset the 'rememberme' cookie value. Needed if an user's password is changed.
--spec reset_rememberme_token(pos_integer(), #context{}) -> {ok, binary()}.
+-spec reset_rememberme_token(m_rsc:resource(), #context{}) -> {ok, binary()}.
 reset_rememberme_token(UserId, Context) ->
     z_db:transaction(
         fun(Ctx) ->
@@ -415,7 +494,7 @@ reset_rememberme_token(UserId, Context) ->
         Context).
 
 new_unique_key(Type, Context) ->
-    Key = z_convert:to_binary(z_ids:id()),
+    Key = z_ids:id(),
     case z_db:q1("select id
                   from identity
                   where type = $1
@@ -435,18 +514,19 @@ get(IdnId, Context) ->
     z_db:assoc_row("select * from identity where id = $1", [IdnId], Context).
 
 %% @doc Fetch all credentials belonging to the user "id"
-%% @spec get_rsc(integer(), context()) -> list()
+-spec get_rsc(m_rsc:resource(), #context{}) -> list().
 get_rsc(Id, Context) ->
-    z_db:assoc("select * from identity where rsc_id = $1", [Id], Context).
+    z_db:assoc("select * from identity where rsc_id = $1", [m_rsc:rid(Id, Context)], Context).
 
 
 %% @doc Fetch all different identity types of an user
--spec get_rsc_types(integer(), #context{}) -> list().
+-spec get_rsc_types(m_rsc:resource(), #context{}) -> list().
 get_rsc_types(Id, Context) ->
-    Rs = z_db:q("select type from identity where rsc_id = $1", [Id], Context),
+    Rs = z_db:q("select type from identity where rsc_id = $1", [m_rsc:rid(Id, Context)], Context),
     [ R || {R} <- Rs ].
 
 %% @doc Fetch all credentials belonging to the user "id" and of a certain type
+-spec get_rsc_by_type(m_rsc:resource(), atom(), #context{}) -> list().
 get_rsc_by_type(Id, email, Context) ->
     Idns = get_rsc_by_type_1(Id, email, Context),
     case normalize_key(email, m_rsc:p_no_acl(Id, email, Context)) of
@@ -471,48 +551,59 @@ get_rsc_by_type(Id, Type, Context) ->
 
 get_rsc_by_type_1(Id, Type, Context) ->
     z_db:assoc("select * from identity where rsc_id = $1 and type = $2 order by is_verified desc, key asc",
-               [Id, Type], Context).
+               [m_rsc:rid(Id, Context), Type], Context).
 
+-spec get_rsc(m_rsc:resource(), atom(), #context{}) -> list() | undefined.
 get_rsc(Id, Type, Context) ->
-    z_db:assoc_row("select * from identity where rsc_id = $1 and type = $2", [Id, Type], Context).
+    z_db:assoc_row("select * from identity where rsc_id = $1 and type = $2", [m_rsc:rid(Id, Context), Type], Context).
 
 
-%% @doc Hash a password, using sha1 and a salt
-%% @spec hash(Password) -> tuple()
+%% @doc Hash a password, using bcrypt
+-spec hash(password()) -> bcrypt_hash().
 hash(Pw) ->
-    Salt = z_ids:id(10),
-    Hash = crypto:hash(sha, [Salt,Pw]),
-    {hash, Salt, Hash}.
-
+    {bcrypt, erlpass:hash(Pw)}.
 
 %% @doc Compare if a password is the same as a hash.
-%% @spec hash_is_equal(Password, Hash) -> bool()
+-spec hash_is_equal(password(), hash()) -> boolean().
+hash_is_equal(Pw, {bcrypt, Hash}) ->
+    erlpass:match(Pw, Hash);
 hash_is_equal(Pw, {hash, Salt, Hash}) ->
     NewHash = crypto:hash(sha, [Salt, Pw]),
     Hash =:= NewHash;
 hash_is_equal(_, _) ->
     false.
 
+
+%% @doc Check if the password hash needs to be rehashed.
+-spec needs_rehash(hash()) -> boolean().
+needs_rehash({bcrypt, _}) ->
+    false;
+needs_rehash({hash, _, _}) -> 
+    true.
+
+
 %% @doc Create an identity record.
-insert(RscId, Type, Key, Context) ->
-    insert(RscId, Type, Key, [], Context).
-insert(RscId, Type, Key, Props, Context) ->
+-spec insert(m_rsc:resource(), atom(), binary(), #context{}) -> {ok, pos_integer()} | {error, invalid_key}.
+insert(Rsc, Type, Key, Context) ->
+    insert(Rsc, Type, Key, [], Context).
+insert(Rsc, Type, Key, Props, Context) ->
     KeyNorm = normalize_key(Type, Key),
     case is_valid_key(Type, KeyNorm, Context) of
-        true -> insert_1(RscId, Type, KeyNorm, Props, Context);
+        true -> insert_1(Rsc, Type, KeyNorm, Props, Context);
         false -> {error, invalid_key}
     end.
 
-insert_1(RscId, Type, Key, Props, Context) ->
-    case z_db:q1("select id 
-                  from identity 
+insert_1(Rsc, Type, Key, Props, Context) ->
+    RscId = m_rsc:rid(Rsc, Context),
+    case z_db:q1("select id
+                  from identity
                   where rsc_id = $1
                     and type = $2
                     and key = $3",
                 [RscId, Type, Key],
                 Context)
     of
-        undefined -> 
+        undefined ->
             Props1 = [{rsc_id, RscId}, {type, Type}, {key, Key} | Props],
             Result = z_db:insert(identity, validate_is_unique(Props1), Context),
             z_mqtt:publish(["~site", "rsc", RscId, "identity"], {identity, Type}, Context),
@@ -567,7 +658,7 @@ insert_unique(RscId, Type, Key, Props, Context) ->
 %% @doc Set the visited timestamp for the given user.
 %% @todo Make this a log - so that we can see the last visits and check if this is from a new browser/ip address.
 set_visited(UserId, Context) ->
-    z_db:q("update identity set visited = now() where rsc_id = $1 and type = 'username_pw'", [UserId], Context).
+    z_db:q("update identity set visited = now() where rsc_id = $1 and type = 'username_pw'", [m_rsc:rid(UserId, Context)], Context).
 
 
 %% @doc Set the verified flag on a record by identity id.
@@ -575,8 +666,8 @@ set_visited(UserId, Context) ->
 set_verified(Id, Context) ->
     case z_db:q_row("select rsc_id, type from identity where id = $1", [Id], Context) of
         {RscId, Type} ->
-            case z_db:q("update identity set is_verified = true, verify_key = null where id = $1", 
-                   [Id], 
+            case z_db:q("update identity set is_verified = true, verify_key = null where id = $1",
+                   [Id],
                    Context)
             of
                 1 ->
@@ -591,9 +682,9 @@ set_verified(Id, Context) ->
 
 
 %% @doc Set the verified flag on a record by rescource id, identity type and value (eg an user's email address).
-set_verified(RscId, Type, Key, Context) 
-    when is_integer(RscId), 
-         Type =/= undefined, 
+set_verified(RscId, Type, Key, Context)
+    when is_integer(RscId),
+         Type =/= undefined,
          Key =/= undefined, Key =/= <<>>, Key =/= [] ->
     Result = z_db:transaction(fun(Ctx) -> set_verified_trans(RscId, Type, Key, Ctx) end, Context),
     z_mqtt:publish(["~site", "rsc", RscId, "identity"], {identity, Type}, Context),
@@ -602,37 +693,38 @@ set_verified(_RscId, _Type, _Key, _Context) ->
     {error, badarg}.
 
 set_verified_trans(RscId, Type, Key, Context) ->
-    case z_db:q("update identity 
-                 set is_verified = true, 
-                     verify_key = null 
-                 where rsc_id = $1 and type = $2 and key = $3", 
-                [RscId, Type, Key], 
+    case z_db:q("update identity
+                 set is_verified = true,
+                     verify_key = null
+                 where rsc_id = $1 and type = $2 and key = $3",
+                [RscId, Type, Key],
                 Context)
     of
         0 ->
-            1 = z_db:q("insert into identity (rsc_id, type, key, is_verified) 
-                        values ($1,$2,$3,true)", 
-                       [RscId, Type, Key], 
+            1 = z_db:q("insert into identity (rsc_id, type, key, is_verified)
+                        values ($1,$2,$3,true)",
+                       [RscId, Type, Key],
                        Context),
             ok;
-        N when N > 0 -> 
+        N when N > 0 ->
             ok
     end.
 
 %% @doc Check if there is a verified identity for the user, beyond the username_pw
 is_verified(RscId, Context) ->
-    case z_db:q1("select id from identity where rsc_id = $1 and is_verified = true and type <> 'username_pw'", 
+    case z_db:q1("select id from identity where rsc_id = $1 and is_verified = true and type <> 'username_pw'",
                 [RscId], Context) of
         undefined -> false;
         _ -> true
     end.
 
+-spec set_by_type(m_rsc:resource(), string(), string(), #context{}) -> ok.
 set_by_type(RscId, Type, Key, Context) ->
     set_by_type(RscId, Type, Key, [], Context).
 set_by_type(RscId, Type, Key, Props, Context) ->
-	F = fun(Ctx) -> 
-		case z_db:q("update identity set key = $3, propb = $4 where rsc_id = $1 and type = $2", [RscId, Type, Key, {term, Props}], Ctx) of
-			0 -> z_db:q("insert into identity (rsc_id, type, key, propb) values ($1,$2,$3,$4)", [RscId, Type, Key, {term, Props}], Ctx);
+	F = fun(Ctx) ->
+		case z_db:q("update identity set key = $3, propb = $4 where rsc_id = $1 and type = $2", [m_rsc:rid(RscId, Context), Type, Key, {term, Props}], Ctx) of
+			0 -> z_db:q("insert into identity (rsc_id, type, key, propb) values ($1,$2,$3,$4)", [m_rsc:rid(RscId, Context), Type, Key, {term, Props}], Ctx);
             N when N > 0 -> ok
 		end
 	end,
@@ -659,13 +751,14 @@ delete(IdnId, Context) ->
     end.
 
 %% @doc Move the identities of two resources, the identities are removed from the source id.
+-spec merge(m_rsc:resource(), m_rsc:resource(), #context{}) -> ok | {error, term()}.
 merge(WinnerId, LooserId, Context) ->
     case z_acl:rsc_editable(WinnerId, Context) andalso z_acl:rsc_editable(LooserId, Context) of
         true ->
             F = fun(Ctx) ->
                 % Move all identities to the winner, except for duplicate type+key combinations
-                LooserIdns = z_db:q("select type, key, id from identity where rsc_id = $1", [LooserId], Ctx),
-                WinIdns = z_db:q("select type, key from identity where rsc_id = $1", [WinnerId], Ctx),
+                LooserIdns = z_db:q("select type, key, id from identity where rsc_id = $1", [m_rsc:rid(LooserId, Context)], Ctx),
+                WinIdns = z_db:q("select type, key from identity where rsc_id = $1", [m_rsc:rid(WinnerId, Context)], Ctx),
                 AddIdns = lists:filter(
                                 fun({Type, Key, _Id}) ->
                                     case is_unique_identity_type(Type) of
@@ -678,21 +771,21 @@ merge(WinnerId, LooserId, Context) ->
                                 LooserIdns),
                 lists:foreach(
                             fun({_Type, _Key, Id}) ->
-                                z_db:q("update identity set rsc_id = $1 where id = $2", 
-                                       [WinnerId, Id],
+                                z_db:q("update identity set rsc_id = $1 where id = $2",
+                                       [m_rsc:rid(WinnerId, Context), Id],
                                        Ctx)
                             end,
                             AddIdns),
                 case proplists:is_defined(<<"username_pw">>, AddIdns) of
                     true ->
-                        z_db:q("update rsc set creator_id = id where id = $1 and creator_id <> id", [WinnerId], Context);
+                        z_db:q("update rsc set creator_id = id where id = $1 and creator_id <> id", [m_rsc:rid(WinnerId, Context)], Context);
                     false ->
                         ok
                 end
             end,
             z_db:transaction(F, Context),
-            z_mqtt:publish(["~site", "rsc", LooserId, "identity"], {identity, all}, Context),
-            z_mqtt:publish(["~site", "rsc", WinnerId, "identity"], {identity, all}, Context),
+            z_mqtt:publish(["~site", "rsc", m_rsc:rid(LooserId, Context), "identity"], {identity, all}, Context),
+            z_mqtt:publish(["~site", "rsc", m_rsc:rid(WinnerId, Context), "identity"], {identity, all}, Context),
             ok;
         false ->
             {error, eacces}
@@ -707,8 +800,8 @@ maybe_reset_email_property(Id, <<"email">>, Email, Context) when is_binary(Email
     case normalize_key(email, m_rsc:p_no_acl(Id, email_raw, Context)) of
         Email ->
             NewEmail = z_db:q1("
-                    select key 
-                    from identity 
+                    select key
+                    from identity
                     where rsc_id = $1
                       and type = 'email'
                     order by is_verified desc, modified desc",
@@ -724,15 +817,19 @@ maybe_reset_email_property(_Id, _Type, _Key, _Context) ->
     ok.
 
 
+-spec delete_by_type(m_rsc:resource(), atom(), #context{}) -> ok.
 delete_by_type(RscId, Type, Context) ->
-	case z_db:q("delete from identity where rsc_id = $1 and type = $2", [RscId, Type], Context) of
+	case z_db:q("delete from identity where rsc_id = $1 and type = $2", [m_rsc:rid(RscId, Context), Type], Context) of
+        0 -> ok;
+        _N -> z_mqtt:publish(["~site", "rsc", m_rsc:rid(RscId, Context), "identity"], {identity, Type}, Context)
+    end.
+
+-spec delete_by_type_and_key(m_rsc:resource(), atom(), atom(), #context{}) -> ok.
+delete_by_type_and_key(RscId, Type, Key, Context) ->
+    case z_db:q("delete from identity where rsc_id = $1 and type = $2 and key = $3", [m_rsc:rid(RscId, Context), Type, Key], Context) of
         0 -> ok;
         _N -> z_mqtt:publish(["~site", "rsc", RscId, "identity"], {identity, Type}, Context)
     end.
-
-delete_by_type_and_key(RscId, Type, Key, Context) ->
-    z_db:q("delete from identity where rsc_id = $1 and type = $2 and key = $3", [RscId, Type, Key], Context).
-
 
 lookup_by_username(Key, Context) ->
 	lookup_by_type_and_key("username_pw", z_string:to_lower(Key), Context).
@@ -747,7 +844,7 @@ lookup_by_verify_key(Key, Context) ->
     z_db:assoc_row("select * from identity where verify_key = $1", [Key], Context).
 
 set_verify_key(Id, Context) ->
-    N = z_ids:id(10),
+    N = binary_to_list(z_ids:id(10)),
     case lookup_by_verify_key(N, Context) of
         undefined ->
             z_db:q("update identity set verify_key = $2 where id = $1", [Id, N], Context),

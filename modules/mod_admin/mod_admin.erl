@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -44,8 +44,8 @@
 
 
 %% @doc Fix tinymce images that are the result of copying
-%% <img class="z-tinymce-media z-tinymce-media-align-block z-tinymce-media-size-small z-tinymce-media-crop- z-tinymce-media-link- " 
-%%      src="/admin/media/preview/41113" 
+%% <img class="z-tinymce-media z-tinymce-media-align-block z-tinymce-media-size-small z-tinymce-media-crop- z-tinymce-media-link- "
+%%      src="/admin/media/preview/41113"
 %%      alt="" />
 observe_sanitize_element(#sanitize_element{}, {<<"img">>, Attrs, _Enclosed} = Element, Context) ->
     case proplists:get_value(<<"src">>, Attrs) of
@@ -83,8 +83,8 @@ class_to_opts(Class) ->
             ]
     end.
 
-    
-observe_admin_menu(admin_menu, Acc, Context) ->
+
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_dashboard,
                 label=?__("Dashboard", Context),
@@ -110,7 +110,7 @@ observe_admin_menu(admin_menu, Acc, Context) ->
      #menu_item{id=admin_structure,
                 label=?__("Structure", Context)},
 
-     
+
      %% MODULES %%
      #menu_item{id=admin_modules,
                 label=?__("Modules", Context)},
@@ -167,19 +167,19 @@ observe_module_ready(module_ready, Context) ->
     z_depcache:flush(admin_menu, Context).
 
 
-event(#postback_notify{message="admin-insert-block"}, Context) ->
+event(#postback_notify{message= <<"admin-insert-block">>}, Context) ->
     Language = case z_context:get_q("language", Context) of
-                    undefined -> 
+                    undefined ->
                         [];
-                    Ls -> 
+                    Ls ->
                         Ls1 = string:tokens(Ls, ","),
-                        [ list_to_atom(L) || L <- lists:filter(fun z_trans:is_language/1, Ls1) ]
+                        [ list_to_atom(L) || L <- lists:filter(fun z_language:is_valid/1, Ls1) ]
                end,
     EditLanguage = case z_context:get_q("edit_language", Context) of
-                    undefined -> 
+                    undefined ->
                         z_context:language(Context);
                     EL ->
-                        case z_trans:is_language(EL) of
+                        case z_language:is_valid(EL) of
                             true -> list_to_atom(EL);
                             false -> z_context:language(Context)
                         end
@@ -203,16 +203,15 @@ event(#postback_notify{message="admin-insert-block"}, Context) ->
         AfterId -> z_render:insert_after(AfterId, Render, Context)
     end;
 
-event(#postback_notify{message="feedback", trigger="dialog-connect-find", target=TargetId}, Context) ->
+event(#postback_notify{message= <<"feedback">>, trigger= <<"dialog-connect-find">>, target=TargetId}, Context) ->
     % Find pages matching the search criteria.
     SubjectId = z_convert:to_integer(z_context:get_q(subject_id, Context)),
-    Category = z_context:get_q(find_category, Context),
-    Predicate = z_context:get_q(predicate, Context, ""),
-    Text = z_context:get_q(find_text, Context),
+    ObjectId = z_convert:to_integer(z_context:get_q(object_id, Context)),
+    Category = z_context:get_q(<<"find_category">>, Context),
+    Predicate = z_context:get_q(<<"predicate">>, Context, <<>>),
+    Text = z_context:get_q(<<"find_text">>, Context),
     Cats = case Category of
-                "p:"++Predicate -> m_predicate:object_category(Predicate, Context);
-                <<"p:", Predicate/binary>> -> m_predicate:object_category(Predicate, Context);
-                "" -> [];
+                <<"p:", Predicate/binary>> -> feedback_categories(SubjectId, Predicate, ObjectId, Context);
                 <<>> -> [];
                 CatId -> [{z_convert:to_integer(CatId)}]
            end,
@@ -228,12 +227,13 @@ event(#postback_notify{message="feedback", trigger="dialog-connect-find", target
     ], Context);
 
 event(#postback{message={admin_connect_select, Args}}, Context) ->
-    SelectId = z_context:get_q("select_id", Context),
+    SelectId = z_context:get_q(<<"select_id">>, Context),
+    IsConnected = z_convert:to_bool(z_context:get_q(<<"is_connected">>, Context)),
     SubjectId0 = proplists:get_value(subject_id, Args),
     ObjectId0 = proplists:get_value(object_id, Args),
     Predicate = proplists:get_value(predicate, Args),
     Callback = proplists:get_value(callback, Args),
-    
+
     QAction = proplists:get_all_values(action, Args),
     QActions = proplists:get_value(actions, Args, []),
     QAction1 = case QAction of
@@ -255,33 +255,37 @@ event(#postback{message={admin_connect_select, Args}}, Context) ->
                 {z_convert:to_integer(SelectId),
                  z_convert:to_integer(ObjectId0)}
         end,
-    
-    case do_link(SubjectId, Predicate, ObjectId, Callback, Context) of
+
+    case do_link_unlink(IsConnected, SubjectId, Predicate, ObjectId, Callback, Context) of
         {ok, Context1} ->
-            Context2 = z_render:dialog_close(Context1),
-            case Actions of
-                [] -> Context2;
-                _ -> z_render:wire(Actions, Context2)
-            end;
+            Context2 = case z_convert:to_bool(proplists:get_value(autoclose, Args)) of
+                            true -> z_render:dialog_close(Context1);
+                            false -> Context1
+                       end,
+            z_render:wire(Actions, Context2);
         {error, Context1} ->
             Context1
     end;
 
 %% Called when a block connection is done
-event(#postback_notify{message="update", target=TargetId}, Context) ->
-    Template = filename:basename(z_context:get_q("template", Context)),
-    Id = z_convert:to_integer(z_context:get_q("id", Context)),
-    Predicate = get_predicate(z_context:get_q("predicate", Context), Context),
+event(#postback_notify{message= <<"update">>, target=TargetId}, Context) ->
+    Id = z_convert:to_integer(z_context:get_q(<<"id">>, Context)),
+    Predicate = get_predicate(z_context:get_q(<<"predicate">>, Context), Context),
     Vars = [
         {id, Id},
         {predicate, Predicate}
     ],
     Context1 = z_render:wire({unmask, [{target_id, TargetId}]}, Context),
-    z_render:update(TargetId, #render{template=Template, vars=Vars}, Context1);
+    z_render:update(TargetId, #render{template={cat, "_rsc_block_item.tpl"}, vars=Vars}, Context1);
 
 event(_E, Context) ->
     Context.
 
+
+feedback_categories(SubjectId, Predicate, _ObjectId, Context) when is_integer(SubjectId) ->
+    m_predicate:object_category(Predicate, Context);
+feedback_categories(_SubjectId, Predicate, ObjectId, Context) when is_integer(ObjectId) ->
+    m_predicate:subject_category(Predicate, Context).
 
 
 get_predicate(undefined, _Context) ->
@@ -294,13 +298,15 @@ get_predicate(P, Context) when is_list(P) ->
             RscId = m_rsc:rid(P, Context),
             z_convert:to_atom(m_rsc:p(RscId, name, Context));
         false ->
-            list_to_existing_atom(P) 
-    end. 
+            list_to_existing_atom(P)
+    end.
 
 
-do_link(SubjectId, Predicate, ObjectId, Callback, Context) 
-    when SubjectId =:= undefined; 
-         Predicate =:= ""; Predicate =:= undefined ->
+do_link(SubjectId, Predicate, ObjectId, Callback, Context) ->
+    do_link_unlink(false, SubjectId, Predicate, ObjectId, Callback, Context).
+
+do_link_unlink(_IsUnlink, _SubjectId, Predicate, ObjectId, Callback, Context)
+    when Predicate =:= ""; Predicate =:= undefined ->
     ContextP = context_language(Context),
     Title = m_rsc:p(ObjectId, title, Context),
     Vars = [
@@ -312,7 +318,7 @@ do_link(SubjectId, Predicate, ObjectId, Callback, Context)
             {title, z_trans:lookup_fallback(Title, Context)}
            ],
     case Callback of
-        undefined -> 
+        undefined ->
             {ok, Context};
         {CB, Args} ->
             {ok, z_render:wire({script, [{script, [
@@ -327,21 +333,73 @@ do_link(SubjectId, Predicate, ObjectId, Callback, Context)
                     $),$;
                 ]}]}, Context)}
     end;
-do_link(SubjectId, Predicate, ObjectId, Callback, Context) ->
+do_link_unlink(IsUnlink, SubjectId, Predicate, ObjectId, Callback, Context) ->
     case z_acl:rsc_linkable(SubjectId, Context) of
         true ->
-            {EdgeId,IsNew} = case m_edge:get_id(SubjectId, Predicate, ObjectId, Context) of
-                undefined ->
-                    {ok, EdgId} = m_edge:insert(SubjectId, Predicate, ObjectId, Context),
-                    {EdgId, true};
-                EdgId ->
-                    {EdgId, false}
-            end,
+            case m_edge:get_id(SubjectId, Predicate, ObjectId, Context) of
+                undefined when IsUnlink ->
+                    do_link_unlink_feedback(
+                                    false, false, undefined,
+                                    SubjectId, Predicate, ObjectId,
+                                    Callback, Context);
+                undefined when not IsUnlink ->
+                    case m_edge:insert(SubjectId, Predicate, ObjectId, Context) of
+                        {ok, EdgeId} ->
+                            do_link_unlink_feedback(
+                                            true, false, EdgeId,
+                                            SubjectId, Predicate, ObjectId,
+                                            Callback, Context);
+                        {error, _} ->
+                            do_link_unlink_error(IsUnlink, Context)
+                    end;
+                EdgeId when IsUnlink ->
+                    case m_edge:delete(SubjectId, Predicate, ObjectId, Context) of
+                        ok ->
+                            do_link_unlink_feedback(
+                                            false, true, EdgeId,
+                                            SubjectId, Predicate, ObjectId,
+                                            Callback, Context);
+                        {error, _} ->
+                            do_link_unlink_error(IsUnlink, Context)
+                    end;
+                EdgeId when not IsUnlink->
+                    do_link_unlink_feedback(
+                                    false, false, EdgeId,
+                                    SubjectId, Predicate, ObjectId,
+                                    Callback, Context)
+            end;
+        false ->
+            do_link_unlink_error(IsUnlink, Context)
+    end.
 
-            ContextP = context_language(Context),
-            Title = m_rsc:p(ObjectId, title, Context),
+do_link_unlink_error(false = _IsUnlink, Context) ->
+    {error, z_render:growl_error(?__("Sorry, you have no permission to add the connection.", Context), Context)};
+do_link_unlink_error(true, Context) ->
+    {error, z_render:growl_error(?__("Sorry, you have no permission to delete the connection.", Context), Context)}.
+
+
+do_link_unlink_feedback(IsNew, IsDelete, EdgeId, SubjectId, Predicate, ObjectId, Callback, Context) ->
+    ContextP = context_language(Context),
+    Title = m_rsc:p(ObjectId, title, Context),
+    Context1 = case {IsNew, IsDelete} of
+        {true,false} ->
+            z_render:growl([
+                        ?__("Added the connection to", ContextP),<<" \"">>, Title, <<"\".">>
+                    ], Context);
+        {false,true} ->
+            z_render:growl([
+                        ?__("Removed the connection to", ContextP),<<" \"">>, Title, <<"\".">>
+                    ], Context);
+        {false,false} ->
+            Context
+    end,
+    case Callback of
+        undefined ->
+            {ok, Context1};
+        _ ->
             Vars = [
                     {is_new, IsNew},
+                    {is_delete, IsDelete},
                     {subject_id, SubjectId},
                     {predicate, Predicate},
                     {object_id, ObjectId},
@@ -350,38 +408,29 @@ do_link(SubjectId, Predicate, ObjectId, Callback, Context) ->
                     {title_language, z_trans:lookup_fallback(Title, ContextP)},
                     {title, z_trans:lookup_fallback(Title, Context)}
                    ],
-            Context1 = case Callback of
-                    undefined -> 
-                        Context;
+            case Callback of
                     {CB, Args} ->
                         {ok, z_render:wire({script, [{script, [
                                 z_convert:to_binary(CB), $(,
-                                    z_utils:js_object(Vars++Args,Context),
+                                    z_utils:js_object(Vars++Args,ContextP),
                                 $),$;
-                            ]}]}, Context)};
+                            ]}]}, Context1)};
                     _ ->
-                        z_render:wire({script, [{script, [
+                        {ok, z_render:wire({script, [{script, [
                                 z_convert:to_binary(Callback), $(,
-                                    z_utils:js_object(Vars,Context),
+                                    z_utils:js_object(Vars,ContextP),
                                 $),$;
-                            ]}]}, Context)
-                end,
-
-            case IsNew of
-                true -> {ok, z_render:growl([?__("Added the connection to", Context1),<<" \"">>, Title, <<"\".">>], Context1)};
-                false -> {ok, Context1}
-            end;
-        false ->
-            {error, z_render:growl_error(?__("Sorry, you have no permission to add the connection.", Context), Context)}
+                            ]}]}, Context1)}
+            end
     end.
 
 context_language(Context) ->
     case z_context:get_q("language", Context) of
         undefined -> Context;
         [] -> Context;
-        Lang -> 
-            case z_trans:to_language_atom(Lang) of
-                {ok, IsoCode} -> z_context:set_language(IsoCode, Context);
+        Lang ->
+            case z_language:to_language_atom(Lang) of
+                {ok, LanguageCode} -> z_context:set_language(LanguageCode, Context);
                 _ -> Context
             end
     end.

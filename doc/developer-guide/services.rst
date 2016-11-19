@@ -122,7 +122,7 @@ of a services which handles a GET request is listed below::
 
     -include_lib("zotonic.hrl").
 
-    process_get(_ReqData, _Context) ->
+    process_get(_Context) ->
         Stats = [{count, 12310}, {uptime, 399}],
         z_convert:to_json(Stats).
 
@@ -134,7 +134,7 @@ Of course, you would write real code there which retrieves actual stats. If your
 module ``something`` contains the function ``stats_data/1``, call it from the
 process function like this::
 
-    process_get(_ReqData, Context) ->
+    process_get(Context) ->
         Stats = mod_something:stats_data(Context),
         z_convert:to_json(Stats).
 
@@ -155,12 +155,12 @@ is listed below::
     -svc_title("Processes the given id.").
     -svc_needauth(true).
 
-    -export([process_post/2]).
+    -export([process_post/1]).
 
     -include_lib("zotonic.hrl").
 
-    process_post(_ReqData, Context) ->
-        Id = z_context:get_q("id", Context),
+    process_post(Context) ->
+        Id = z_context:get_q(<<"id">>, Context),
         %% Do some processing here...
         Response = [{result, Id}],
         z_convert:to_json(Response).
@@ -176,15 +176,115 @@ Setting response headers
 ------------------------
 
 You can set response headers by returning a ``{Result, #context{}}``
-tuple from the ``process_get/2`` and ``process_post/2`` calls::
+tuple from the ``process_get/1`` and ``process_post/1`` calls::
 
-    process_get(_ReqData, Context) ->
+    process_get(Context) ->
         Stats = mod_something:stats_data(Context),
         Result = {struct, [{count, 100}]},
-        Context1 = z_context:set_resp_header("Cache-Control", "max-age=3600", Context),
+        Context1 = z_context:set_resp_header(<<"cache-control">>, <<"max-age=3600">>, Context),
         {Result, Context1}.
 
 .. _guide-services-cors:
+
+Uploading files
+---------------
+
+The simplest way to upload files is to use the ready-made API service :ref:`service-media_upload`. But if you want to have different behavior (for instance to connect an uploaded user picture to a user page), it is easy to create your own.
+
+The post payload should be ``multipart/form-data`` encoded (which is the standard for file uploads).
+
+The posted data is automatically retrieved by Zotonic and made available via ``z_context``. If you use ``"upload"`` for the form data ``name`` field, you get the upload data from ``z_context:get_q(<<"upload">>, Context)``. The resulting value is an ``#upload{}`` record, and can be passed directly to ``m_media:insert_file``::
+
+    Upload = z_context:get_q(<<"upload">>, Context),
+    m_media:insert_file(Upload, Context)
+
+Error handling
+--------------
+
+An HTTP status error code will be generated when ``process_get`` or ``process_post`` returns an error object::
+
+        {error, error_name, DetailsString}
+        {error, error_name, DetailsString, ErrorData}
+
+Additionally, you may also ``throw()`` these error structures inside
+``process_get`` and ``process_post``, to easily short-circuit your
+error handling (e.g. for input validation)::
+
+    Title = z_context:get_q(<<"title">>, Context),
+    z_utils:is_empty(Title) andalso
+        throw({error, missing_arg, "title"}),
+
+
+Simple error feedback
+.....................
+
+By providing the error name, a corresponding HTTP status code and message will be set. Supported error names are:
+
+=================  ===================================   ===========
+Name               Generated message                     Status code
+=================  ===================================   ===========
+``missing_arg``    Missing argument: + Details           400
+``unknown_arg``    Unknown argument: + Details           400
+``syntax``         Syntax error: + Details               400
+``unauthorized``   Unauthorized.                         401
+``access_denied``  Access denied.                        403
+``not_exists``     Resource does not exist: + Details    404
+``unprocessable``  Unprocessable entity: + Details       422
+(other)            Generic error.                        500
+=================  ===================================   ===========
+
+For example::
+
+    process_post(Context) ->
+        %% Do some processing here...
+        case Error of
+            true ->
+                {{error, missing_arg, "username"}, Context};
+            false ->
+                {z_convert:to_json(Data), Context}
+        end.
+
+
+Working with Error Objects
+..........................
+
+In some cases it is useful to return more detailed error feedback. The `JSON API <http://jsonapi.org>`_ has specified a format for this. The thinking behind the format is that the server, after encountering an error, may continue to process information, and instead of returning a single error code, returns multiple found errors.
+
+Taking this approach, this error information is returned as a JSON array, with a top key entry ``errors``::
+
+    ["errors": {
+        "detail": "...",
+        "source": "...",
+        "status": "...",
+        "title": "..."
+    }]
+
+Of course there is no obligation to use JSON API structure, but if you want, the code of one of those functions - for instance to log on - could look like this::
+
+    case User of
+        undefined ->
+            {error, [
+                {status, 422},
+                {source, <<"mod_webapp:logon">>},
+                {title, <<"No user found">>},
+                {detail, <<"Could not log on user">>}
+            ]};
+        _ ->
+            {ok, User}
+    end.
+
+The return data of multiple functions may then be aggregated into a single error data object and returned as a list of Error Objects::
+
+    process_post(Context) ->
+        %% Do some processing here...
+        %% Accumulate all data...
+        %% Handle return:
+        case Data of
+            {error, ErrData} ->
+                {{error, unprocessable, <<"">>, ErrData}, Context};
+            _ ->
+                {z_convert:to_json(Data), Context}
+        end.
 
 Enabling Cross-Origin Resource Sharing (CORS)
 ---------------------------------------------
@@ -251,7 +351,7 @@ a different service authentication module.
 
 The module implementing the ``service_authorize`` hook is expected to
 return either `undefined` (when the request is not applicable) or a
-response which must conform to the Webmachine ``is_authorized/2``
+response which must conform to the Cowmachine ``is_authorized/1``
 return format.
 
 .. seealso::

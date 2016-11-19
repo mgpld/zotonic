@@ -2,7 +2,7 @@
 %% @copyright 2010 Marc Worrell
 %% Date: 2010-07-05
 %% @doc Dummy gen_server for modules without any gen_server code.
-%% We use this dummy gen_server so that we still can use a simple otp supervisor to oversee the 
+%% We use this dummy gen_server so that we still can use a simple otp supervisor to oversee the
 %% running modules.
 
 %% Copyright 2010 Marc Worrell
@@ -10,9 +10,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,7 +27,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 -export([start_link/1]).
 
--record(state, {module, host}).
+-record(state, {module :: atom(), site :: atom()}).
 
 -include("zotonic.hrl").
 
@@ -55,12 +55,12 @@ init(Args) ->
     process_flag(trap_exit, true),
     {module, Module} = proplists:lookup(module, Args),
     {context, Context} = proplists:lookup(context, Args),
-    Host = z_context:site(Context),
+    Site = z_context:site(Context),
     lager:md([
-            {site, Host},
+            {site, Site},
             {module, Module}
         ]),
-    {ok, #state{module=Module, host=Host}}.
+    {ok, #state{module=Module, site=Site}}.
 
 %% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
 %%                                      {reply, Reply, State, Timeout} |
@@ -77,10 +77,10 @@ handle_call(Message, _From, State) ->
 %%                                  {noreply, State, Timeout} |
 %%                                  {stop, Reason, State}
 %% @doc Handle the next step in the module initialization.
-handle_cast(init, #state{module=Module, host=Host}=State) ->
-    dummy_module_init(Module, z_context:new(Host)),
+handle_cast(init, #state{module=Module, site=Site}=State) ->
+    dummy_module_init(Module, z_context:new(Site)),
     {noreply, State};
-    
+
 %% @doc Trap unknown casts
 handle_cast(Message, State) ->
     {stop, {unknown_cast, Message}, State}.
@@ -99,8 +99,8 @@ handle_info(_Info, State) ->
 %% terminate. It should be the opposite of Module:init/1 and do any necessary
 %% cleaning up. When it returns, the gen_server terminates with Reason.
 %% The return value is ignored.
-terminate(Reason, #state{module=Module, host=Host}) ->
-    dummy_module_terminate(Reason, Module, z_context:new(Host)),
+terminate(Reason, #state{module=Module, site=Site}) ->
+    dummy_module_terminate(Reason, Module, z_context:new(Site)),
     ok.
 
 %% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
@@ -130,4 +130,4 @@ dummy_module_terminate(Reason, Module, Context) ->
         true -> Module:terminate(Reason, z_acl:sudo(Context));
         false -> nop
     end.
-    
+

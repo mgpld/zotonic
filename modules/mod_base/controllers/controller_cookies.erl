@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,44 +22,35 @@
 -author("Maas-Maarten Zeeman <mmzeeman@xs4all.nl>").
 
 -export([
-    init/1,
-    resource_exists/2,
-    allowed_methods/2,
-    content_types_provided/2,
-    process_post/2,
-    response/2
+    resource_exists/1,
+    allowed_methods/1,
+    content_types_provided/1,
+    process_post/1,
+    response/1
 ]).
 
--include_lib("controller_webmachine_helper.hrl").
 -include_lib("zotonic.hrl").
 
-init(_Args) -> 
-    {ok, []}.
-
-resource_exists(ReqData, _Context) ->
-    Context  = z_context:new(ReqData, ?MODULE),
+resource_exists(Context) ->
     Context1 = z_context:ensure_all(Context),
     z_context:lager_md(Context1),
-    {true, ReqData, Context1}.
+    {true, Context1}.
 
-allowed_methods(ReqData, Context) ->
-    {['POST', 'GET', 'HEAD'], ReqData, Context}.
+allowed_methods(Context) ->
+    {[<<"POST">>, <<"GET">>, <<"HEAD">>], Context}.
 
-content_types_provided(ReqData, Context) ->
-    {[{"text/html", response}], ReqData, Context}.
+content_types_provided(Context) ->
+    {[{<<"text/html">>, response}], Context}.
 
-process_post(ReqData, Context) ->
-    response(ReqData, Context).
+process_post(Context) ->
+    response(Context).
 
-response(ReqData, Context) ->
-    ContextRd = z_context:set_reqdata(ReqData, Context),
-
-    Cookies = z_session:get_cookies(ContextRd),
-    ContextCookie = set_cookies(Cookies, ContextRd),
+response(Context) ->
+    Cookies = z_session:get_cookies(Context),
+    ContextCookie = set_cookies(Cookies, Context),
     z_session:clear_cookies(Context),
-
-    ReqData1 = wrq:set_resp_body([], z_context:get_reqdata(ContextCookie)),
-    {{halt, 204}, ReqData1, ContextCookie}.
+    ContextBody = cowmachine_req:set_resp_body(<<>>, ContextCookie),
+    {{halt, 204}, ContextBody}.
 
 set_cookies([], Context) ->
     Context;

@@ -13,8 +13,8 @@
 <div class="tab-content">
 	 <div class="tab-pane active" id="survey-basics">
 		{% catinclude "_admin_edit_basics.tpl" id is_editable=is_editable languages=languages %}
-		{% catinclude "_admin_edit_body.tpl" id is_editable=is_editable languages=languages 
-			explanation=_"This text is shown as an introduction to the survey." 
+		{% catinclude "_admin_edit_body.tpl" id is_editable=is_editable languages=languages
+			explanation=_"This text is shown as an introduction to the survey."
 		%}
 		{% include "_admin_survey_edit_feedback.tpl" %}
 		{% catinclude "_admin_edit_depiction.tpl" id is_editable=is_editable languages=languages %}
@@ -34,9 +34,13 @@
 
 	 <div class="tab-pane" id="survey-results">
 		<div class="form-group">
-			{% if m.survey.is_allowed_results_download[id] %}
-				<a id="{{ #download }}" class="btn btn-default btn-xs" href="{% url survey_results_download id=id %}">{_ Download CSV results _}</a>
-				{% wire id=#download propagate 
+			{% if m.survey.is_allowed_results_download[id] and m.modules.active.mod_export %}
+				<a id="{{ #download1 }}" class="btn btn-default btn-xs" href="{% url survey_results_download type='csv' id=id %}">{_ Download CSV _}</a>
+				{% wire id=#download1 propagate
+						action={alert text=_"Download will start in the background. Please check your download window."}
+				%}
+				<a id="{{ #download2 }}" class="btn btn-default btn-xs" href="{% url survey_results_download type='xlsx' id=id %}">{_ Download Excel _}</a>
+				{% wire id=#download2 propagate
 						action={alert text=_"Download will start in the background. Please check your download window."}
 				%}
 			{% endif %}
@@ -53,7 +57,7 @@
 	window.z_survey_editor = new ZSurveyEditor();
 {% endjavascript %}
 
-{% wire name="insert-block" 
+{% wire name="insert-block"
 		delegate=`survey_admin`
 		postback={insert_block id=id}
 %}

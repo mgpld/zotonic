@@ -1,7 +1,7 @@
-%% @copyright 2015 Marc Worrell
+%% @copyright 2015-2016 Marc Worrell
 %% @doc Expansion of all user groups and content groups, used to fill acl lookup tables.
 
-%% Copyright 2015 Marc Worrell
+%% Copyright 2015-2016 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 -export([
     expand/2,
     expand_rsc/2,
+    expand_collab/2,
     test/0
 ]).
 
@@ -55,17 +56,29 @@
 expand(State, Context) ->
     GroupTree = m_hierarchy:menu(content_group, Context),
     UserTree = m_hierarchy:menu(acl_user_group, Context),
-    {tree_ids(GroupTree),
+    RscRules = m_acl_rule:all_rules(rsc, State, Context),
+    RuleGroups = rule_content_groups(RscRules),
+    {lists:usort(tree_ids(GroupTree) ++ RuleGroups),
      tree_ids(UserTree),
      expand_group_path(UserTree),
      expand_module(State, UserTree, Context)
-        ++ expand_rsc(State, GroupTree, UserTree, Context)}.
+        ++ expand_collab(State, Context)
+        ++ expand_rsc(State, RscRules, GroupTree, UserTree, Context)}.
+
+rule_content_groups(Rules) ->
+    lists:flatten([
+        case proplists:get_value(content_group_id, R) of
+            undefined -> [];
+            Id -> Id
+        end
+        || R <- Rules
+    ]).
 
 -spec expand_rsc(edit|publish, #context{}) -> list(rule()).
 expand_rsc(State, Context) ->
     GroupTree = m_hierarchy:menu(content_group, Context),
     UserTree = m_hierarchy:menu(acl_user_group, Context),
-    expand_rsc(State, GroupTree, UserTree, Context).
+    expand_rsc(State, m_acl_rule:all_rules(rsc, State, Context), GroupTree, UserTree, Context).
 
 -spec expand_module(edit|publish, list(), #context{}) -> list(module_rule()).
 expand_module(State, UserTree, Context) ->
@@ -73,15 +86,23 @@ expand_module(State, UserTree, Context) ->
     Modules1 = [ {<<>>, Modules} | [ {z_convert:to_binary(M),[M]} || M <- Modules ] ],
     RuleRows = resort_deny_rules(m_acl_rule:all_rules(module, State, Context)),
     Rules = expand_rule_rows(module, Modules1, RuleRows, Context),
-    [ {M,A,GId,IsAllow} || {x,{M,A,_IsOwner,IsAllow},GId} <- expand_rules([{x,[]}], Rules, UserTree) ].
+    [ {M,A,GId,IsAllow} || {x,{M,A,_IsOwner,IsAllow},GId} <- expand_rules([{x,[]}], Rules, UserTree, Context) ].
 
--spec expand_rsc(edit|publish, list(), list(), #context{}) -> list(rsc_rule()).
-expand_rsc(State, GroupTree, UserTree, Context) ->
+-spec expand_collab(edit|publish, #context{}) -> list(rsc_rule()).
+expand_collab(State,Context) ->
     CategoryTree = m_category:menu(Context),
-    RuleRows = resort_deny_rules(m_acl_rule:all_rules(rsc, State, Context)),
+    RuleRows = resort_deny_rules(m_acl_rule:all_rules(collab, State, Context)),
     Cs = [{undefined, tree_ids(CategoryTree)} | tree_expand(CategoryTree) ],
     Rules = expand_rule_rows(category_id, Cs, RuleRows, Context),
-    expand_rules(GroupTree, Rules, UserTree).
+    [ {collab, Action, collab} || {undefined, Action, undefined} <- Rules ].
+
+-spec expand_rsc(edit|publish, list(), list(), list(), #context{}) -> list(rsc_rule()).
+expand_rsc(_State, RscRules, GroupTree, UserTree, Context) ->
+    CategoryTree = m_category:menu(Context),
+    RuleRows = resort_deny_rules(RscRules),
+    Cs = [{undefined, tree_ids(CategoryTree)} | tree_expand(CategoryTree) ],
+    Rules = expand_rule_rows(category_id, Cs, RuleRows, Context),
+    expand_rules(GroupTree, Rules, UserTree, Context).
 
 expand_rule_rows(category_id, Cs, RuleRows, Context) ->
     NonMetaCs = remove_meta_category(Cs, Context),
@@ -113,12 +134,12 @@ expand_rule_row(Prop, Row, Cs, NonMetaCs, Context) ->
     CIdsEdit = maybe_filter_meta(ContentGroupName, Prop, PropId, Cs, NonMetaCs, Context),
     CIdsView = proplists:get_value(PropId, Cs, [PropId]),
     lists:flatten(
-        [ 
+        [
             [
-              {ContentGroupId, {CId, Action, IsOwner, IsAllow}, UserGroupId} 
+              {ContentGroupId, {CId, Action, IsOwner, IsAllow}, UserGroupId}
               || CId <- select_cids(Action, CIdsEdit, CIdsView)
             ]
-            || Action <- Actions 
+            || Action <- Actions
         ]).
 
 select_cids(view, _Edit, View) -> View;
@@ -135,14 +156,22 @@ maybe_filter_meta(_ContentGroupName, _Prop, PropId, Cs, _NonMetaCs, _Context) ->
     proplists:get_value(PropId, Cs, [PropId]).
 
 %% @doc Given two id lists, return all possible combinations.
-expand_rules(TreeA, Rules, TreeB) ->
+expand_rules(TreeA, Rules, TreeB, _Context) ->
     As = [{undefined, tree_ids(TreeA)} | tree_expand(TreeA) ],
     Bs = tree_expand(TreeB),
     lists:flatten(
         lists:map(fun({A, Pred, B}) ->
-                      {A, A1} = lists:keyfind(A, 1, As),
-                      {B, B1} = lists:keyfind(B, 1, Bs),
-                      expand_rule(A1, Pred, B1)
+                        case {lists:keyfind(A, 1, As), lists:keyfind(B, 1, Bs)} of
+                            {{A, A1}, {B, B1}} ->
+                                expand_rule(A1, Pred, B1);
+                            {false, {B, B1}} ->
+                                % acl_collaboration_groups are not part of the group hierarchy
+                                expand_rule([A], Pred, B1);
+                            Other ->
+                                lager:warning("Tree expand of {~p, ~p, ~p} returned ~p",
+                                              [A, Pred, B, Other]),
+                                []
+                        end
                   end,
                   Rules)).
 

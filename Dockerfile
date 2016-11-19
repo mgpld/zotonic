@@ -1,34 +1,27 @@
-FROM debian
-MAINTAINER Andreas Stenius git@astekk.se
+FROM zotonic/erlang
 
-RUN apt-get update                                                                                 && \
-    apt-get install -y erlang build-essential postgresql imagemagick exif wget git                 && \
-    useradd --system --create-home zotonic                                                         && \
-    printf "# Zotonic settings \n\
-local   all         zotonic                           ident \n\
-host    all         zotonic     127.0.0.1/32          md5 \n\
-host    all         zotonic     ::1/128               md5" >> /etc/postgresql/9.4/main/pg_hba.conf && \
-    /etc/init.d/postgresql start                                                                   && \
-    echo "CREATE USER zotonic WITH PASSWORD 'zotonic'; \
-          ALTER ROLE zotonic WITH CREATEDB; \
-          CREATE DATABASE zotonic WITH OWNER = zotonic ENCODING = 'UTF8'; \
-          \c zotonic \
-          CREATE LANGUAGE \"plpgsql\";" | su -l postgres -c psql
+ADD . /opt/zotonic
+WORKDIR /opt/zotonic
 
-EXPOSE 8000
-ENV ERL_FLAGS -noinput
-ENTRYPOINT ["./bin/zotonic"]
-CMD ["debug"]
+COPY docker/zotonic.config /etc/zotonic/zotonic.config
 
-WORKDIR /home/zotonic
-ADD . /home/zotonic/
+RUN sed -f docker/erlang.config.sed priv/erlang.config.in > /etc/zotonic/erlang.config \
+    && adduser -S -h /tmp -H -D zotonic \
+    && chown -R zotonic /opt/zotonic/priv
 
-RUN make                                      && \
-    su -l zotonic -c 'bin/zotonic configfile' && \
-    mkdir /etc/zotonic                        && \
-    mv .zotonic /etc/zotonic/config           && \
-    mv user /etc/zotonic/user                 && \
-    chown -R zotonic:zotonic /home/zotonic /etc/zotonic
+# Note: dumb-init and gosu are pulled from edge; remove that when upgrading to an alpine release that
+# includes those packages.
+ENV BUILD_APKS="ca-certificates wget curl make gcc musl-dev g++ git"
+RUN apk add --no-cache --virtual build-deps $BUILD_APKS \
+    && apk add --no-cache bash bsd-compat-headers file gettext imagemagick \
+    && apk add --no-cache --repository http://dl-3.alpinelinux.org/alpine/edge/community/ dumb-init \
+    && apk add --no-cache --repository http://dl-3.alpinelinux.org/alpine/edge/testing/ gosu \
+    && DEBUG=1 make \
+    && apk del build-deps
 
-USER zotonic
-VOLUME /etc/zotonic
+# Use dumb-init to reap zombies, catch signals, and all the other stuff pid 1 should do.
+ENTRYPOINT ["/usr/bin/dumb-init", "-c", "--", "/opt/zotonic/docker/docker-entrypoint.sh"]
+
+CMD ["start-nodaemon"]
+
+EXPOSE 8000 8443

@@ -32,14 +32,13 @@
     event/2,
     observe_rsc_get/3,
     observe_rsc_delete/2,
-    observe_pivot_related/3,
     observe_rsc_update_done/2,
     observe_admin_menu/3,
     manage_schema/2
     ]).
 
 event(#submit{message={delete_move, Args}}, Context) ->
-    ToGroupId = z_convert:to_integer(z_context:get_q_validated("content_group_id", Context)),
+    ToGroupId = z_convert:to_integer(z_context:get_q_validated(<<"content_group_id">>, Context)),
     {id, Id} = proplists:lookup(id, Args),
     Ids = [ Id | m_hierarchy:children('content_group', Id, Context) ],
     case deletable(Ids, Context) andalso z_acl:rsc_editable(ToGroupId, Context) of
@@ -148,7 +147,7 @@ observe_rsc_get(#rsc_get{}, Props, Context) ->
     case proplists:get_value(content_group_id, Props) of
         undefined ->
             [
-                {content_group_id, 
+                {content_group_id,
                         case m_category:is_meta(proplists:get_value(category_id, Props), Context) of
                             true -> m_rsc:rid(system_content_group, Context);
                             false -> m_rsc:rid(default_content_group, Context)
@@ -172,7 +171,7 @@ observe_rsc_delete(#rsc_delete{id=Id, is_a=IsA}, Context) ->
     end.
 
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_content_groups,
                 parent=admin_structure,
@@ -181,24 +180,8 @@ observe_admin_menu(admin_menu, Acc, Context) ->
                 visiblecheck={acl, use, mod_admin_config}}
      |Acc].
 
-observe_pivot_related(#pivot_related{id=Id}, Ids, Context) ->
-    case m_rsc:p_no_acl(Id, content_group_id, Context) of
-        undefined ->
-            Ids;
-        CId ->
-            lists:foldl(
-                fun(PId,Acc) ->
-                    case lists:member(PId, Acc) of
-                        true -> Acc;
-                        false -> [PId|Acc]
-                    end
-                end,
-                Ids,
-                [CId | m_hierarchy:parents(content_group, CId, Context) ])
-    end.
-
 observe_rsc_update_done(#rsc_update_done{pre_is_a=PreIsA, post_is_a=PostIsA}, Context) ->
-    case  lists:member('content_group', PreIsA) 
+    case  lists:member('content_group', PreIsA)
         orelse lists:member('content_group', PostIsA)
     of
         true -> m_hierarchy:ensure(content_group, Context);

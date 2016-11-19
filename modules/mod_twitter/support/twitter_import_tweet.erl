@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,8 +37,8 @@ import_tweet_1({User}, Tweet, Context) ->
     TweetId = proplists:get_value(<<"id">>, Tweet),
     UniqueName = <<"tweet_", (z_convert:to_binary(TweetId))/binary>>,
     import_rsc(m_rsc:rid(UniqueName, Context), TweetId, UniqueName, User, Tweet, Context);
-import_tweet_1(_NoUser, Tweet, Context) ->
-    lager:info("[~p] Twitter: received unknown tweet data: ~p", [z_context:site(Context), Tweet]).
+import_tweet_1(_NoUser, Tweet, _Context) ->
+    lager:info("Twitter: received unknown tweet data: ~p", [Tweet]).
 
 import_rsc(_RscId, 0, _UniqueName, _User, _Tweet, _Context) ->
     % 2016-02-12: Twitter keeps pushing a tweet with id 0, drop it here.
@@ -50,13 +50,13 @@ import_rsc(undefined, TweetId, UniqueName, User, Tweet, Context) ->
             do_import_rsc(TweetId, ImportRsc, Context);
         undefined ->
             ScreenName = proplists:get_value(<<"screen_name">>, User),
-            lager:debug("[~p] Twitter: ignored tweet ~p by @~s", [z_context:site(Context), TweetId, ScreenName]),
+            lager:debug("Twitter: ignored tweet ~p by @~s", [TweetId, ScreenName]),
             ok;
         _Handled ->
             ok
     end;
-import_rsc(_RscId, TweetId, _UniqueName, _User, _Tweet, Context) ->
-    lager:debug("[~p] Twitter: ignored duplicate tweet ~p", [z_context:site(Context), TweetId]).
+import_rsc(_RscId, TweetId, _UniqueName, _User, _Tweet, _Context) ->
+    lager:debug("Twitter: ignored duplicate tweet ~p", [TweetId]).
 
 
 do_import_rsc(TweetId, ImportRsc, Context) ->
@@ -74,7 +74,7 @@ do_import_rsc(TweetId, ImportRsc, Context) ->
              end,
     UserId = ImportRsc#import_resource.user_id,
     maybe_author(Result, UserId, AdminContext),
-    lager:debug("[~p] Twitter: imported tweet ~p for user_id ~p as ~p", [z_context:site(Context), TweetId, UserId, Result]),
+    lager:debug("Twitter: imported tweet ~p for user_id ~p as ~p", [TweetId, UserId, Result]),
     Result.
 
 maybe_author({ok, RscId}, UserId, Context) ->
@@ -133,7 +133,7 @@ first_media_props([Url|Urls], Context) ->
     case z_media_import:url_import_props(Url, Context) of
         {ok, []} ->
             first_media_props(Urls, Context);
-        {ok, [MI|_]} -> 
+        {ok, [MI|_]} ->
             {ok, MI};
         {error, _} ->
             first_media_props(Urls, Context)
@@ -141,14 +141,14 @@ first_media_props([Url|Urls], Context) ->
 
 extract_language(Tweet, Context) ->
     case proplists:get_value(<<"lang">>, Tweet) of
-        undefined -> 
+        undefined ->
             z_context:language(Context);
         Lang ->
-            [Iso|_] = binary:split(Lang, <<"-">>),
-            case z_trans:to_language_atom(Iso) of
+            [LanguageCode|_] = binary:split(Lang, <<"-">>),
+            case z_language:to_language_atom(LanguageCode) of
                 {ok, Code} ->
                     Enabled = m_translation:language_list_enabled(Context),
-                    case proplists:is_defined(Iso, Enabled) of
+                    case proplists:is_defined(LanguageCode, Enabled) of
                         true -> Code;
                         false -> z_context:language(Context)
                     end;

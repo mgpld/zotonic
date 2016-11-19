@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -51,17 +51,17 @@ event(#postback{message={edit_basics, RscId, EdgeId, Template, Actions, Callback
                                 {_, _, OId} = m_edge:get_triple(EdgeId, Context),
                                 OId
                         end;
-                    _ -> 
+                    _ ->
                         RscId
                end,
-    TargetId1 = z_context:get_q("element_id", Context, TargetId),
+    TargetId1 = z_context:get_q(<<"element_id">>, Context, TargetId),
     Vars = [
         {delegate, atom_to_list(?MODULE)},
         {id, ObjectId},
         {edge_id, EdgeId},
         {template, Template},
         {update_element, TargetId1},
-        {is_update, z_convert:to_bool(z_context:get_q("is_update", Context))},
+        {is_update, z_convert:to_bool(z_context:get_q(<<"is_update">>, Context))},
         {actions, Actions},
         {callback, Callback},
         {center, 0}
@@ -77,7 +77,7 @@ event(#submit{message={rsc_edit_basics, Args}}, Context) ->
 
     Post = z_context:get_q_all_noz(Context),
     Props = controller_admin_edit:filter_props(Post),
-    Props1 = maybe_add_language(Id, proplists:delete("id", Props), Context),
+    Props1 = maybe_add_language(Id, proplists:delete(<<"id">>, Props), Context),
 
     case m_rsc:update(Id, Props1, Context) of
         {ok, _} ->
@@ -97,8 +97,8 @@ event(#submit{message={rsc_edit_basics, Args}}, Context) ->
                             window -> Context;
                             undefined -> Context;
                              UpdateElt ->
-                                Html = z_template:render(case proplists:get_value(template, Args) of 
-                                                            undefined -> "_rsc_edge.tpl"; 
+                                Html = z_template:render(case proplists:get_value(template, Args) of
+                                                            undefined -> "_rsc_edge.tpl";
                                                             X -> X
                                                           end,
                                                           Vars,
@@ -112,7 +112,7 @@ event(#submit{message={rsc_edit_basics, Args}}, Context) ->
             %% wire any custom actions
             Context3 = case proplists:get_value(callback, Args) of
                             undefined -> Context2;
-                            Callback -> 
+                            Callback ->
                                 Title = m_rsc:p(Id, title, Context2),
                                 z_render:wire({script, [{script, [
                                                 Callback,
@@ -127,7 +127,7 @@ event(#submit{message={rsc_edit_basics, Args}}, Context) ->
     end.
 
 maybe_add_language(Id, Props, Context) ->
-    case proplists:is_defined("language", Props) of
+    case proplists:is_defined(<<"language">>, Props) of
         true ->
             Props;
         false ->

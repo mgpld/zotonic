@@ -2,7 +2,8 @@
 zotonic.pid
 zotonic.tmproj
 erl_crash.dump
-rebar
+ttb_last_config
+rebar3
 
 *~
 
@@ -21,16 +22,14 @@ rebar
 ebin/
 deps/
 
-/src/erlydtl_parser.erl
-/src/erlydtl/erlydtl_parser.erl
-/src/tests/erlydtl/rendered_output/
-
 /priv/*.config
 
 /priv/log/
 /priv/mnesia/
 /priv/sites/default/files/
 /priv/modules/
+/priv/translations/template/
+/priv/translations/zotonic.pot
 
 /modules/*/translations/template/*.pot
 
@@ -38,3 +37,7 @@ deps/
 /user/*
 
 .rebar
+_build
+_checkouts
+/log/
+compile_commands.json

@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -52,14 +52,14 @@ observe_dispatch(#dispatch{path=Path}, Context) ->
     end.
 
 
-observe_admin_menu(admin_menu, Acc, Context) ->
+observe_admin_menu(#admin_menu{}, Acc, Context) ->
     [
      #menu_item{id=admin_custom_redirect,
                 parent=admin_modules,
                 label=?__("Domains and redirects", Context),
                 url={admin_custom_redirect},
                 visiblecheck={acl, use, mod_custom_redirect}}
-     
+
      |Acc].
 
 event(#submit{message=custom_redirects}, Context) ->
@@ -70,7 +70,7 @@ event(#submit{message=custom_redirects}, Context) ->
             ok = save_rows(Rows, Context),
             z_render:wire({reload, []}, Context);
         false ->
-            z_render:growl_error(?__("You are not allowed to change this.", Context), Context) 
+            z_render:growl_error(?__("You are not allowed to change this.", Context), Context)
     end.
 
 manage_schema(Version, Context) ->
@@ -92,11 +92,11 @@ select_best([{Path, _, _}=New|Rest], BestSize, Best) ->
 
 
 group_rows(Qs) ->
-    Ids = get_prefix("id", Qs),
-    Hosts = get_prefix("host", Qs),
-    Paths = get_prefix("path", Qs),
-    Redirects = get_prefix("redirect", Qs),
-    Perms = get_prefix("is_permanent", Qs),
+    Ids = get_prefix(<<"id">>, Qs),
+    Hosts = get_prefix(<<"host">>, Qs),
+    Paths = get_prefix(<<"path">>, Qs),
+    Redirects = get_prefix(<<"redirect">>, Qs),
+    Perms = get_prefix(<<"is_permanent">>, Qs),
     zip([Ids, Hosts, Paths, Redirects, Perms]).
 
 zip(Lists) ->
@@ -129,7 +129,7 @@ do_save_rows([{Id,Host,Path,Redirect,IsPermanent}|Rows], Acc, Context) ->
         {host, Host1},
         {path, Path1},
         {redirect, z_string:trim(Redirect)},
-        {is_permanent, z_convert:to_bool(IsPermanent)} 
+        {is_permanent, z_convert:to_bool(IsPermanent)}
     ],
     case do_save_redirect(Id, Host1, Path1, Props, Context) of
         skip -> do_save_rows(Rows, Acc, Context);
@@ -137,9 +137,9 @@ do_save_rows([{Id,Host,Path,Redirect,IsPermanent}|Rows], Acc, Context) ->
     end.
 
 
-do_save_redirect(_Id, "", "", _Props, _Context) ->
+do_save_redirect(_Id, <<>>, <<>>, _Props, _Context) ->
     skip;
-do_save_redirect("", Host, Path, Props, Context) ->
+do_save_redirect(<<>>, Host, Path, Props, Context) ->
     case m_custom_redirect:get(Host, Path, Context) of
         undefined ->
             m_custom_redirect:insert(Props, Context);
@@ -168,7 +168,7 @@ get_prefix(Prefix, Qs) ->
 get_prefix(_Prefix, Acc, []) ->
     lists:reverse(Acc);
 get_prefix(Prefix, Acc, [{Q,_}=QV|Qs]) ->
-    case lists:prefix(Prefix, Q) of
+    case binary:longest_common_prefix([Prefix, Q]) == size(Prefix) of
         true -> get_prefix(Prefix, [QV|Acc], Qs);
         false -> get_prefix(Prefix, Acc, Qs)
     end.

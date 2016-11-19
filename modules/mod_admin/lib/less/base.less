@@ -29,6 +29,16 @@ p {
     margin: 0 0 @baseMargin 0;
 }
 
+table {
+    td, th {
+        vertical-align: top;
+    }
+}
+
+iframe, video, audio {
+    max-width: 100%;
+}
+
 // zotonic specific
 
 .unpublished {
@@ -51,7 +61,7 @@ p {
     color: @textColorLight;
 }
 
-.z-button-row {  
+.z-button-row {
     // see also bootstrap-overrides.less
     #3L > .clearfix;
 
@@ -63,6 +73,10 @@ p {
 .admin-container {
     margin: @baseMargin;
     margin-top: @topbarHeight + @topbarBottomMargin;
+}
+
+footer {
+    margin: 20px 0;
 }
 
 body.noframe > .admin-container {
@@ -101,11 +115,11 @@ p .z-btn-help {
 .admin-header {
     margin-bottom: 24px;
     #3L > .clearfix;
-    
+
     > :last-child {
         margin-bottom: 0;
     }
-    
+
     h2 {
         margin-top: 0;
         margin-bottom: 0;

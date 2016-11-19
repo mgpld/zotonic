@@ -1,3 +1,4 @@
+.. _reference:
 
 Reference
 =========
@@ -11,16 +12,15 @@ All the nitty gritty details when the big picture has settled.
    modules/index
    actions/index
    controllers/index
-   dispatch/index
    filters/index
+   tags/index
+   global-variables
    models/index
    services/index
-   tags/index
-   scomps/index
    validators/index
    directory-structure
    icons
-   notifications
+   notifications/index
    installation/requirements
    configuration/zotonic-configuration
    configuration/site-configuration
@@ -28,13 +28,9 @@ All the nitty gritty details when the big picture has settled.
    cli/index
    transport
    troubleshooting
-   *
 
 EDoc reference
 --------------
 
 There are reference docs built from the source code using edoc, and may be browsed online at:
 http://zotonic.com/edoc/core for the core docs, and http://zotonic.com/edoc/modules for the module docs.
-
-
-.. todolist::

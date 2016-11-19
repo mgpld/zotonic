@@ -1,16 +1,16 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009-2015 Marc Worrell
+%% @copyright 2009-2016 Marc Worrell, Arjan Scherpenisse
 %%
 %% @doc Initialize the database with start data.
 
-%% Copyright 2009-2015 Marc Worrell
+%% Copyright 2009-2016 Marc Worrell, Arjan Scherpenisse
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,36 +31,45 @@
 
 %% @doc Insert boot data into the database.
 %% @spec install(Host::atom(), Connection) -> ok
-install(Host, Context) ->
-    lager:info("~p: Install start.", [Host]),
+install(Site, Context) ->
+    lager:info("~p: Install start.", [Site]),
     ok = install_category(Context),
     ok = install_rsc(Context),
     ok = install_identity(Context),
     ok = install_predicate(Context),
+    ok = install_skeleton_modules(Context),
     z_db:equery("SELECT setval('rsc_id_seq', m) FROM (select 1 + max(id) as m from rsc) sub", Context),
-    lager:info("~p: Install done.", [Host]),
+    lager:info("~p: Install done.", [Site]),
     ok.
 
 %% @doc Install all modules for the site.
-%% The list of modules is read from either the site config file, 
-%% under the key <tt>install_modules</tt>, or if that key is not found
-%% in the site config file, a list of modules is installed based
-%% on the skeleton used to create the site.
+%% The list of modules is read from either the site config file,
+%% under the key <tt>install_modules</tt>.
 -spec install_modules(#context{}) -> ok.
 install_modules(Context) ->
-    Host = Context#context.host,
-    {ok, Config} = z_sites_manager:get_site_config(Host),
-    Modules = [Host
-               |proplists:get_value(
-                  install_modules, 
-                  Config,
-                  get_skeleton_modules(
-                    proplists:get_value(skeleton, Config))
-                 )
-              ],
+    Site = z_context:site(Context),
+    {ok, Config} = z_sites_manager:get_site_config(Site),
+    Modules = [Site | proplists:get_value(install_modules, Config, [])],
     [install_module(M, Context) || M <- Modules],
     ok.
 
+%% @doc Install all skeleton modules for the site.
+%% If the <tt>install_modules</tt> is not defined then the standard list
+%% of modules from the skeleton is installed.
+-spec install_skeleton_modules(#context{}) -> ok.
+install_skeleton_modules(Context) ->
+    Site = Context#context.site,
+    {ok, Config} = z_sites_manager:get_site_config(Site),
+    case proplists:get_value(install_modules, Config) of
+        None when None =:= []; None =:= undefined ->
+            install_module({skeleton, proplists:get_value(skeleton, Config)}, Context),
+            ok;
+        _ ->
+            ok
+    end.
+
+install_module({skeleton, undefined}, _C) ->
+    ok;
 install_module({skeleton, S}, C) ->
     [install_module(M, C) || M <- get_skeleton_modules(S)];
 install_module(M, Context) when is_atom(M); is_binary(M); is_list(M) ->
@@ -73,48 +82,45 @@ install_module(M, Context) when is_atom(M); is_binary(M); is_list(M) ->
 
 -spec get_skeleton_modules(Skeleton::atom()) -> list().
 get_skeleton_modules(empty) ->
-    [
-     mod_base,
-     mod_menu,
-     mod_oauth,
-     mod_search,
-     mod_oembed,
-     mod_signal,
-     mod_mqtt,
-     mod_logging,
-     mod_l10n,
-
-     mod_authentication,
-     mod_acl_adminonly,
-     mod_editor_tinymce,
-
-     mod_admin,
-     mod_admin_category,
-     mod_admin_config,
-     mod_admin_identity,
-     mod_admin_modules,
-     mod_admin_predicate
+    base_modules();
+get_skeleton_modules(basesite) ->
+    base_modules() ++ [
+        mod_base_site
     ];
 get_skeleton_modules(blog) ->
+    base_modules() ++ [
+        mod_atom_feed,
+        mod_base_site,
+        mod_facebook,
+        mod_twitter,
+        mod_instagram,
+        mod_comment
+    ];
+get_skeleton_modules(_) ->
+    %% nodb | undefined | OtherUnknown -> []
+    [].
+
+%% The basic set of modules for any database based site
+base_modules() ->
     [
      mod_base,
-     mod_base_site,
+     mod_bootstrap,
      mod_menu,
      mod_oauth,
      mod_search,
      mod_oembed,
-     mod_atom_feed,
-     mod_translation,
-     mod_signal,
      mod_logging,
+
+     mod_signal,
      mod_mqtt,
+
+     mod_translation,
      mod_l10n,
 
-     mod_seo,
-     mod_seo_sitemap,
-
      mod_authentication,
-     mod_acl_adminonly,
+     mod_content_groups,
+     mod_acl_user_groups,
+
      mod_editor_tinymce,
 
      mod_admin,
@@ -123,22 +129,30 @@ get_skeleton_modules(blog) ->
      mod_admin_identity,
      mod_admin_modules,
      mod_admin_predicate,
+     mod_admin_merge,
 
-     mod_comment,
-     mod_bootstrap
-    ];
-get_skeleton_modules(_) ->
-    %% nodb | undefined | OtherUnknown -> []
-    []. 
+     mod_seo,
+     mod_seo_sitemap,
+
+     mod_email_status,
+
+     mod_media_exif,
+     mod_video_embed,
+     mod_video,
+     mod_oembed,
+
+     mod_development
+    ].
+
 
 
 install_category(C) ->
     lager:info("Inserting categories"),
     %% The egg has to lay a fk-checked chicken here, so the insertion order is sensitive.
 
-    %% 1. Insert the categories "meta" and "category" 
+    %% 1. Insert the categories "meta" and "category"
     {ok, 2} = z_db:equery("
-                    insert into hierarchy (name, id, parent_id, nr, lvl, lft, rght) 
+                    insert into hierarchy (name, id, parent_id, nr, lvl, lft, rght)
                     values
                         ('$category', 115, null, 90000000, 1, 90000000, 92000000),
                         ('$category', 116, null, 91000000, 2, 91000000, 91000000)
@@ -151,17 +165,17 @@ install_category(C) ->
     {ok, 1} = z_db:equery("
             insert into rsc (id, is_protected, visible_for, category_id, name, uri, props)
             values (116, true, 0, 116, 'category', $1, $2)
-            ", [    undefined, 
+            ", [    undefined,
                     ?DB_PROPS([{title, {trans, [{en, <<"Category">>}, {nl, <<"Categorie">>}]}}])
                 ], C),
 
     {ok, 1} = z_db:equery("
             insert into rsc (id, is_protected, visible_for, category_id, name, uri, props)
             values (115, true, 0, 116, 'meta', $1, $2)
-            ", [    undefined, 
+            ", [    undefined,
                     ?DB_PROPS([{title, {trans, [{en, <<"Meta">>}, {nl, <<"Meta">>}]}}])
                 ], C),
-    
+
     %% Now that we have the category "category" we can insert all other categories.
     Cats = [
         {101,undefined,  1,1,1,1, other,       true,  undefined,                                   [{title, {trans, [{en, <<"Uncategorized">>}, {nl, <<"Zonder categorie">>}]}}] },
@@ -179,7 +193,7 @@ install_category(C) ->
 
         {103,undefined,  9,1,9,9, artifact,    false, "http://purl.org/dc/dcmitype/PhysicalObject",[{title, {trans, [{en, <<"Artifact">>}, {nl, <<"Artefact">>}]}}] },
 
-        {110,undefined,  10,1,10,14, media,       true,  "http://purl.org/dc/dcmitype/Image",         [{title, {trans, [{en, <<"Media">>}, {nl, <<"Media">>}]}}] }, 
+        {110,undefined,  10,1,10,14, media,       true,  "http://purl.org/dc/dcmitype/Image",         [{title, {trans, [{en, <<"Media">>}, {nl, <<"Media">>}]}}] },
             {111,110,    11,2,11,11, image,       true,  "http://purl.org/dc/dcmitype/StillImage",    [{title, {trans, [{en, <<"Image">>}, {nl, <<"Afbeelding">>}]}}] },
             {112,110,    12,2,12,12, video,       true,  "http://purl.org/dc/dcmitype/MovingImage",   [{title, {trans, [{en, <<"Video">>}, {nl, <<"Video">>}]}}] },
             {113,110,    13,2,13,13, audio,       true,  "http://purl.org/dc/dcmitype/Sound",         [{title, {trans, [{en, <<"Audio">>}, {nl, <<"Geluid">>}]}}] },
@@ -194,7 +208,7 @@ install_category(C) ->
         % 115. Meta (see above)
             % 116. Category (see above)
             {117,115,    92,2,92,92, predicate,   true,  undefined,                                   [{title, {trans, [{en, <<"Predicate">>},     {nl, <<"Predikaat">>}]}}] }
-        
+
         % Next id: 124
     ],
 
@@ -205,12 +219,12 @@ install_category(C) ->
                 ", [ Id, Protected, Name, Uri, ?DB_PROPS(Props) ], C),
         {ok, 1} = z_db:equery("
                 insert into hierarchy (name, id, parent_id, nr, lvl, lft, rght)
-                values ('$category', $1, $2, $3, $4, $5, $6)", 
+                values ('$category', $1, $2, $3, $4, $5, $6)",
                 [Id, ParentId, Nr*1000000, Lvl, Left*1000000, Right*1000000-1], C)
     end,
     lists:foreach(InsertCatFun, Cats),
     ok.
-    
+
 
 %% @doc Install some initial resources, most important is the system administrator
 %% @todo Add the hostname to the uri
@@ -220,7 +234,7 @@ install_rsc(C) ->
         % id  vsfr  cat   protect name,         props
         [   1,  0,  102,  true,    "administrator",   ?DB_PROPS([{title,<<"Site Administrator">>}]) ]
     ],
-    
+
     [ {ok,1} = z_db:equery("
             insert into rsc (id, visible_for, category_id, is_protected, name, props)
             values ($1, $2, $3, $4, $5, $6)
@@ -237,7 +251,7 @@ install_identity(C) ->
         insert into identity (rsc_id, type, key, is_unique, propb)
         values (1, 'username_pw', 'admin', true, $1)", [{term, Hash}], C),
     ok.
-    
+
 
 %% @doc Install some initial predicates, this list should be extended with common and useful predicates
 %% See http://dublincore.org/documents/dcmi-terms/
@@ -256,7 +270,7 @@ install_predicate(C) ->
     ],
 
     CatId   = z_db:q1("select id from rsc where name = 'predicate'", C),
-    
+
     [ {ok,1} = z_db:equery("
             insert into rsc (id, visible_for, is_protected, name, uri, props, category_id, is_published, creator_id, modifier_id)
             values ($1, 0, $2, $3, $4, $5, $6, true, 1, 1)
@@ -284,8 +298,8 @@ install_predicate(C) ->
 
         [310, true,  120]  %  collection -> haspart -> _
     ],
-    
+
     [ {ok, 1} = z_db:equery("
-            insert into predicate_category (predicate_id, is_subject, category_id) 
+            insert into predicate_category (predicate_id, is_subject, category_id)
             values ($1, $2, $3)", OS, C) || OS <- ObjSubj ],
     ok.

@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -59,7 +59,7 @@ identify(File, MediumFilename, OriginalFilename, Context) ->
             end
     end,
     z_depcache:memo(F, {media_identify, MediumFilename}, ?DAY, [media_identify], Context).
-    
+
 
 
 %% @doc Fetch information about a file, returns mime, width, height, type, etc.  First checks if a module
@@ -74,7 +74,7 @@ identify_file(File, OriginalFilename, Context) ->
     case z_notifier:first(#media_identify_file{filename=File, original_filename=OriginalFilename, extension=Extension}, Context) of
         {ok, Props} ->
 			{ok, Props};
-        undefined -> 
+        undefined ->
             identify_file_direct(File, OriginalFilename)
 	end.
 
@@ -86,12 +86,12 @@ maybe_extension(_File, OriginalFilename) ->
 maybe_extension(undefined) ->
     "";
 maybe_extension(Filename) ->
-    z_convert:to_list(z_string:to_lower(filename:extension(Filename))). 
+    z_convert:to_list(z_string:to_lower(filename:extension(Filename))).
 
 %% @doc Fetch information about a file, returns mime, width, height, type, etc.
 -spec identify_file_direct(File::string(), OriginalFilename::string()) -> {ok, Props::list()} | {error, term()}.
 identify_file_direct(File, OriginalFilename) ->
-    maybe_identify_extension(identify_file_direct_1(File, OriginalFilename), OriginalFilename).
+    check_acceptable(File, maybe_identify_extension(identify_file_direct_1(File, OriginalFilename), OriginalFilename)).
 
 identify_file_direct_1(File, OriginalFilename) ->
     {OsFamily, _} = os:type(),
@@ -108,6 +108,14 @@ identify_file_direct_1(File, OriginalFilename) ->
 				_Mime -> {ok, Props}
 			end
 	end.
+
+check_acceptable(_File, {error, _} = Error) ->
+    Error;
+check_acceptable(File, {ok, Props}) ->
+    case z_media_sanitize:is_file_acceptable(File, Props) of
+        false -> {ok, [{mime, "application/octet-stream"}]};
+        true -> {ok, Props}
+    end.
 
 maybe_identify_extension({error, "identify error: "++_}, OriginalFilename) ->
     {ok, [ {mime, guess_mime(OriginalFilename)} ]};
@@ -132,8 +140,8 @@ identify_file_unix(Cmd, File, OriginalFilename) ->
                         ++" -b --mime-type "
                         ++ z_utils:os_filename(File))),
     case re:run(Mime, "^[a-zA-Z0-9_\\-\\.]+/[a-zA-Z0-9\\.\\-_]+$") of
-        nomatch -> 
-            case Mime of 
+        nomatch ->
+            case Mime of
                 "CDF V2 Document, corrupt:" ++ _ ->
                     % Probably just a semi-illegal variation on a MS Office file, use the extension
                     case guess_mime(OriginalFilename) of
@@ -226,11 +234,19 @@ identify_file_imagemagick_1(false, _OsFamily, _ImageFile, _MimeFile) ->
     {error, "'identify' not installed"};
 identify_file_imagemagick_1(Cmd, OsFamily, ImageFile, MimeFile) ->
     CleanedImageFile = z_utils:os_filename(ImageFile ++ "[0]"),
-    Result    = os:cmd(z_utils:os_filename(Cmd)
+    CmdOutput = os:cmd(z_utils:os_filename(Cmd)
                        ++" -quiet "
                        ++CleanedImageFile
                        ++" 2> " ++ devnull(OsFamily)),
-    case Result of
+    Lines = lists:dropwhile(
+                    fun
+                        ("Warning:" ++ _) -> true;
+                        ("Can't" ++ _) -> true;
+                        ("   ****" ++ _) -> true;
+                        (_) -> false
+                    end,
+                    string:tokens(CmdOutput, "\n")),
+    case Lines of
         [] ->
             Err = os:cmd(z_utils:os_filename(Cmd)
                          ++" -quiet "
@@ -238,26 +254,14 @@ identify_file_imagemagick_1(Cmd, OsFamily, ImageFile, MimeFile) ->
                          ++" 2>&1"),
             lager:info("identify of ~s failed:~n~s", [CleanedImageFile, Err]),
             {error, "identify error: " ++ Err};
-        _ ->
+        [Result|_] ->
             %% ["test/a.jpg","JPEG","3440x2285","3440x2285+0+0","8-bit","DirectClass","2.899mb"]
             %% sometimes:
             %% test.jpg[0]=>test.jpg JPEG 2126x1484 2126x1484+0+0 DirectClass 8-bit 836.701kb 0.130u 0:02
 
             %% "/tmp/ztmp-zotonic008prod@miffy.local-1321.452998.868252[0]=>/tmp/ztmp-zotonic008prod@miffy.local-1321.452998.868252 JPEG 1824x1824 1824x1824+0+0 8-bit DirectClass 1.245MB 0.000u 0:00.000"
-
-            Line1 = hd(string:tokens(Result, "\r\n")),
             try
-                Words = string:tokens(Line1, " "),
-                WordCount = length(Words),
-                Words1 = if
-                             WordCount > 4 -> 
-                                 {A,_B} = lists:split(4, Words),
-                                 A;
-                             true -> 
-                                 Words
-                         end,
-
-                [_Path, Type, Dim, _Dim2] = Words1,
+                [_Path, Type, Dim, _Dim2 | _] = string:tokens(Result, " "),
                 Mime = mime(Type, MimeFile),
                 [Width,Height] = string:tokens(Dim, "x"),
                 {W1,H1} = maybe_sizeup(Mime, list_to_integer(Width), list_to_integer(Height)),
@@ -266,16 +270,24 @@ identify_file_imagemagick_1(Cmd, OsFamily, ImageFile, MimeFile) ->
                           {mime, Mime}],
                 Props2 = case Mime of
                              "image/" ++ _ ->
-                                 [{orientation, exif_orientation(ImageFile)} | Props1];
-                             _ -> 
+                                 Exif = exif(ImageFile),
+                                 Orientation = exif_orientation(Exif),
+                                 Orientation1 = correct_orientation(Orientation, Exif, W1, H1),
+                                 [
+                                    {orientation, Orientation1},
+                                    {exif, Exif},
+                                    {subject_point, exif_subject_point(Exif, Orientation, W1, H1)}
+                                  | Props1
+                                 ];
+                             _ ->
                                 Props1
                          end,
                 {ok, Props2}
             catch
                 X:B ->
                     ?DEBUG({X,B, erlang:get_stacktrace()}),
-                    lager:info("identify of ~p failed - ~p", [CleanedImageFile, Line1]),
-                    {error, "identify error: unknown result: '"++Line1++"'"}
+                    lager:info("identify of ~p failed - ~p", [CleanedImageFile, CmdOutput]),
+                    {error, "unknown result from 'identify': '"++CmdOutput++"'"}
             end
     end.
 
@@ -343,13 +355,15 @@ extension(Mime, PreferExtension, Context) ->
     end.
 
 maybe_binary(undefined) -> undefined;
-maybe_binary(L) -> z_convert:to_binary(L). 
+maybe_binary(L) -> z_convert:to_binary(L).
 
 -spec extension(string()|binary(), string()|binary()|undefined) -> string().
 extension("image/jpeg", _PreferExtension) -> ".jpg";
 extension(<<"image/jpeg">>, _PreferExtension) -> ".jpg";
 extension("application/vnd.ms-excel", _) -> ".xls";
 extension(<<"application/vnd.ms-excel">>, _) -> ".xls";
+extension("text/plain", _PreferExtension) -> ".txt";
+extension(<<"text/plain">>, _PreferExtension) -> ".txt";
 extension(Mime, PreferExtension) ->
     Extensions = mimetypes:extensions(z_convert:to_binary(Mime)),
     case PreferExtension of
@@ -387,38 +401,97 @@ guess_mime(File) ->
 	end.
 
 
-%% Detect the exif rotation in an image and swaps width/height accordingly.
--spec exif_orientation(string()) -> 1|2|3|4|5|6|7|8.
-exif_orientation(InFile) ->
-    %% FIXME - don't depend on external command
-    case string:tokens(exif_orientation_cmd(InFile), "\n") of
-        [] -> 
-            1;
-        [Line|_] -> 
-            FirstLine = z_convert:to_list(z_string:to_lower(Line)),
-            case [z_convert:to_list(z_string:trim(X)) || X <- string:tokens(FirstLine, "-")] of
-                ["top", "left"] -> 1;
-                ["top", "right"] -> 2;
-                ["bottom", "right"] -> 3;
-                ["bottom", "left"] -> 4;
-                ["left", "top"] -> 5;
-                ["right", "top"] -> 6;
-                ["right", "bottom"] -> 7;
-                ["left", "bottom"] -> 8;
-                _ -> 1
-            end
+% Fetch the EXIF information from the file, we remove the maker_note as it can be huge
+exif(File) ->
+    case exif:read(File) of
+        {ok, Dict} ->
+            List = dict:to_list(Dict),
+            proplists:delete(maker_note, List);
+        {error, _} ->
+            []
     end.
 
-exif_orientation_cmd(File) ->
-    exif_orientation_cmd_1(os:find_executable("exif"), os:type(), File).
+%% Detect the exif rotation in an image and swaps width/height accordingly.
+-spec exif_orientation(list()) -> 1|2|3|4|5|6|7|8.
+exif_orientation(undefined) ->
+    1;
+exif_orientation(Exif) when is_list(Exif) ->
+    case proplists:get_value(orientation, Exif) of
+        <<"Top-left">> -> 1;
+        <<"Top-right">> -> 2;
+        <<"Bottom-right">> -> 3;
+        <<"Bottom-left">> -> 4;
+        <<"Left-top">> -> 5;
+        <<"Right-top">> -> 6;
+        <<"Right-bottom">> -> 7;
+        <<"Left-bottom">> -> 8;
+        _ -> 1
+    end.
 
-exif_orientation_cmd_1(false, _OS, _File) ->
-    lager:error("Install 'exif' to determine the orientation of image files."),
-    [];
-exif_orientation_cmd_1(_Cmd, {win32, _}, File) ->
-    os:cmd("exif -m -t Orientation " ++ z_utils:os_filename(File));
-exif_orientation_cmd_1(Cmd, {_Unix, _}, File) ->
-    os:cmd("LANG=en "++z_utils:os_filename(Cmd)++" -m -t Orientation " ++ z_utils:os_filename(File)).
+%% See also http://www.awaresystems.be/imaging/tiff/tifftags/privateifd/exif/subjectarea.html
+exif_subject_point(Exif, Orientation, Width, Height) ->
+    Point = extract_subject_point(Exif),
+    Point1 = maybe_resize_point(Point, Exif, Width, Height),
+    maybe_rotate(Orientation, Point1, Width, Height).
+
+extract_subject_point(undefind) ->
+    undefined;
+extract_subject_point(Exif) ->
+    case proplists:get_value(subject_area, Exif) of
+        [X, Y] -> {X, Y};
+        [X, Y, _Radius] -> {X, Y};
+        [X, Y, _W, _H] -> {X, Y};
+        _ -> undefined
+    end.
+
+maybe_resize_point(undefined, _Exif, _Width, _Height) ->
+    undefined;
+maybe_resize_point({X, Y}, Exif, Width, Height) ->
+    ExifWidth = proplists:get_value(pixel_x_dimension, Exif),
+    ExifHeight = proplists:get_value(pixel_y_dimension, Exif),
+    case is_integer(ExifWidth) andalso is_integer(ExifHeight) of
+        true when ExifWidth =:= Width, ExifHeight =:= Height ->
+            {X, Y};
+        true when ExifWidth =:= 0; ExifHeight =:= 0 ->
+            {X, Y};
+        true ->
+            {round(X*Width/ExifWidth), round(Y*Height/ExifHeight)};
+        false ->
+            {X, Y}
+    end.
+
+
+maybe_rotate(_, undefined, _W, _H) -> undefined;
+maybe_rotate(1, {X, Y}, _W, _H) -> {X, Y};
+maybe_rotate(2, {X, Y}, _W, H) -> {X, H-Y}; % flip
+maybe_rotate(3, {X, Y}, W, H) -> {W-X, H-Y}; % rotate 180
+maybe_rotate(4, {X, Y}, W, _H) -> {W-X, Y}; % flop
+maybe_rotate(5, {X, Y}, W, H) -> {W-X, H-Y}; % transpose
+maybe_rotate(6, {X, Y}, _W, H) -> {H-Y, X}; % rotate 90
+maybe_rotate(7, {X, Y}, W, H) -> {W-X, H-Y}; % transverse
+maybe_rotate(8, {X, Y}, W, _H) -> {Y, W-X}. % rotate 270
+
+
+%% @doc Check that the orientation makes sense given the width/height of the image
+correct_orientation(1, _Exif, _Width, _Height) ->
+    1;
+correct_orientation(Orientation, Exif, Width, Height) ->
+    IsLandscape = Width > Height,
+    ExifWidth = proplists:get_value(pixel_x_dimension, Exif),
+    ExifHeight = proplists:get_value(pixel_y_dimension, Exif),
+    case is_integer(ExifWidth) andalso is_integer(ExifHeight) of
+        true when IsLandscape, ExifWidth < ExifHeight ->
+            % The image is landscape, but the exif describes a portrait orientated image
+            % We assume that the rotation has been done already
+            1;
+        true when not IsLandscape, ExifWidth > ExifHeight ->
+            % The image is portrait, but the exif describes a landscape orientated image.
+            % We assume that the rotation has been done already
+            1;
+        _ ->
+            Orientation
+    end.
+
 
 %% @doc Given a mime type, return whether its file contents is already compressed or not.
 -spec is_mime_compressed(string()) -> boolean().

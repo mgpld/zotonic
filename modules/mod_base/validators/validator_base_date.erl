@@ -7,9 +7,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,19 +21,19 @@
 -export([render_validator/5, validate/5]).
 
 render_validator(date, TriggerId, _TargetId, Args, Context)  ->
-    Format = proplists:get_value(format, Args, "l"),
-    Separator = proplists:get_value(separator, Args, "-"),
-    JsObject = z_utils:js_object(z_validation:rename_args(Args)), 
+    Format = proplists:get_value(format, Args, <<"l">>),
+    Separator = proplists:get_value(separator, Args, <<"-">>),
+    JsObject = z_utils:js_object(z_validation:rename_args(Args)),
     Script   = [<<"z_add_validator(\"">>,TriggerId,<<"\", \"date\", ">>, JsObject, <<");\n">>],
     {[Format, Separator], Script, Context}.
 
 is_valid(Day, Month, Year) ->
     calendar:valid_date(list_to_integer(Year), list_to_integer(Month), list_to_integer(Day)).
-is_valid(Day, Month, Year, "l") ->
+is_valid(Day, Month, Year, <<"l">>) ->
     is_valid(Day, Month, Year);
-is_valid(Month, Day, Year, "m") ->
+is_valid(Month, Day, Year, <<"m">>) ->
     is_valid(Day, Month, Year);
-is_valid(Year, Month, Day, "b") ->
+is_valid(Year, Month, Day, <<"b">>) ->
     is_valid(Day, Month, Year);
 is_valid(_, _, _, _) ->
     false.
@@ -42,7 +42,7 @@ is_valid(_, _, _, _) ->
 %% @spec validate(Type, TriggerId, Values, Args, Context) -> {ok,AcceptedValue} | {error,Id,Error}
 %%          Error = invalid | novalue | {script, Script}
 validate(date, Id, Value, [Format, Separator], Context) ->
-    case lists:member(Format, ["l", "m", "b"]) of
+    case lists:member(Format, [<<"l">>, <<"m">>, <<"b">>]) of
         true ->
             case z_string:trim(Value) of
                 [] -> {{ok, []}, Context};

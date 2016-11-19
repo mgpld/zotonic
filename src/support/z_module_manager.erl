@@ -33,6 +33,8 @@
          upgrade/1,
          deactivate/2,
          activate/2,
+         activate_await/2,
+         await_upgrade/1,
          restart/2,
          module_reloaded/2,
          active/1,
@@ -41,9 +43,11 @@
          get_provided/1,
          get_modules/1,
          get_modules_status/1,
+         get_upgrade_status/1,
          whereis/2,
          all/1,
          scan/1,
+         scan_core/1,
          prio/1,
          prio_sort/1,
          dependency_sort/1,
@@ -70,7 +74,8 @@
           module_schema = [] :: list({atom(), integer()|undefined}),
           start_wait  = none :: none | {atom(), pid(), erlang:timestamp()},
           start_queue = [] :: list(),
-          start_error = [] :: list()
+          start_error = [] :: list(),
+          upgrade_waiters = [] :: list()
       }).
 
 
@@ -80,61 +85,116 @@
 %% @spec start_link(SiteProps::proplist()) -> {ok,Pid} | ignore | {error,Error}
 %% @doc Starts the module manager
 start_link(SiteProps) ->
-    Context = z_acl:sudo(z_context:new(proplists:get_value(host, SiteProps))),
+    Context = z_acl:sudo(z_context:new(proplists:get_value(site, SiteProps))),
     gen_server:start_link({local, name(Context)}, ?MODULE, [{context, Context} | SiteProps], []).
 
 
-%% @spec upgrade(#context{}) -> ok
 %% @doc Reload the list of all modules, add processes if necessary.
+-spec upgrade(#context{}) -> ok.
 upgrade(Context) ->
+    upgrade(false, Context).
+
+-spec upgrade(boolean(), #context{}) -> ok.
+upgrade(false, Context) ->
     flush(Context),
-    gen_server:cast(name(Context), upgrade).
+    gen_server:cast(name(Context), upgrade);
+upgrade(true, Context) ->
+    flush(Context),
+    gen_server:call(name(Context), upgrade).
 
 
 %% @doc Deactivate a module. The module is marked as deactivated and stopped when it was running.
-%% @spec deactivate(Module, #context{}) -> ok
+-spec deactivate(atom(), #context{}) -> ok.
 deactivate(Module, Context) ->
     flush(Context),
     case z_db:q("update module set is_active = false, modified = now() where name = $1", [Module], Context) of
-        1 -> upgrade(Context);
+        1 -> upgrade(false, Context);
         0 -> ok
     end.
 
 
 %% @doc Activate a module. The module is marked as active and started as a child of the module z_supervisor.
 %% The module manager can be checked later to see if the module started or not.
-%% @spec activate(Module, #context{}) -> void()
-activate(Module, Context) ->
-    flush(Context),
-    Scanned = scan(Context),
-    {Module, _Dirname} = proplists:lookup(Module, Scanned),
-    F = fun(Ctx) ->
-                case z_db:q("update module set is_active = true, modified = now() where name = $1", [Module], Ctx) of
-                    0 -> z_db:q("insert into module (name, is_active) values ($1, true)", [Module], Ctx);
-                    1 -> 1
-                end
-        end,
-    1 = z_db:transaction(F, Context),
-    upgrade(Context).
+-spec activate(atom(), #context{}) -> ok | {error, not_found}.
+activate(Module, Context) when is_atom(Module) ->
+    activate(Module, false, Context).
 
-
-%% @doc Restart a module, activates the module if it was not activated.
-restart(Module, Context) ->
-    case z_db:q("select true from module where name = $1 and is_active = true", [Module], Context) of
-        [{true}] ->
-            gen_server:cast(name(Context), {restart_module, Module});
-        _ ->
-            activate(Module, Context)
+-spec activate_await(atom(), #context{}) -> ok | {error, not_active} | {error, not_found}.
+activate_await(Module, Context) when is_atom(Module) ->
+    case activate(Module, true, Context) of
+        ok ->
+            case whereis(Module, Context) of
+                {ok, Pid} ->
+                    case erlang:is_process_alive(Pid) of
+                        true -> ok;
+                        false -> {error, not_active}
+                    end;
+                {error, not_running} ->
+                    {error, not_active}
+            end;
+        {error, _} = Error ->
+            Error
     end.
 
+activate(Module, IsSync, Context) ->
+    flush(Context),
+    case proplists:lookup(Module, scan(Context)) of
+        {Module, _Dirname} ->
+            F = fun(Ctx) ->
+                        case z_db:q("update module
+                                     set is_active = true,
+                                         modified = now()
+                                     where name = $1",
+                                    [Module], Ctx)
+                        of
+                            0 ->
+                                z_db:q("insert into module (name, is_active)
+                                        values ($1, true)",
+                                       [Module], Ctx);
+                            1 -> 1
+                        end
+                end,
+            1 = z_db:transaction(F, Context),
+            upgrade(IsSync, Context);
+        none ->
+            lager:error("Could not find module '~p'", [Module]),
+            {error, not_found}
+    end.
+
+%% @doc Wait till all modules are started, used when starting up a new or test site.
+-spec await_upgrade(#context{}) -> ok | {error, timeout}.
+await_upgrade(Context) ->
+    await_upgrade(Context, 20).
+
+await_upgrade(_Context, 0) ->
+    {error, timeout};
+await_upgrade(Context, RetryCt) ->
+    case erlang:whereis(name(Context)) of
+        undefined ->
+            timer:sleep(500),
+            await_upgrade(Context, RetryCt-1);
+        Pid ->
+            gen_server:call(Pid, await_upgrade, infinity)
+    end.
+
+%% @doc Restart a module, activates the module if it was not activated.
+-spec restart(Module::atom(), #context{}) -> ok | {error, not_found}.
+restart(Module, Context) ->
+    case z_db:q1("select is_active from module where name = $1", [Module], Context) of
+        true -> gen_server:cast(name(Context), {restart_module, Module});
+        _ -> activate(Module, Context)
+    end.
 
 %% @doc Check all observers of a module, ensure that they are all active. Used after a module has been reloaded
+-spec module_reloaded(Module::atom(), #context{}) -> ok.
 module_reloaded(Module, Context) ->
-    gen_server:cast(name(Context), {module_reloaded, Module}).
-
+    case z_db:q1("select is_active from module where name = $1", [Module], Context) of
+        true -> gen_server:cast(name(Context), {module_reloaded, Module});
+        _ -> ok
+    end.
 
 %% @doc Return the list of active modules.
-%% @spec active(#context{}) -> [ atom() ]
+-spec active(#context{}) -> list(Module::atom()).
 active(Context) ->
     case z_db:has_connection(Context) of
         true ->
@@ -142,7 +202,7 @@ active(Context) ->
                         Modules = z_db:q("select name from module where is_active = true order by name", Context),
                         [ z_convert:to_atom(M) || {M} <- Modules ]
                 end,
-            z_depcache:memo(F, {?MODULE, active, Context#context.host}, Context);
+            z_depcache:memo(F, {?MODULE, active, z_context:site(Context)}, Context);
         false ->
             case m_site:get(modules, Context) of
                 L when is_list(L) -> L;
@@ -163,7 +223,7 @@ active(Module, Context) ->
                             _ -> false
                         end
                 end,
-            z_depcache:memo(F, {?MODULE, {active, Module}, Context#context.host}, Context);
+            z_depcache:memo(F, {?MODULE, {active, Module}, z_context:site(Context)}, Context);
         false ->
             lists:member(Module, active(Context))
     end.
@@ -192,7 +252,13 @@ get_modules_status(Context) ->
     gen_server:call(name(Context), get_modules_status).
 
 
+%% @doc Return the status of any ongoing upgrade
+get_upgrade_status(Context) ->
+    gen_server:call(name(Context), get_upgrade_status).
+
+
 %% @doc Return the pid of a running module
+-spec whereis(atom(), #context{}) -> {ok, pid()} | {error, not_running}.
 whereis(Module, Context) ->
     gen_server:call(name(Context), {whereis, Module}).
 
@@ -207,27 +273,36 @@ all(Context) ->
 %% @doc Scan for a list of modules present in the site's module directories. A module is always a directory,
 %% the name of the directory is the same as the name of the module.
 %% @spec scan(#context{}) -> [ {atom(), dirname()} ]
-scan(#context{host=Host}) ->
+scan(#context{site=Site}) ->
     All = [
            %% Zotonic modules
            [z_utils:lib_dir(modules), "mod_*"],
 
            %% User-installed Zotonic sites
-           [z_path:user_sites_dir(), Host, "modules", "mod_*"],
-           [z_path:user_sites_dir(), Host],
+           [z_path:user_sites_dir(), Site, "modules", "mod_*"],
+           [z_path:user_sites_dir(), Site],
 
            %% User-installed modules
            [z_path:user_modules_dir(), "mod_*"],
 
            %% Backward compatibility
-           [z_utils:lib_dir(priv), "sites", Host, "modules", "mod_*"],
-           [z_utils:lib_dir(priv), "sites", Host],
+           [z_utils:lib_dir(priv), "sites", Site, "modules", "mod_*"],
+           [z_utils:lib_dir(priv), "sites", Site],
            [z_utils:lib_dir(priv), "modules", "mod_*"]
 
           ],
-    Files = lists:foldl(fun(L, Acc) -> L ++ Acc end, [], [z_utils:wildcard(filename:join(P)) || P <- All]),
-    [ {z_convert:to_atom(filename:basename(F)), F} ||  F <- Files ].
+    scan_paths(All).
 
+%% @doc Get a list of Zotonic core modules.
+-spec scan_core(#context{}) -> list({ModuleName :: atom(), Path :: string()}).
+scan_core(#context{}) ->
+    scan_paths([
+        [z_utils:lib_dir(modules), "mod_*"]
+    ]).
+
+scan_paths(Paths) ->
+    Files = lists:foldl(fun(L, Acc) -> L ++ Acc end, [], [z_utils:wildcard(filename:join(P)) || P <- Paths]),
+    [ {z_convert:to_atom(filename:basename(F)), F} ||  F <- Files ].
 
 %% @doc Return the priority of a module. Default priority is 500, lower is higher priority.
 %% Never crash on a missing module.
@@ -407,6 +482,26 @@ handle_call({whereis, Module}, _From, State) ->
           end,
     {reply, Ret, State};
 
+%% @doc Synchronous upgrade
+handle_call(upgrade, From, State) ->
+    State1 = State#state{upgrade_waiters=[From|State#state.upgrade_waiters]},
+    State2 = handle_upgrade(State1),
+    {noreply, State2};
+
+handle_call(get_upgrade_status, _From, State) ->
+    Reply = [
+        {start_wait, State#state.start_wait},
+        {start_queue, State#state.start_queue},
+        {start_error, State#state.start_error},
+        {upgrade_waiters, State#state.upgrade_waiters}
+    ],
+    {reply, {ok, Reply}, State};
+
+handle_call(await_upgrade, _From, #state{start_wait=none, start_queue=[]} = State) ->
+    {reply, ok, State};
+handle_call(await_upgrade, From, State) ->
+    {noreply, State#state{upgrade_waiters=[From|State#state.upgrade_waiters]}};
+
 %% @doc Trap unknown calls
 handle_call(Message, _From, State) ->
     {stop, {unknown_call, Message}, State}.
@@ -434,14 +529,14 @@ handle_cast({restart_module, Module}, State) ->
 %% @todo When this is an automatic restart, start all depending modules
 handle_cast({supervisor_child_started, ChildSpec, Pid}, State) ->
     Module = ChildSpec#child_spec.name,
-    lager:debug("[~p] Module ~p started", [z_context:site(State#state.context), Module]),
+    lager:debug("Module ~p started", [Module]),
     State1 = handle_start_child_result(Module, {ok, Pid}, State),
     {noreply, State1};
 
 %% @doc Handle errors, success is handled by the supervisor_child_started above.
 handle_cast({start_child_result, Module, {error, _} = Error}, State) ->
     State1 = handle_start_child_result(Module, Error, State),
-    lager:error("[~p] Module ~p start error ~p", [z_context:site(State#state.context), Module, Error]),
+    lager:error("Module ~p start error ~p", [Module, Error]),
     {noreply, State1};
 handle_cast({start_child_result, _Module, {ok, _}}, State) ->
     {noreply, State};
@@ -450,7 +545,7 @@ handle_cast({start_child_result, _Module, {ok, _}}, State) ->
 handle_cast({supervisor_child_stopped, ChildSpec, Pid}, State) ->
     Module = ChildSpec#child_spec.name,
     remove_observers(Module, Pid, State),
-    lager:debug("[~p] Module ~p stopped", [z_context:site(State#state.context), Module]),
+    lager:info("Module ~p stopped", [Module]),
     z_notifier:notify(#module_deactivate{module=Module}, State#state.context),
     stop_children_with_missing_depends(State),
     {noreply, State};
@@ -458,23 +553,24 @@ handle_cast({supervisor_child_stopped, ChildSpec, Pid}, State) ->
 %% @doc Check all observers of a module. Add new ones, remove non-existing ones.
 %%      This is called after a code reload of a module.
 handle_cast({module_reloaded, Module}, State) ->
-    lager:debug("[~p] checking observers of (re-)loaded module ~p", [z_context:site(State#state.context), Module]),
-    State1 = refresh_module_exports(Module, refresh_module_schema(Module, State)),
+    lager:debug("checking observers of (re-)loaded module ~p", [Module]),
+    TmpState = refresh_module_exports(Module, refresh_module_schema(Module, State)),
     OldExports = proplists:get_value(Module, State#state.module_exports),
-    NewExports = proplists:get_value(Module, State1#state.module_exports),
+    NewExports = proplists:get_value(Module, TmpState#state.module_exports),
     OldSchema = proplists:get_value(Module, State#state.module_schema),
-    NewSchema = proplists:get_value(Module, State1#state.module_schema),
+    NewSchema = proplists:get_value(Module, TmpState#state.module_schema),
     case {OldExports, OldSchema} of
         {NewExports, NewSchema} ->
-            {noreply, State1};
+            {noreply, State};
         {undefined, undefined} ->
             % Assume this load is because of the first start, otherwise there would be some exports known.
-            {noreply, State1};
+            {noreply, State};
         _Changed ->
             % Exports or schema changed, assume the worst and restart the complete module
-            lager:info("[~p] exports or schema of (re-)loaded module ~p changed, restarting module", [z_context:site(State#state.context), Module]),
-            State2 = handle_restart_module(Module, State1),
-            {noreply, State2}
+            lager:info("exports or schema of (re-)loaded module ~p changed, restarting module",
+                       [Module]),
+            gen_server:cast(self(), {restart_module, Module}),
+            {noreply, State}
     end;
 
 %% @doc Trap unknown casts
@@ -513,17 +609,26 @@ code_change(_OldVsn, State, _Extra) ->
 %% @doc Return the name for this site's module manager
 name(Context) ->
     name(?MODULE, Context).
-name(Module, #context{host=Host}) ->
-    z_utils:name_for_host(Module, Host).
+name(Module, #context{site=Site}) ->
+    z_utils:name_for_site(Module, Site).
 
 flush(Context) ->
-    z_depcache:flush({?MODULE, active, Context#context.host}, Context).
+    z_depcache:flush({?MODULE, active, z_context:site(Context)}, Context).
 
 handle_restart_module(Module, #state{context=Context, sup=ModuleSup} = State) ->
-    z_supervisor:delete_child(ModuleSup, Module),
-    z_supervisor:add_child_async(ModuleSup, module_spec(Module, Context)),
+    case z_supervisor:delete_child(ModuleSup, Module) of
+        {error, Err} when Err =:= unknown_child; Err =:= no_process ->
+            % Child was not running
+            ok;
+        ok ->
+            % Child has been shut down, wait for the notification
+            receive
+                {'$gen_cast', {supervisor_child_stopped, #child_spec{name=Module}, Pid}} ->
+                    remove_observers(Module, Pid, State),
+                    z_supervisor:add_child_async(ModuleSup, module_spec(Module, Context))
+            end
+    end,
     handle_upgrade(State).
-
 
 handle_upgrade(#state{context=Context, sup=ModuleSup} = State) ->
     ValidModules = valid_modules(Context),
@@ -538,8 +643,8 @@ handle_upgrade(#state{context=Context, sup=ModuleSup} = State) ->
     Running = z_supervisor:running_children(State#state.sup),
     Start = sets:to_list(sets:subtract(New, sets:from_list(Running))),
     {ok, StartList} = dependency_sort(Start),
-    lager:debug("[~p] Stopping modules: ~p", [z_context:site(Context), sets:to_list(Kill)]),
-    lager:debug("[~p] Starting modules: ~p", [z_context:site(Context), Start]),
+    lager:debug("Stopping modules: ~p", [sets:to_list(Kill)]),
+    lager:debug("Starting modules: ~p", [Start]),
     sets:fold(fun (Module, ok) ->
                       z_supervisor:delete_child(ModuleSup, Module),
                       ok
@@ -556,18 +661,26 @@ handle_upgrade(#state{context=Context, sup=ModuleSup} = State) ->
     % 4. Log non startable modules (remaining after all startable modules have started)
     case {StartList, sets:size(Kill)} of
         {[], 0} ->
-            State#state{start_queue=[]};
+            signal_upgrade_waiters(State#state{start_queue=[]});
         _ ->
             gen_server:cast(self(), start_next),
             State#state{start_queue=StartList}
     end.
 
+signal_upgrade_waiters(#state{upgrade_waiters = Waiters} = State) ->
+    lists:foreach(fun(From) ->
+                      gen_server:reply(From, ok)
+                  end,
+                  Waiters),
+    State#state{upgrade_waiters=[]}.
+
+
 handle_start_next(#state{context=Context, start_queue=[]} = State) ->
     % Signal modules are loaded, and load all translations.
     z_notifier:notify(module_ready, Context),
-    lager:debug("[~p] Finished starting modules", [z_context:site(Context)]),
+    lager:debug("Finished starting modules"),
     spawn_link(fun() -> z_trans_server:load_translations(Context) end),
-    State;
+    signal_upgrade_waiters(State);
 handle_start_next(#state{context=Context, sup=ModuleSup, start_queue=Starting} = State) ->
     % Filter all children on the capabilities of the loaded modules.
     Provided = handle_get_provided(State),
@@ -578,7 +691,7 @@ handle_start_next(#state{context=Context, sup=ModuleSup, start_queue=Starting} =
                  StartErrorReason = get_start_error_reason(startable(M, Provided)),
                  Msg = iolist_to_binary(io_lib:format("Could not start ~p: ~s", [M, StartErrorReason])),
                  z_session_manager:broadcast(#broadcast{type="error", message=Msg, title="Module manager", stay=false}, z_acl:sudo(Context)),
-                 lager:error("[~p] ~s", [z_context:site(Context), Msg])
+                 lager:error("~s", [Msg])
              end || M <- Starting
             ],
 
@@ -639,8 +752,8 @@ start_child(ManagerPid, Module, ModuleSup, Spec, Exports, Context) ->
                                                 % Try to start it
                                           z_supervisor:start_child(ModuleSup, Spec#child_spec.name, ?MODULE_START_TIMEOUT);
                                       Error ->
-                                          lager:error("[~p] Error starting module ~p, Schema initialization error:~n~p~n",
-                                                      [z_context:site(Context), Module, Error]),
+                                          lager:error("Error starting module ~p, Schema initialization error:~n~p~n",
+                                                      [Module, Error]),
                                           {error, {schema_init, Error}}
                                   end,
                          gen_server:cast(ManagerPid, {start_child_result, Module, Result})
@@ -698,8 +811,7 @@ stop_children_with_missing_depends(State) ->
         [] ->
             [];
         Unstartable ->
-            lager:warning("[~p] Stopping child modules ~p",
-                          [z_context:site(State#state.context), Unstartable]),
+            lager:debug("Stopping child modules ~p", [Unstartable]),
             [ z_supervisor:stop_child(State#state.sup, M) || M <- Unstartable ]
     end.
 
@@ -753,7 +865,7 @@ has_behaviour(M, Behaviour) ->
     end.
 
 
-%% @doc Check whether given module is valid for the given host
+%% @doc Check whether given module is valid for the given site
 %% @spec valid(atom(), #context{}) -> bool()
 valid(M, Context) ->
     lists:member(M, [Mod || {Mod,_} <- scan(Context)]).

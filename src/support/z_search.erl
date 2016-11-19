@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -56,7 +56,7 @@ pager(SearchResult, Page, Context) ->
 
 pager(#search_result{result=Result} = SearchResult, Page, PageLen, _Context) ->
     Total = length(Result),
-    Pages = mochinum:int_ceil(Total / PageLen), 
+    Pages = mochinum:int_ceil(Total / PageLen),
     Offset = (Page-1) * PageLen + 1,
     OnPage = case Offset =< Total of
         true ->
@@ -101,9 +101,9 @@ search({SearchName, Props} = Search, OffsetLimit, Context) ->
     case z_notifier:first(Q, Context) of
         undefined ->
             Stack = erlang:get_stacktrace(),
-            lager:info("[~p] Unknown search query ~p~n~p~n", [z_context:site(Context), Search, Stack]),
+            lager:info("Unknown search query ~p~n~p~n", [Search, Stack]),
             #search_result{};
-        Result when Result /= undefined -> 
+        Result when Result /= undefined ->
             search_result(Result, OffsetLimit, Context)
     end;
 search(Name, OffsetLimit, Context) ->
@@ -128,7 +128,7 @@ search_result(#search_sql{} = Q, Limit, Context) ->
     case Q#search_sql.run_func of
         F when is_function(F) ->
             F(Q, Sql, Args, Context);
-        _ -> 
+        _ ->
             Rows = case Q#search_sql.assoc of
                 false ->
                     Rs = z_db:q(Sql, Args, Context),
@@ -172,11 +172,11 @@ concat_sql_query(#search_sql{select=Select, from=From, where=Where, group_by=Gro
                                  {["select", Select, "from", From1, Where1, GroupBy1, Order1, SearchLimit], Args}
                          end,
     {string:join(Parts, " "), FinalArgs}.
-    
+
 
 %% @doc Inject the ACL checks in the SQL query.
 %% @spec reformat_sql_query(#search_sql{}, Context) -> #search_sql{}
-reformat_sql_query(#search_sql{where=Where, from=From, tables=Tables, args=Args, 
+reformat_sql_query(#search_sql{where=Where, from=From, tables=Tables, args=Args,
                                cats=TabCats, cats_exclude=TabCatsExclude,
                                cats_exact=TabCatsExact} = Q, Context) ->
     {ExtraWhere, Args1} = lists:foldl(
@@ -209,11 +209,11 @@ reformat_sql_query(#search_sql{where=Where, from=From, tables=Tables, args=Args,
 
 %% @doc Concatenate the where clause with the extra ACL checks using "and".  Skip empty clauses.
 %% @spec concat_where(ClauseList, CurrentWhere) -> NewClauseList
-concat_where([], Acc) -> 
+concat_where([], Acc) ->
     Acc;
-concat_where([[]|Rest], Acc) -> 
+concat_where([[]|Rest], Acc) ->
     concat_where(Rest, Acc);
-concat_where([W|Rest], []) -> 
+concat_where([W|Rest], []) ->
     concat_where(Rest, [W]);
 concat_where([W|Rest], Acc) ->
     concat_where(Rest, [W, " and "|Acc]).
@@ -221,14 +221,14 @@ concat_where([W|Rest], Acc) ->
 
 %% @doc Process SQL from clause. We analyzing the input (it may be a string, list of #search_sql or/and other strings)
 %% @spec concat_sql_from(From) -> From1::string()
-concat_sql_from(From) -> 
+concat_sql_from(From) ->
     Froms = concat_sql_from1(From),
     string:join(Froms, ",").
 
 concat_sql_from1([H|_]=From) when is_integer(H) -> [From]; %% from is string?
 concat_sql_from1([#search_sql{} = From | T]) ->
     Subquery = case concat_sql_query(From, undefined) of
-	{SQL, []} -> "(" ++ SQL ++ ") AS z_"++z_ids:id(); %% postgresql: alias for inner SELECT in FROM must be defined
+	{SQL, []} -> "(" ++ SQL ++ ") AS z_"++binary_to_list(z_ids:id()); %% postgresql: alias for inner SELECT in FROM must be defined
 	{SQL, [{as, Alias}]} when is_list(Alias) -> "(" ++ SQL ++ ") AS " ++ Alias;
 	{_SQL, A} -> throw({badarg, "Use outer #search_sql.args to store args of inner #search_sql. Inner arg.list only can be equals to [] or to [{as, Alias=string()}] for aliasing innered select in FROM (e.g. FROM (SELECT...) AS Alias).", A})
     end,
@@ -261,25 +261,13 @@ add_acl_check(_, Args, _Q, _Context) ->
 add_acl_check_rsc(Alias, Args, SearchSql, Context) ->
     case z_notifier:first(#acl_add_sql_check{alias=Alias, args=Args, search_sql=SearchSql}, Context) of
         undefined ->
-            case z_acl:can_see(Context) of
-                ?ACL_VIS_USER ->
-                    % Admin or supervisor, can see everything
+            case z_acl:is_admin(Context) of
+                true ->
+                    % Admin can see all resources
                     {[], Args};
-                ?ACL_VIS_PUBLIC -> 
-                    % Anonymous users can only see public published content
-                    Sql = Alias ++ ".visible_for = 0" ++ publish_check(Alias, SearchSql),
-                    {Sql, Args};
-                ?ACL_VIS_COMMUNITY -> 
-                    % Only see published public or community content
-                    Sql = Alias ++ ".visible_for in (0,1) " ++ publish_check(Alias, SearchSql),
-                    {Sql, Args};
-                ?ACL_VIS_GROUP ->
-                    % Can see published community and public content or any content from one of the user's groups
-                    Sql = Alias ++ ".visible_for <= 2 " ++ publish_check(Alias, SearchSql),
-                    Sql1 = lists:flatten([
-                            $(, $(, Sql, ") or ", Alias, ".id = $", integer_to_list(length(Args)+1), $)
-                        ]),
-                    {Sql1, Args ++ [z_acl:user(Context)]}
+                false ->
+                    %% Others can only see published resources
+                    {publish_check(Alias, SearchSql), Args}
             end;
         {_NewSql, _NewArgs} = Result ->
             Result
@@ -368,9 +356,9 @@ cat_check_joined1(CatAlias, true, {Left,Right}) ->
 add_cat_exact_check([], _Alias, WAcc, As, _Context) ->
     {WAcc, As};
 add_cat_exact_check(CatsExact, Alias, WAcc, As, Context) ->
-    NArgs = length(As),
     CatIds = [ m_rsc:rid(CId, Context) || CId <- CatsExact ],
-    CatArgs = [ [$$,integer_to_list(N)] || N <- lists:seq(NArgs+1,NArgs+length(CatIds))],
-    {WAcc ++ [[Alias, ".category_id in (", z_utils:combine($,, CatArgs), ")"]],
-     As ++ CatIds}.
+    {WAcc ++ [
+        [Alias, ".category_id in (SELECT(unnest($"++(integer_to_list(length(As)+1))++"::int[])))"]
+     ],
+     As ++ [CatIds]}.
 

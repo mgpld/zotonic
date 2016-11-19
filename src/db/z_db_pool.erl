@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,18 +24,66 @@
 -define(DEFAULT_DB_DRIVER, z_db_pgsql).
 
 -export([
+         status/0,
+         status/1,
+         close_connections/0,
+         close_connections/1,
          child_spec/2,
          get_database_options/1,
          test_connection/1,
          db_pool_name/1,
          db_driver/1,
+         db_opts/1,
          get_connection/1,
          return_connection/2
         ]).
 
+status() ->
+    Ctxs = z_sites_manager:get_site_contexts(),
+    lists:map(fun status/1, Ctxs).
 
-db_pool_name(Host) ->
-    list_to_atom("z_db_pool" ++ [$$ | atom_to_list(Host)]).
+status(Context) ->
+    case m_site:get(dbdatabase, Context) of
+        none ->
+            {z_context:site(Context), {0,0}};
+        _Db ->
+            PoolName = db_pool_name(Context),
+            case erlang:whereis(PoolName) of
+                Pid when is_pid(Pid) ->
+                    {_StateName, Workers, _Overflow, Working} = poolboy:status(Pid),
+                    {z_context:site(Context), {Workers,Working}};
+                undefined ->
+                    {z_context:site(Context), {0,0}}
+            end
+    end.
+
+close_connections() ->
+    Ctxs = z_sites_manager:get_site_contexts(),
+    lists:foreach(fun close_connections/1, Ctxs).
+
+close_connections(Context) ->
+    case m_site:get(dbdatabase, Context) of
+        none -> ok;
+        _Db ->
+            PoolName = db_pool_name(Context),
+            close_workers(erlang:whereis(PoolName))
+    end.
+
+close_workers(undefined) ->
+    ok;
+close_workers(PoolPid) when is_pid(PoolPid) ->
+    WorkerPids = gen_server:call(PoolPid, get_avail_workers),
+    lists:foreach(
+                fun(WorkerPid) ->
+                    WorkerPid ! disconnect
+                end,
+                WorkerPids).
+
+
+db_pool_name(#context{} = Context) ->
+    db_pool_name(z_context:site(Context));
+db_pool_name(Site) ->
+    list_to_atom("z_db_pool" ++ [$$ | atom_to_list(Site)]).
 
 db_driver(SiteProps) when is_list(SiteProps) ->
     proplists:get_value(dbdriver, SiteProps, ?DEFAULT_DB_DRIVER);
@@ -60,7 +108,7 @@ get_database_options(Context) ->
 %% @doc Optionally add the db pool connection
 child_spec(Host, SiteProps) ->
     case proplists:get_value(dbdatabase, SiteProps, atom_to_list(Host)) of
-        none -> 
+        none ->
             %% No database connection needed
             undefined;
         _ ->
@@ -83,9 +131,9 @@ child_spec(Host, SiteProps) ->
 %% argument and those are the only arguments that are given to the
 %% database pool worker processes.
 db_opts(SiteProps) ->
-    Kvs = lists:filter(fun({K, _}) ->
+    Kvs = lists:filter(fun({K, V}) ->
                                case atom_to_list(K) of
-                                   "db"++_ -> true;
+                                   "db"++_ -> not z_utils:is_empty(V);
                                    _ -> false
                                end
                        end,
@@ -96,14 +144,7 @@ db_opts(SiteProps) ->
                 {dbuser, z_config:get(dbuser, "zotonic")},
                 {dbdatabase, z_config:get(dbdatabase, "zotonic")},
                 {dbschema, z_config:get(dbschema, "public")}],
-    lists:foldl(fun({K, V}, Acc) ->
-                        case proplists:lookup(K, Acc) of
-                            {K, _} -> Acc;
-                            none -> [{K,V}|Acc]
-                        end
-                end,
-                [],
-                Kvs ++ Defaults).
+    lists:ukeymerge(1, lists:sort(Kvs), lists:sort(Defaults)).
 
 get_connection(#context{db={Pool,_}}) ->
     poolboy:checkout(Pool).

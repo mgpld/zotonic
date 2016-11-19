@@ -8,9 +8,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -34,6 +34,8 @@
 
 -include_lib("zotonic.hrl").
 
+m_find_value(has_collaboration_groups, #m{value=undefined}, Context) ->
+    acl_user_groups_checks:has_collab_groups(Context);
 m_find_value(is_used, #m{value=undefined} = M, _Context) ->
     M#m{value=is_used};
 m_find_value(Cat, #m{value=is_used}, Context) ->
@@ -43,7 +45,7 @@ m_find_value(_Key, _Value, _Context) ->
 
 m_to_list(#m{value=undefined}, _Context) ->
     [].
-    
+
 m_value(#m{value=undefined}, _Context) ->
     undefined.
 

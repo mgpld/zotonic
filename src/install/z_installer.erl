@@ -9,9 +9,9 @@
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,30 +21,75 @@
 -module(z_installer).
 -author("Marc Worrell <marc@worrell.nl").
 
+-behaviour(gen_server).
+
 %% gen_server exports
--export([start_link/1]).
+-export([
+    start_link/1, init/1,
+    handle_call/3, handle_cast/2,
+    handle_info/2, code_change/3,
+    terminate/2]).
 
 -include_lib("zotonic.hrl").
+
+-record(state, { site :: atom(), site_props :: list() }).
 
 %%====================================================================
 %% API
 %%====================================================================
+
 -spec start_link(list()) -> ignore | {error, database|term()}.
 %% @doc Install zotonic on the databases in the PoolOpts, skips when already installed.
 start_link(SiteProps) when is_list(SiteProps) ->
-    install_check(SiteProps, 1).
+    gen_server:start_link(?MODULE, SiteProps, []).
+
+
+%%====================================================================
+%% gen_server callbacks
+%%====================================================================
+
+init(SiteProps) ->
+    {site, Site} = proplists:lookup(site, SiteProps),
+    self() ! install_check,
+    {ok, #state{ site = Site, site_props = SiteProps }}.
+
+handle_call(Msg, _From, State) ->
+    {reply, {unknown_call, Msg}, State}.
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
+
+handle_info(install_check, State) ->
+    case install_check(State#state.site_props) of
+        ok ->
+            ok = z_site_sup:install_done(State#state.site_props),
+            {noreply, State, hibernate};
+        {error, _} ->
+            {stop, installfail, State}
+    end.
+
+code_change(_Vsn, State, _Extra) ->
+    {noreply, State}.
+
+terminate(_Reason, _State) ->
+    ok.
+
+
+%%====================================================================
+%% Internal
+%%====================================================================
 
 %% Check if the config table exists, if so then assume that all is ok
-install_check(SiteProps, RetryCt) when RetryCt =< 2 ->
-    {host, Host} = proplists:lookup(host, SiteProps),
+install_check(SiteProps) ->
+    {site, Site} = proplists:lookup(site, SiteProps),
     lager:md([
-        {site, Host},
+        {site, Site},
         {module, ?MODULE}
       ]),
-    Context = z_context:new(Host),
+    Context = z_context:new(Site),
     case z_db:has_connection(Context) of
         true -> check_db_and_upgrade(Context, 1);
-        false -> ignore
+        false -> ok
     end.
 
 check_db_and_upgrade(Context, Tries) when Tries =< 2 ->
@@ -52,12 +97,14 @@ check_db_and_upgrade(Context, Tries) when Tries =< 2 ->
         ok ->
             DbOptions = proplists:delete(dbpassword, z_db_pool:get_database_options(Context)),
             case {z_db:table_exists(config, Context), z_config:get(dbinstall)} of
-                {false, false} -> lager:warning("[~p] config table does not exist and dbinstall is false; not installing", [z_context:site(Context)]);
+                {false, false} ->
+                    lager:error("config table does not exist and dbinstall is false; not installing"),
+                    {error, nodbinstall};
                 {false, _} ->
                     %% Install database
-                    lager:warning("[~p] Installing database with db options: ~p", [z_context:site(Context), DbOptions]),
+                    lager:info("Installing database with db options: ~p", [DbOptions]),
                     z_install:install(Context),
-                    ignore;
+                    ok;
                 {true, _} ->
                     %% Normal startup, do upgrade / check
                     ok = z_db:transaction(
@@ -69,34 +116,36 @@ check_db_and_upgrade(Context, Tries) when Tries =< 2 ->
                                    ok = sanity_check(C, Database, Schema)
                            end,
                            Context),
-                    ignore
+                    ok
             end;
         {error, Reason} ->
-            lager:warning("[~p] Database connection failure: ~p", [z_context:site(Context), Reason]),
-	    case z_config:get(dbcreate) of
-		false -> lager:warning("[~p] Database does not exist and dbcreate is false; not creating", [z_context:site(Context)]);
-		_Else ->
-		    case z_db:prepare_database(Context) of
-			ok ->
-			    lager:info("[~p] Retrying install check after db creation.", [z_context:site(Context)]),
-			    check_db_and_upgrade(Context, Tries+1);
-			{error, _PrepReason} = Error ->
-			    lager:error("[~p] Could not create the database and schema."),
-			    Error
-		    end
-		end
+            lager:warning("Database connection failure: ~p", [Reason]),
+            case z_config:get(dbcreate) of
+                false ->
+                    lager:warning("Database does not exist and dbcreate is false; not creating"),
+                    {error, nodbcreate};
+                _Else ->
+                    case z_db:prepare_database(Context) of
+                        ok ->
+                            lager:info("Retrying install check after db creation."),
+                            check_db_and_upgrade(Context, Tries+1);
+                        {error, _PrepReason} = Error ->
+                            lager:error("Could not create the database and schema."),
+                            Error
+                    end
+                end
     end;
 check_db_and_upgrade(Context, _Tries) ->
-    lager:error("[~p] Could not connect to database and db creation failed", [z_context:site(Context)]),
+    lager:error("Could not connect to database and db creation failed"),
     {error, database}.
 
 
-has_table(C, Table, Database, Schema) ->    
+has_table(C, Table, Database, Schema) ->
     {ok, _, [{HasTable}]} = epgsql:equery(C, "
-            select count(*) 
-            from information_schema.tables 
-            where table_catalog = $1 
-              and table_name = $3 
+            select count(*)
+            from information_schema.tables
+            where table_catalog = $1
+              and table_name = $3
               and table_schema = $2
               and table_type = 'BASE TABLE'", [Database, Schema, Table]),
     HasTable =:= 1.
@@ -105,21 +154,21 @@ has_table(C, Table, Database, Schema) ->
 %% Check if a column in a table exists by querying the information schema.
 has_column(C, Table, Column, Database, Schema) ->
     {ok, _, [{HasColumn}]} = epgsql:equery(C, "
-            select count(*) 
-            from information_schema.columns 
-            where table_catalog = $1 
+            select count(*)
+            from information_schema.columns
+            where table_catalog = $1
               and table_schema = $2
-              and table_name = $3 
+              and table_name = $3
               and column_name = $4", [Database, Schema, Table, Column]),
     HasColumn =:= 1.
 
 get_column_type(C, Table, Column, Database, Schema) ->
     {ok, _, [{ColumnType}]} = epgsql:equery(C, "
             select data_type
-            from information_schema.columns 
-            where table_catalog = $1 
+            from information_schema.columns
+            where table_catalog = $1
               and table_schema = $2
-              and table_name = $3 
+              and table_name = $3
               and column_name = $4", [Database, Schema, Table, Column]),
     ColumnType.
 
@@ -148,11 +197,14 @@ upgrade(C, Database, Schema) ->
     % 0.12.5
     ok = install_content_group_dependent(C, Database, Schema),
     ok = convert_category_hierarchy(C, Database, Schema),
+
+    % 0.22.0
+    ok = add_edge_log_details(C, Database, Schema),
     ok.
 
 upgrade_config_schema(C, Database, Schema) ->
     case get_column_type(C, "config", "value", Database, Schema) of
-        <<"text">> -> 
+        <<"text">> ->
             ok;
         _ ->
             {ok,[],[]} = epgsql:squery(C, "alter table config alter column value type text"),
@@ -224,7 +276,7 @@ install_rsc_page_path_log(C, Database, Schema) ->
 drop_visitor(C, Database, Schema) ->
     case has_table(C, "visitor_cookie", Database, Schema) of
         true ->
-            {ok, _N} = epgsql:squery(C, 
+            {ok, _N} = epgsql:squery(C,
                                     "insert into persistent (id,props) "
                                     "select c.cookie, v.props from visitor_cookie c join visitor v on c.visitor_id = v.id"),
             epgsql:squery(C, "drop table visitor_cookie cascade"),
@@ -237,11 +289,11 @@ drop_visitor(C, Database, Schema) ->
 
 extent_mime(C, Database, Schema) ->
     {ok, _, [{Length}]} = epgsql:equery(C, "
-            select character_maximum_length 
-                                       from information_schema.columns 
-                                       where table_catalog = $1 
+            select character_maximum_length
+                                       from information_schema.columns
+                                       where table_catalog = $1
                                        and table_schema = $2
-                                       and table_name = $3 
+                                       and table_name = $3
                                        and column_name = $4", [Database, Schema, "medium", "mime"]),
     case Length < 128 of
         true ->
@@ -254,7 +306,7 @@ extent_mime(C, Database, Schema) ->
 
 install_identity_is_verified(C, Database, Schema) ->
     case has_column(C, "identity", "is_verified", Database, Schema) of
-        true -> 
+        true ->
             ok;
         false ->
             {ok, [], []} = epgsql:squery(C, "alter table identity "
@@ -265,7 +317,7 @@ install_identity_is_verified(C, Database, Schema) ->
 
 install_identity_verify_key(C, Database, Schema) ->
     case has_column(C, "identity", "verify_key", Database, Schema) of
-        true -> 
+        true ->
             ok;
         false ->
             {ok, [], []} = epgsql:squery(C, "alter table identity "
@@ -277,7 +329,7 @@ install_identity_verify_key(C, Database, Schema) ->
 
 install_task_due(C, Database, Schema) ->
     case has_column(C, "pivot_task_queue", "due", Database, Schema) of
-        true -> 
+        true ->
             ok;
         false ->
             {ok, [], []} = epgsql:squery(C, "alter table pivot_task_queue add column due timestamp with time zone"),
@@ -287,7 +339,7 @@ install_task_due(C, Database, Schema) ->
 
 install_module_schema_version(C, Database, Schema) ->
     case has_column(C, "module", "schema_version", Database, Schema) of
-        true -> 
+        true ->
             ok;
         false ->
             {ok, [], []} = epgsql:squery(C, "alter table module add column schema_version int "),
@@ -310,7 +362,7 @@ install_geocode(C, Database, Schema) ->
         <<"bigint">> ->
             %% 0.9dev was missing a column definition in the z_install.erl
             case has_column(C, "rsc", "pivot_geocode_qhash", Database, Schema) of
-                true -> 
+                true ->
                     ok;
                 false ->
                     {ok, [], []} = epgsql:squery(C, "alter table rsc add column pivot_geocode_qhash bytea"),
@@ -388,7 +440,7 @@ install_medium_log(C, Database, Schema) ->
 install_pivot_location(C, Database, Schema) ->
     Added = lists:foldl(fun(Col, Acc) ->
                           case has_column(C, "rsc", Col, Database, Schema) of
-                              true -> 
+                              true ->
                                   Acc;
                               false ->
                                   {ok, [], []} = epgsql:squery(C, "alter table rsc add column " ++ Col ++ " float"),
@@ -450,8 +502,8 @@ fix_timestamptz_column(C, Table, Col, Database, Schema) ->
 get_timestamp_without_timezone_columns(C, Database, Schema) ->
     {ok, _, Cols} = epgsql:equery(C, "
                                    select table_name, column_name
-                                   from information_schema.columns 
-                                   where table_catalog = $1 
+                                   from information_schema.columns
+                                   where table_catalog = $1
                                      and table_schema = $2
                                      and data_type = 'timestamp without time zone'",
                                 [Database, Schema]),
@@ -461,11 +513,11 @@ get_timestamp_without_timezone_columns(C, Database, Schema) ->
 %% 0.12.5: Add content groups for the content- and user-group based ACL modules
 install_content_group_dependent(C, Database, Schema) ->
     case has_column(C, "rsc", "content_group_id", Database, Schema) of
-        true -> 
+        true ->
             ok;
         false ->
             lager:info("[database: ~p ~p] Adding rsc.is_dependent and rsc.content_group_id", [Database, Schema]),
-            {ok, [], []} = epgsql:squery(C, 
+            {ok, [], []} = epgsql:squery(C,
                               "ALTER TABLE rsc "
                               "ADD COLUMN is_dependent BOOLEAN NOT NULL DEFAULT false,"
                               "ADD COLUMN content_group_id INT,"
@@ -492,5 +544,16 @@ convert_category_hierarchy(C, Database, Schema) ->
             _ = epgsql:squery(C, "drop table category cascade"),
             ok;
         true ->
+            ok
+    end.
+
+add_edge_log_details(C, Database, Schema) ->
+    {ok, [], []} = epgsql:squery(C, z_install:edge_log_function()),
+    case has_column(C, "edge_log", "logged", Database, Schema) of
+        true ->
+            ok;
+        false ->
+            {ok, [], []} = epgsql:squery(C, "drop table edge_log"),
+            {ok, [], []} = epgsql:squery(C, z_install:edge_log_table()),
             ok
     end.

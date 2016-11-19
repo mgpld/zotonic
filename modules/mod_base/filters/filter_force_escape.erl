@@ -32,8 +32,14 @@
 -author('emmiller@gmail.com').
 
 
-force_escape(undefined, _Context) -> 
+force_escape(undefined, _Context) ->
     <<>>;
+force_escape({trans, _} = Trans, Context) ->
+    force_escape(z_trans:lookup_fallback(Trans, Context), Context);
+force_escape(true, _Context) ->
+    filter_yesno:yesno(true, _Context);
+force_escape(false, _Context) ->
+    filter_yesno:yesno(false, _Context);
 force_escape(Input, _Context) when is_atom(Input) ->
     escape1(atom_to_list(Input), []);
 force_escape(Input, _Context) when is_list(Input) ->
@@ -45,12 +51,8 @@ force_escape(Input, _Context) when is_integer(Input) ->
 force_escape({{Y,M,D}, {_H,_I,_S}} = Input, Context) when is_integer(Y) andalso is_integer(M) andalso is_integer(D) ->
     filter_date:date(Input, "Y-m-d H:i:s", Context);
 force_escape({Y,M,D} = Input, Context) when is_integer(Y) andalso is_integer(M) andalso is_integer(D) ->
-    filter_date:date(Input, "Y-m-d", Context);
-force_escape(true, _Context) ->
-    filter_yesno:yesno(true, _Context);
-force_escape(false, _Context) ->
-    filter_yesno:yesno(false, _Context).
-    
+    filter_date:date(Input, "Y-m-d", Context).
+
 
 
 escape1(Binary, Index) when is_binary(Binary) ->
