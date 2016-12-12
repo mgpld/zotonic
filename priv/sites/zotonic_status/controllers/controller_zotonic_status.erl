@@ -27,7 +27,7 @@
 	updater/2
 ]).
 
--include_lib("include/zotonic.hrl").
+-include_lib("zotonic.hrl").
 
 
 charsets_provided(Context) ->
@@ -132,6 +132,7 @@ start_stream(SitesStatus, Context) ->
 
 
 % @todo Instead of polling we should observe the system wide notifications (that will be implemented)
+-spec updater(any(), z:context()) -> z:context().
 updater(SitesStatus, Context) ->
     Context1 = z_auth:logon_from_session(Context),
     timer:sleep(1000),
@@ -146,6 +147,7 @@ updater(SitesStatus, Context) ->
     end.
 
 
+-spec render_update(list(), z:context()) -> z:context().
 render_update(SitesStatus, Context) ->
     Vars = [
         {has_user, z_acl:user(Context)},
@@ -165,8 +167,23 @@ site_configs() ->
 
 site_config(Site) ->
     case z_sites_manager:get_site_config(Site) of
-        {ok, Config} -> Config;
-        {error, _} = Error -> [{host,Site}, Error]
+        {ok, Config} -> fix_hostname_port_config(Config);
+        {error, _} = Error -> [{site,Site}, Error]
+    end.
+
+fix_hostname_port_config(Config) ->
+    Hostname = proplists:get_value(hostname, Config),
+    [ {hostname, fix_hostname_port(Hostname)} | proplists:delete(hostname, Config)].
+
+fix_hostname_port(undefined) ->
+    fix_hostname_port("localhost");
+fix_hostname_port(Hostname) when is_binary(Hostname) ->
+    fix_hostname_port(binary_to_list(Hostname));
+fix_hostname_port(Hostname) ->
+    [ Host | _ ] = string:tokens(Hostname, ":"),
+    case z_config:get(port) of
+        80 -> Host;
+        Port -> lists:flatten([Host, $:, integer_to_list(Port)])
     end.
 
 get_sites() ->

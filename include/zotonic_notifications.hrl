@@ -36,19 +36,24 @@
     path = <<>> :: binary(),
     method = <<"GET">> :: binary(),
     protocol = http :: http|https,
-    tracer_pid = undefined :: pid()|undefined
+    tracer_pid = undefined :: atom() | pid()
 }).
 
 -record(dispatch_redirect, {
     location = <<>> :: binary(),
     is_permanent = false :: boolean()
 }).
+
 -record(dispatch_match, {
     dispatch_name = undefined :: atom(),
     mod :: atom(),
     mod_opts = [] :: list(),
     path_tokens = [] :: list(binary()),
     bindings = [] :: list({atom(), binary()})
+}).
+
+-record(dispatch_rules, {
+    rules :: #site_dispatch_list{} | undefined
 }).
 
 
@@ -212,7 +217,7 @@
 %% Type: foldl
 -record(dispatch_rewrite, {
     is_dir = false :: boolean(),
-    path = "" :: string(),
+    path = <<>> :: binary(),
     host
 }).
 
@@ -680,7 +685,7 @@
     description :: binary() | {trans, list()},
     rsc_props :: list(),
     medium_props :: list(),
-    medium_url :: binary(),
+    medium_url = <<>> :: binary(),
     preview_url :: binary()
 }).
 
@@ -691,12 +696,12 @@
 %% Type: first
 %% Return: modified ``#media_upload_preprocess{}``
 -record(media_upload_preprocess, {
-    id :: integer() | 'insert_rsc',
-    mime :: binary(),
-    file :: file:filename(),
-    original_filename :: file:filename(),
+    id = insert_rsc :: m_rsc:resource_id() | insert_rsc,
+    mime :: string(),
+    file :: file:filename() | undefined,
+    original_filename :: file:filename() | undefined,
     medium :: list(),
-    post_insert_fun :: function()
+    post_insert_fun :: function() | undefined
 }).
 
 %% @doc Notification that a medium file has been uploaded.
@@ -705,9 +710,9 @@
 %% Return: modified ``#media_upload_props{}``
 -record(media_upload_props, {
     id :: integer() | 'insert_rsc',
-    mime :: binary(),
-    archive_file,
-    options
+    mime :: string(),
+    archive_file :: file:filename() | undefined,
+    options :: list()
 }).
 
 %% @doc Notification that a medium file has been uploaded.
@@ -950,7 +955,7 @@
 %% Return: ``ok`` or ``undefined``
 -record(manage_data, {
     module :: atom(),
-    props :: list()
+    props :: tuple() | list()
 }).
 
 % Simple mod_development notifications:

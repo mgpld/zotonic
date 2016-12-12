@@ -370,7 +370,7 @@ duplicate_file(Type, Filename, Context) ->
 
 
 %% @doc Make a new resource for the file, when the file is not in the archive dir then a copy is made in the archive dir
-%% @spec insert_file(File, Context) -> {ok, Id} | {error, Reason}
+-spec insert_file(term(), z:context()) -> {ok, Id :: m_rsc:resource_id()} | {error, term()}.
 insert_file(File, Context) ->
     insert_file(File, [], Context).
 insert_file(#upload{filename=OriginalFilename, data=Data, tmpfile=undefined}, Props, Context) when Data /= undefined ->
@@ -435,6 +435,7 @@ update_medium_1(RscId, Medium, RscProps, Options, Context) ->
 
 %% @doc Make a new resource for the file based on a URL.
 %% @spec insert_url(File, Context) -> {ok, Id} | {error, Reason}
+-spec insert_url(file:filename(), #context{}) -> {ok, pos_integer()} | {error, term()}.
 insert_url(Url, Context) ->
     insert_url(Url, [], Context).
 
@@ -665,11 +666,13 @@ mime_to_category(Mime) ->
     case Mime of
         "image/" ++ _ -> image;
         "video/" ++ _ -> video;
+        "text/html-video-embed" -> video;
         "audio/" ++ _ -> audio;
         "application/" ++ _ -> document;
         "text/" ++ _ -> document;
         <<"image/", _/binary>> -> image;
         <<"video/", _/binary>> -> video;
+        <<"text/html-video-embed">> -> video;
         <<"audio/", _/binary>> -> audio;
         <<"application/", _/binary>> -> document;
         <<"text/", _/binary>> -> document;

@@ -75,6 +75,8 @@ observe_rsc_update(#rsc_update{action=insert, id=Id}, {Changed, Props}, Context)
                     ok = m_media:replace(Id, MediaProps, Context),
                     spawn_preview_create(Id, MediaProps, Context);
                 false ->
+                    lager:info("Denied user ~p to embed ~p: ~p",
+                               [z_acl:user(Context), ?EMBED_MIME, EmbedCodeRaw]),
                     ok
             end,
             Props1 = proplists:delete(video_embed_code,
@@ -312,7 +314,7 @@ event(#submit{message={add_video_embed, EventProps}}, Context) ->
                 {content_group_id, ContentGroupdId}
             ],
 
-            case m_rsc:insert(Props, Context) of
+            try m_rsc:insert(Props, Context) of
                 {ok, MediaId} ->
                     spawn_preview_create(MediaId, Props, Context),
 
@@ -322,7 +324,12 @@ event(#submit{message={add_video_embed, EventProps}}, Context) ->
                     ContextRedirect = case SubjectId of
                         undefined ->
                             case Stay of
-                                false -> z_render:wire({redirect, [{dispatch, "admin_edit_rsc"}, {id, MediaId}]}, ContextLink);
+                                false -> z_render:wire(
+                                    {redirect, [
+                                        {dispatch, "admin_edit_rsc"}, {id, MediaId}
+                                    ]},
+                                    ContextLink
+                                );
                                 true -> ContextLink
                             end;
                         _ -> ContextLink
@@ -330,8 +337,9 @@ event(#submit{message={add_video_embed, EventProps}}, Context) ->
                     z_render:wire([
                         {dialog_close, []},
                         {growl, [{text, "Made the media page."}]}
-                        | Actions], ContextRedirect);
-                {error, _} = Error ->
+                        | Actions], ContextRedirect)
+            catch
+                {error, Error} ->
                     lager:error("[mod_video_embed] Error in add_video_embed: ~p on ~p", [Error, Props]),
                     z_render:growl_error("Could not create the media page.", Context)
             end;
@@ -343,10 +351,11 @@ event(#submit{message={add_video_embed, EventProps}}, Context) ->
                 {video_embed_service, EmbedService},
                 {video_embed_code, EmbedCode}
             ],
-            case m_rsc:update(Id, Props, Context) of
-                {ok, _} ->
-                    z_render:wire([{dialog_close, []} | Actions], Context);
-                {error, _} ->
+
+            try
+                {ok, _} = m_rsc:update(Id, Props, Context)
+            catch
+                _ ->
                     z_render:growl_error("Could not update the page with the new embed code.", Context)
             end
     end.
@@ -375,8 +384,6 @@ preview_youtube(MediaId, InsertProps, Context) ->
     case z_convert:to_binary(proplists:get_value(video_embed_id, InsertProps)) of
         <<>> ->
             static_preview(MediaId, "images/youtube.jpg", Context);
-        undefined ->
-            static_preview(MediaId, "images/youtube.jpg", Context);
         EmbedId ->
             Url = "http://img.youtube.com/vi/"++z_convert:to_list(EmbedId)++"/0.jpg",
             m_media:save_preview_url(MediaId, Url, Context)
@@ -389,10 +396,8 @@ preview_vimeo(MediaId, InsertProps, Context) ->
     case z_convert:to_binary(proplists:get_value(video_embed_id, InsertProps)) of
         <<>> ->
             static_preview(MediaId, "images/vimeo.jpg", Context);
-        undefined ->
-            static_preview(MediaId, "images/vimeo.jpg", Context);
         EmbedId ->
-            JsonUrl = "http://vimeo.com/api/v2/video/"++z_convert:to_list(EmbedId)++".json",
+            JsonUrl = "http://vimeo.com/api/v2/video/" ++ z_convert:to_list(EmbedId) ++ ".json",
             case httpc:request(JsonUrl) of
                 {ok, {{_Http, 200, _Ok}, _Header, Data}} ->
                     {array, [{struct, Props}]} = mochijson:decode(Data),
