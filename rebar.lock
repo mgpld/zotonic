@@ -19,7 +19,7 @@
   2},
  {<<"cowmachine">>,
   {git,"https://github.com/zotonic/cowmachine.git",
-       {ref,"94826508d3fe572eff3020b76ac00367a6bb782e"}},
+       {ref,"296087a72164cf746270a04838b1a0ed8d42a522"}},
   0},
  {<<"depcache">>,
   {git,"https://github.com/zotonic/depcache.git",
@@ -55,7 +55,7 @@
  {<<"erlware_commons">>,{pkg,<<"erlware_commons">>,<<"0.21.0">>},0},
  {<<"exif">>,
   {git,"https://github.com/nlfiedler/erlang-exif.git",
-       {ref,"89ddef1e0a9d14a386c0a1d01e6654bef74fee55"}},
+       {ref,"2d5314e24ce3f36156500dea90a2c42c0cae0456"}},
   0},
  {<<"exometer">>,
   {git,"https://github.com/Feuerlabs/exometer.git",
@@ -145,7 +145,7 @@
   0},
  {<<"template_compiler">>,
   {git,"https://github.com/zotonic/template_compiler.git",
-       {ref,"f5d1748a603780bcd064ad1424a33d31da57ae1e"}},
+       {ref,"5eacdfaefa2730c970600db01cbfec8a23c9de0b"}},
   0},
  {<<"twerl">>,
   {git,"https://github.com/mworrell/twerl.git",
@@ -153,7 +153,7 @@
   0},
  {<<"z_stdlib">>,
   {git,"https://github.com/zotonic/z_stdlib.git",
-       {ref,"92c79b9cb0382b4362bd33fe61b5fb03078b6e29"}},
+       {ref,"bb9eb50e4de35d1794151d45ec23cab347d91bdf"}},
   0}]}.
 [
 {pkg_hash,[
