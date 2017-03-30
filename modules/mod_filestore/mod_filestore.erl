@@ -138,6 +138,8 @@ pid_observe_tick_1m(Pid, tick_1m, Context) ->
     end,
     start_downloaders(m_filestore:fetch_move_to_local(Context), Context),
     case m_config:get_value(?MODULE, delete_interval, Context) of
+        false ->
+            nop;
         <<"false">> ->
             nop;
         undefined ->
@@ -179,9 +181,10 @@ load_cache(Props, Context) ->
             StreamFun = fun(CachePid) ->
                             s3filez:stream(Cred,
                                            Location1,
-                                           fun({error, enoent}) ->
-                                                    lager:error("File store remote file is gone ~p", [Location]),
-                                                    ok = m_filestore:mark_error(Id, enoent, Ctx),
+                                           fun({error, FinalError})
+                                                when FinalError =:= enoent; FinalError =:= forbidden ->
+                                                    lager:error("File store remote file is ~p ~p", [FinalError, Location]),
+                                                    ok = m_filestore:mark_error(Id, FinalError, Ctx),
                                                     exit(normal);
                                               ({error, _} = Error) ->
                                                     % Abnormal exit when receiving an error.

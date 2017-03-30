@@ -1,5 +1,6 @@
 [![Build Status](https://travis-ci.org/zotonic/zotonic.svg?branch=master)](https://travis-ci.org/zotonic/zotonic)
 [![GitHub release](https://img.shields.io/github/release/zotonic/zotonic.svg?maxAge=3600?style=flat-square)](../../releases)
+[![Docs](https://readthedocs.org/projects/zotonic/badge/?version=latest)](http://docs.zotonic.com/en/latest/)
 [![Join the chat at https://gitter.im/zotonic/zotonic](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/zotonic/zotonic?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 Zotonic
@@ -18,7 +19,7 @@ Installation
 
 * Download Zotonic from the [**official website**](http://zotonic.com/download)
   or start Zotonic from a [**Docker image**](http://zotonic.com/docs/latest/developer-guide/docker.html).
-* Read the [**Installation chapter**](http://zotonic.com/docs/latest/developer-guide/installation.html)
+* Read the [**Installation chapter**](http://docs.zotonic.com/en/latest/developer-guide/getting-started.html#installation)
   in the documentation.
 
 Documentation
@@ -40,8 +41,8 @@ If you encounter any issues, please report them in our
 [issue tracker](https://github.com/zotonic/zotonic/issues). If you discover
 any security-related issues, please contact us at [security@zotonic.com](mailto:security@zotonic.com).
 
-License 
+License
 -------
 
-Zotonic is released under the Apache 2.0 License. Please refer to the included 
+Zotonic is released under the Apache 2.0 License. Please refer to the included
 [LICENSE](LICENSE) file for more information.

@@ -1,11 +1,10 @@
 %% -*- coding: utf-8 -*-
 
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2010-2011 Marc Worrell
-%% Date: 2010-05-19
+%% @copyright 2010-2017 Marc Worrell, Arthur Clemens
 %% @doc Translation support. Generates .po files by scanning templates.
 
-%% Copyright 2010-2016 Marc Worrell
+%% Copyright 2010-2017 Marc Worrell
 %% Copyright 2016 Arthur Clemens
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -65,6 +64,7 @@
          generate_core/1
         ]).
 
+
 -include("zotonic.hrl").
 -include_lib("modules/mod_admin/include/admin_menu.hrl").
 
@@ -118,7 +118,8 @@ default_languages() ->
 observe_session_init_fold(#session_init_fold{}, Context, _Context) ->
     case get_q_language(Context) of
         undefined -> maybe_persistent(Context);
-        QsLang -> set_language(QsLang, Context)
+        QsLang -> 
+            set_language(QsLang, Context)
     end.
 
 
@@ -147,15 +148,46 @@ maybe_configuration(Context) ->
 maybe_accept_header(Context) ->
     case z_context:get_req_header(<<"accept-language">>, Context) of
         undefined -> Context;
-        AcceptLanguage -> set_language(binary_to_atom(AcceptLanguage, 'utf8'), Context)
+        AcceptHeader ->
+            Enabled = acceptable_languages(Context),
+            case cowmachine_accept_language:accept_header(Enabled, AcceptHeader) of
+                {ok, Lang} -> set_language(binary_to_atom(Lang, utf8), Context);
+                {error, _} -> Context
+            end
     end.
+
+% Fetch a list of acceptable languages and their fallback languages
+% Store this in the depcache (and memo) for quick(er) lookups.
+acceptable_languages(Context) ->
+    z_depcache:memo(
+        fun() ->
+            Enabled = enabled_languages(Context),
+            lists:map(
+                fun({LangAtom,Opts}) ->
+                    Lang = atom_to_binary(LangAtom, utf8), 
+                    case lists:keyfind(fallback, 1, Opts) of
+                        {fallback, Fallback} -> {Lang,[Fallback]};
+                        false -> {Lang,[]}
+                    end
+                end,
+                Enabled)
+        end,
+        acceptable_languages,
+        3600,
+        [config],
+        Context).
 
 
 -spec get_q_language(#context{}) -> atom().
 get_q_language(Context) ->
     case z_context:get_q_all(<<"z_language">>, Context) of
         [] -> undefined;
-        L -> binary_to_atom(lists:last(L), 'utf8')
+        L ->
+            Enabled = acceptable_languages(Context),
+            case cowmachine_accept_language:accept_list(Enabled, [lists:last(L)]) of
+                {ok, Lang} -> binary_to_atom(Lang, utf8);
+                {error, _} -> undefined
+            end
     end.
 
 
@@ -203,6 +235,8 @@ observe_set_user_language(#set_user_language{}, Context, _Context) ->
     Context.
 
 
+observe_url_rewrite(#url_rewrite{}, Url, #context{language=[_,'x-default']}) ->
+    Url;
 observe_url_rewrite(#url_rewrite{args=Args}, Url, Context) ->
     case z_context:language(Context) of
         undefined ->
@@ -278,7 +312,7 @@ event(#submit{message={language_add, _Args}}, Context) ->
         true ->
             language_add(
                     z_string:trim(z_context:get_q(<<"code">>, Context)),
-                    z_context:get_q(<<"is_enabled">>, Context),
+                    z_convert:to_bool(z_context:get_q(<<"is_enabled">>, Context)),
                     Context),
             z_render:wire({reload, []}, Context);
         false ->
@@ -311,7 +345,7 @@ event(#postback{message={language_enable, Args}}, Context) ->
 
 %% @doc Toggles the state of the 'rewrite URL' setting. Reloads the page to reflect the new setting.
 event(#postback{message={toggle_url_rewrite, _Args}}, Context) ->
-    Value = z_context:get_q(<<"triggervalue">>, Context),
+    Value = z_convert:to_bool(z_context:get_q(<<"triggervalue">>, Context)),
     set_language_url_rewrite(Value, Context),
     reload_page(Context);
 
@@ -324,7 +358,7 @@ event(#postback{message={translation_generate, _Args}}, Context) ->
                     spawn(fun() -> generate(Context) end),
                     z_render:growl(?__(<<"Started building the .pot files. This may take a while...">>, Context), Context);
                 false ->
-                    ?zError("Cannot generate translation files because gettext is not installed. See http://docs.zotonic.com/en/latest/developer-guide/translation.html.", Context),
+                    lager:error("Cannot generate translation files because gettext is not installed. See http://docs.zotonic.com/en/latest/developer-guide/translation.html."),
                     z_render:growl_error(?__(<<"Cannot generate translation files because <a href=\"http://docs.zotonic.com/en/latest/developer-guide/translation.html\">gettext is not installed</a>.">>, Context), Context)
             end;
         false ->
@@ -344,29 +378,18 @@ event(#postback{message={translation_reload, _Args}}, Context) ->
 
 %% @doc Strip the language code from the location (if the language code is recognized).
 %%      For instance: `<<"/nl-nl/admin/translation">>' becomes `<<"/admin/translation">>'
-url_strip_language([$/,A,B,$/ | Rest] = Url) ->
-    url_strip_language1(Url, [A,B], Rest);
-url_strip_language([$/,A,B,$-,C,D,$/ | Rest] = Url) ->
-    url_strip_language1(Url, [A,B,"-",C,D], Rest);
-url_strip_language(<<$/,A,B,$/, Rest/binary>> = Url) ->
-    url_strip_language1(Url, [A,B], Rest);
-url_strip_language(<<$/,A,B,$-,C,D,$/, Rest/binary>> = Url) ->
-    url_strip_language1(Url, [A,B,<<"-">>,C,D], Rest);
+url_strip_language(<<$/, A, B, $/, Rest/binary>> = Url) ->
+    url_strip_language1(Url, [A, B], Rest);
+url_strip_language(<<$/, A, B, $-, C, D, $/, Rest/binary>> = Url) ->
+    url_strip_language1(Url, [A, B, <<"-">>, C, D], Rest);
 url_strip_language(Url) ->
     Url.
 
-url_strip_language1(Url, LanguageCode, Rest) when is_list(Url) ->
-    case z_language:is_valid(LanguageCode) of
-        true -> [$/|Rest];
-        false -> Url
-    end;
 url_strip_language1(Url, LanguageCode, Rest) when is_binary(Url) ->
     case z_language:is_valid(LanguageCode) of
         true -> <<$/, Rest/binary>>;
         false -> Url
-    end;
-url_strip_language1(Url, _LanguageCode, _Rest) ->
-    Url.
+    end.
 
 
 %% @doc Set the language, as selected by the user. Persist this choice.
@@ -388,6 +411,8 @@ set_user_language(Code, Context) ->
 
 %% @doc Set the language of the current user/session. Sets to the given language if the language exists in the config language and is enabled; otherwise tries the language's fallback language; if this fails too, sets language to the site's default language.
 -spec set_language(atom(), #context{}) -> #context{}.
+set_language('x-default', Context) ->
+    z_context:set_language('x-default', Context);
 set_language(Code0, Context) when is_atom(Code0) ->
     {Code, LanguageData} = valid_config_language(Code0, Context),
     FallbackCode = proplists:get_value(fallback, LanguageData),
@@ -401,8 +426,10 @@ set_language(Code0, Context) when is_atom(Code0) ->
             z_context:set_session(language, Langs, Context1),
             Context1
     end;
-set_language(Code, Context) ->
-    set_language(z_convert:to_atom(Code), Context).
+set_language(Code, Context) when is_binary(Code) ->
+    set_language(binary_to_existing_atom(Code, utf8), Context);
+set_language(Code, Context) when is_list(Code) ->
+    set_language(list_to_existing_atom(Code), Context).
 
 
 %% @doc Set the default language.
@@ -437,7 +464,7 @@ valid_config_language(Code, Context) ->
 
 
 %% @doc Add a language to the i18n configuration
--spec language_add(atom(), boolean(), #context{}) -> #context{}.
+-spec language_add(atom() | binary(), boolean(), #context{}) -> #context{}.
 language_add(NewLanguageCode, IsEnabled, Context) ->
     NewCode = z_convert:to_atom(NewLanguageCode),
     NewCodeBin = z_convert:to_binary(NewCode),
@@ -449,7 +476,7 @@ language_add(NewLanguageCode, IsEnabled, Context) ->
         true ->
             Props = proplists:get_value(NewCodeBin, Languages),
             Props1 = [
-                {is_enabled, z_convert:to_bool(IsEnabled)},
+                {is_enabled, IsEnabled},
                 {fallback, proplists:get_value(language, Props)}
             | Props],
             ConfigLanguages = language_config(Context),
@@ -471,7 +498,7 @@ language_delete(LanguageCode, Context) ->
     end.
 
 %% @doc Remove a language from the i18n configuration
--spec remove_from_config(atom(), #context{}) -> undefined.
+-spec remove_from_config(atom(), z:context()) -> ok.
 remove_from_config(LanguageCode, Context) ->
     ConfigLanguages = language_config(Context),
     ConfigLanguages1 = proplists:delete(LanguageCode, ConfigLanguages),
@@ -494,9 +521,9 @@ language_enable(Code, IsEnabled, Context) ->
 
 
 %% @doc Set/reset the state of the 'rewrite URL' setting.
--spec set_language_url_rewrite(boolean(), #context{}) -> undefined.
+-spec set_language_url_rewrite(boolean(), #context{}) -> #context{}.
 set_language_url_rewrite(Value, Context) ->
-    m_config:set_value("mod_translation", "rewrite_url", Value, Context),
+    m_config:set_value(mod_translation, rewrite_url, Value, Context),
     reload_page(Context).
 
 
@@ -540,10 +567,22 @@ is_multiple_languages_config(Context) ->
 %% @private
 -spec is_enabled_language(binary(), #context{}) -> boolean().
 is_enabled_language(LanguageCode, Context) ->
-    case lists:keyfind(binary_to_atom(LanguageCode, latin1), 1, enabled_languages(Context)) of
-        false -> false;
-        _ -> true
+    case maybe_language_code(LanguageCode) of
+        true ->
+            Enabled = enabled_languages(Context),
+            try
+                lists:keymember(erlang:binary_to_existing_atom(LanguageCode, utf8), 1, Enabled)
+            catch
+                error:badarg -> false
+            end;
+        false ->
+            false
     end.
+
+maybe_language_code(<<A,B>>) when A >= $a, A =< $z, B >= $a, B =< $z -> true;
+maybe_language_code(<<A,B,$-,_/binary>>) when A >= $a, A =< $z, B >= $a, B =< $z -> true;
+maybe_language_code(<<$x,$-,_/binary>>) -> true;
+maybe_language_code(_) -> false.
 
 
 %% @private

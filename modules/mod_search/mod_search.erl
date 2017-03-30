@@ -36,7 +36,7 @@
     observe_search_query/2,
     observe_module_activate/2,
     to_tsquery/2,
-    rank_weight/0,
+    rank_weight/1,
     rank_behaviour/1,
     find_by_id/2,
     find_by_id/3
@@ -274,7 +274,7 @@ search({match_objects, [{id,Id}]}, _OffsetLimit, Context) ->
 		        select="r.id, ts_rank(pivot_rtsv, query) AS rank",
 		        from="rsc r, to_tsquery($1) query",
 		        where=" query @@ pivot_rtsv and id <> $2",
-		        order="rank desc",
+		        order="rank desc, r.publication_start desc",
 		        args=[TsQuery, z_convert:to_integer(Id)],
 		        tables=[{rsc,"r"}]
 		    }
@@ -300,7 +300,7 @@ search({match_objects_cats, [{id,Id}]}, _OffsetLimit, Context) ->
 		        select="r.id, ts_rank(pivot_rtsv, query) AS rank",
 		        from="rsc r, to_tsquery($1) query",
 		        where=" query @@ pivot_rtsv and id <> $2",
-		        order="rank desc",
+		        order="rank desc, r.publication_start desc",
 		        args=[TsQuery, z_convert:to_integer(Id)],
 		        tables=[{rsc,"r"}]
 		    }
@@ -384,11 +384,11 @@ search({autocomplete, [{cat,Cat}, {text,QueryText}]}, _OffsetLimit, Context) ->
         _ ->
             TsQuery = to_tsquery(QueryText, Context),
             case TsQuery of
-                A when A == undefined orelse A == [] ->
+                A when A == <<>> ->
                     #search_result{};
                 _ ->
                     #search_sql{
-                        select="r.id, ts_rank_cd("++rank_weight()++", pivot_tsv, $1, $2) AS rank",
+                        select="r.id, ts_rank_cd("++rank_weight(Context)++", pivot_tsv, $1, $2) AS rank",
                         from="rsc r",
                         where=" $1 @@ r.pivot_tsv",
                         order="rank desc",
@@ -417,7 +417,7 @@ search({fulltext, [{text,QueryText}]}, _OffsetLimit, Context) ->
         _ ->
             TsQuery = to_tsquery(QueryText, Context),
             #search_sql{
-                select="r.id, ts_rank_cd("++rank_weight()++", pivot_tsv, $1, $2) AS rank",
+                select="r.id, ts_rank_cd("++rank_weight(Context)++", pivot_tsv, $1, $2) AS rank",
                 from="rsc r",
                 where=" $1 @@ r.pivot_tsv",
                 order="rank desc",
@@ -441,7 +441,7 @@ search({fulltext, [{cat,Cat},{text,QueryText}]}, _OffsetLimit, Context) ->
         _ ->
             TsQuery = to_tsquery(QueryText, Context),
             #search_sql{
-                select="r.id, ts_rank_cd("++rank_weight()++", pivot_tsv, $1, $2) AS rank",
+                select="r.id, ts_rank_cd("++rank_weight(Context)++", pivot_tsv, $1, $2) AS rank",
                 from="rsc r",
                 where=" $1 @@ pivot_tsv",
                 order="rank desc",
@@ -529,11 +529,9 @@ search(_, _, _) ->
 %% @doc Expand a search string like "hello wor" to a PostgreSQL tsquery string.
 %%      If the search string ends in a word character then a wildcard is appended
 %%      to the last search term.
--spec to_tsquery(binary()|string(), #context{}) -> binary().
+-spec to_tsquery(binary(), #context{}) -> binary().
 to_tsquery(undefined, _Context) ->
     <<>>;
-to_tsquery(Text, Context) when is_list(Text) ->
-    to_tsquery(z_convert:to_binary(Text), Context);
 to_tsquery(<<>>, _Context) ->
     <<>>;
 to_tsquery(Text, Context) when is_binary(Text) ->
@@ -642,7 +640,11 @@ rank_behaviour(Context) ->
 
 %% @doc The weights for the ranking of the ABCD indexing categories.
 %% See also: http://www.postgresql.org/docs/9.3/static/textsearch-controls.html
--spec rank_weight() -> string().
-rank_weight() ->
-    "'{0.05, 0.25, 0.5, 1.0}'".
-
+-spec rank_weight(#context{}) -> string().
+rank_weight(Context) ->
+    case m_config:get_value(mod_search, rank_weight, Context) of
+        Empty when Empty =:= undefined; Empty =:= <<>> ->
+            "'{0.05, 0.25, 0.5, 1.0}'";
+        Weight ->
+            lists:flatten(io_lib:format("\'~s\'", [Weight]))
+    end.

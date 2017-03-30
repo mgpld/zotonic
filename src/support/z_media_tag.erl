@@ -304,10 +304,10 @@ mediaprops_filename(Id, Props, Context) ->
     end.
 
 use_absolute_url(Options, Context) ->
-    case use_absolute(proplists:get_value(use_absolute_url, Options)) of
+    case use_absolute(proplists:get_value(absolute_url, Options)) of
         false -> false;
         true -> true;
-        undefined -> z_convert:to_bool(z_context:get(use_absolute_url, Context))
+        undefined -> z_convert:to_bool(z_context:get(absolute_url, Context))
     end.
 
 use_absolute(undefined) -> undefined;
@@ -401,7 +401,7 @@ props2url([{width,Width}|Rest], _Width, Height, Acc, Context) ->
     props2url(Rest, z_convert:to_integer(Width), Height, Acc, Context);
 props2url([{height,Height}|Rest], Width, _Height, Acc, Context) ->
     props2url(Rest, Width, z_convert:to_integer(Height), Acc, Context);
-props2url([{use_absolute_url,_}|Rest], Width, Height, Acc, Context) ->
+props2url([{absolute_url,_}|Rest], Width, Height, Acc, Context) ->
     props2url(Rest, Width, Height, Acc, Context);
 props2url([{mediaclass,Class}|Rest], Width, Height, Acc, Context) ->
     case z_mediaclass:get(Class, Context) of
@@ -516,10 +516,34 @@ url2props1([P|Rest], Acc) ->
 
 
 opt_crop_center(Id, Options, Context) ->
-    case {proplists:get_value(crop, Options), m_rsc:p(Id, crop_center, Context)} of
-        {true, <<"+",_/binary>> = C} ->
-            z_utils:prop_replace(crop, C, Options);
-        {_, _} ->
+    Crop = proplists:get_value(crop, Options),
+    case is_crop_center(Crop) of
+        true -> maybe_add_crop_center(Id, Options, Context);
+        false when Crop =:= undefined ->
+            opt_crop_center_mediaclass(proplists:get_value(mediaclass, Options), Id, Options, Context);
+        false -> Options
+    end.
+
+opt_crop_center_mediaclass(undefined, _Id, Options, _Context) ->
+    Options;
+opt_crop_center_mediaclass(Mediaclass, Id, Options, Context) ->
+    {ok, Props, _Hash} = z_mediaclass:get(Mediaclass, Context),
+    case is_crop_center(proplists:get_value(crop, Props)) of
+        true -> maybe_add_crop_center(Id, Options, Context);
+        false -> Options
+    end.
+
+maybe_add_crop_center(Id, Options, Context) ->
+    case m_rsc:p_no_acl(Id, crop_center, Context) of
+        <<"+", _/binary>> = Center ->
+            z_utils:prop_replace(crop, Center, Options);
+        _ ->
             Options
     end.
+
+is_crop_center(true) -> true;
+is_crop_center(center) -> true;
+is_crop_center(<<"center">>) -> true;
+is_crop_center("center") -> true;
+is_crop_center(_) -> false.
 

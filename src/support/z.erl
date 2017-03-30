@@ -22,47 +22,38 @@
 
 %% interface functions
 -export([
-         c/1,
+    c/1,
 
-         n/2,
-         n1/2,
-         m/0,
-         m/1,
-         compile/0,
-         compile/1,
-         flush/0,
-         flush/1,
-         restart/0,
-         restart/1,
+    n/2,
+    n1/2,
+    m/0,
+    m/1,
+    compile/0,
+    compile/1,
+    flush/0,
+    flush/1,
+    restart/0,
+    restart/1,
 
-         ld/0,
-         ld/1,
+    ld/0,
+    ld/1,
 
-         log_level/1,
+    shell_stopsite/1,
+    shell_startsite/1,
+    shell_restartsite/1,
 
-         shell_stopsite/1,
-         shell_startsite/1,
-         shell_restartsite/1,
-
-         debug_msg/3,
-
-         log/3,
-
-         debug/2,
-         debug/3,
-         debug/4,
-         info/2,
-         info/3,
-         info/4,
-         warning/2,
-         warning/3,
-         warning/4,
-         error/2,
-         error/3,
-         error/4
-        ]).
+    debug_msg/3
+]).
 
 -include("zotonic.hrl").
+
+-type context() :: #context{}.
+-type validation_error() :: invalid | novalue | {script, string()} | novalidator | string().
+
+-export_type([
+    context/0,
+    validation_error/0
+]).
 
 % @doc Return a new context
 c(Site) ->
@@ -98,15 +89,15 @@ compile(Options) ->
 
 %% @doc Reset all caches, reload the dispatch rules and rescan all modules.
 flush() ->
-    [ flush(C) || C <- z_sites_manager:get_site_contexts() ],
+    [flush(C) || C <- z_sites_manager:get_site_contexts()],
     z_sites_dispatcher:update_dispatchinfo().
 
 flush(Site) when is_atom(Site) ->
     flush(c(Site));
 flush(Context) ->
-   	z_depcache:flush(Context),
-   	z_dispatcher:reload(Context),
-   	n(module_ready, Context).
+    z_depcache:flush(Context),
+    z_dispatcher:reload(Context),
+    n(module_ready, Context).
 
 %% @doc Full restart of Zotonic
 restart() ->
@@ -116,11 +107,6 @@ restart() ->
 %% @doc Restart a site
 restart(Site) ->
     z_sites_manager:restart(Site).
-
-%% @doc Shortcut to set the lager console log level
-log_level(Level) ->
-    lager:set_loglevel(lager_console_backend, Level).
-
 
 %% @doc Reload all changed Erlang modules
 ld() ->
@@ -157,59 +143,7 @@ shell_restartsite(Site) ->
     z_sites_manager:stop(Site),
     shell_startsite(Site).
 
-
 %% @doc Echo and return a debugging value
 debug_msg(Module, Line, Msg) ->
-	error_logger:info_msg("DEBUG: ~p:~p  ~p~n", [Module, Line, Msg]),
-	Msg.
-
-%% @doc Log a debug message, with extra props.
-debug(Msg, Context)        -> log(debug, Msg, [], Context).
-debug(Msg, Props, Context) -> log(debug, Msg, Props, Context).
-debug(Msg, Args, Props, Context) -> log(debug, Msg, Args, Props, Context).
-
-%% @doc Log an informational message.
-info(Msg, Context)         -> log(info, Msg, [], Context).
-info(Msg, Props, Context)  -> log(info, Msg, Props, Context).
-info(Msg, Args, Props, Context)  -> log(info, Msg, Args, Props, Context).
-
-%% @doc Log a warning.
-warning(Msg, Context)         -> log(warning, Msg, [], Context).
-warning(Msg, Props, Context)  -> log(warning, Msg, Props, Context).
-warning(Msg, Args, Props, Context)  -> log(warning, Msg, Args, Props, Context).
-
-%% @doc Log a error.
-error(Msg, Context)         -> log(error, Msg, [], Context).
-error(Msg, Props, Context)  -> log(error, Msg, Props, Context).
-error(Msg, Args, Props, Context)  -> log(error, Msg, Args, Props, Context).
-
-
-log(Type, Props, Context) when is_atom(Type), is_list(Props) ->
-    z_notifier:notify(
-        #zlog{
-            type=Type,
-            user_id=z_acl:user(Context),
-            timestamp=os:timestamp(),
-            props=Props
-        },
-        Context).
-
-log(Type, Msg, Args, Props, Context) ->
-    Msg1 = lists:flatten(io_lib:format(Msg, Args)),
-    log(Type, Msg1, Props, Context).
-
-log(Type, Msg, Props, Context) ->
-    Msg1 = erlang:iolist_to_binary(Msg),
-    Line = proplists:get_value(line, Props, 0),
-    Module = proplists:get_value(module, Props, unknown),
-    lager:log(Type, Props, "[~p] ~p @ ~p:~p  ~s~n",
-             [z_context:site(Context), Type, Module, Line, binary_to_list(Msg1)]),
-    z_notifier:notify(
-        #zlog{
-            type=Type,
-            user_id=z_acl:user(Context),
-            timestamp=os:timestamp(),
-            props=#log_message{type=Type, message=Msg1, props=Props, user_id=z_acl:user(Context)}
-        },
-        Context).
-
+    error_logger:info_msg("DEBUG: ~p:~p  ~p~n", [Module, Line, Msg]),
+    Msg.

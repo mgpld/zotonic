@@ -44,14 +44,6 @@ http://zotonic.com/feed/search?cat=documentation&text=filter
 Query arguments
 ---------------
 
-authoritative
-^^^^^^^^^^^^^
-
-Boolean, filters whether a resource is considered authoritative
-(belonging on this site) or not::
-
-    authoritative=1
-
 cat
 ^^^
 
@@ -187,6 +179,14 @@ objects ids will be returned first::
     match_objects=1234
 
 An ``id_exlude=...`` is automatically added for the resource in the argument.
+
+is_authoritative
+^^^^^^^^^^^^^^^^
+
+Boolean, filters whether a resource is considered authoritative
+(originating from this site) or not::
+
+    is_authoritative
 
 is_featured
 ^^^^^^^^^^^
@@ -421,6 +421,17 @@ content_group
 Select items which are member of the given content group (or one of its children)::
 
     content_group=public
+
+name
+^^^^
+
+Find resource with a matching unique name. A wildcard can be defined, for example::
+
+    name=page_*
+
+Searching on an empty name or just ``*`` will return all resources with a defined name.
+The given name will be trimmed and converted to lowercase before searching.
+
 
 Filter behaviour
 ----------------

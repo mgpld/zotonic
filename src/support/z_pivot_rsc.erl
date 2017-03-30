@@ -31,6 +31,7 @@
     pivot_delay/1,
     pivot_resource_update/4,
     queue_all/1,
+    queue_count/1,
     insert_queue/2,
 
     get_pivot_title/1,
@@ -140,12 +141,18 @@ queue_all(Context) ->
                 queue_all(LastId, Context)
         end.
 
+%% @doc Return the length of the pivot queue.
+-spec queue_count(z:context()) -> integer().
+queue_count(Context) ->
+    z_db:q1("SELECT COUNT(*) FROM rsc_pivot_queue", Context).
+
 %% @doc Insert a rsc_id in the pivot queue
+-spec insert_queue(m_rsc:resource(), #context{}) -> ok | {error, eexist}.
 insert_queue(Id, Context) ->
     insert_queue(Id, calendar:universal_time(), Context).
 
 %% @doc Insert a rsc_id in the pivot queue for a certain date
--spec insert_queue(integer(), calendar:date(), #context{}) -> ok | {error, eexist}.
+-spec insert_queue(integer(), {calendar:date(), calendar:time()}, #context{}) -> ok | {error, eexist}.
 insert_queue(Id, Date, Context) when is_integer(Id), is_tuple(Date) ->
     z_db:transaction(
         fun(Ctx) ->
@@ -678,6 +685,7 @@ to_tsv(Text, Level, Args, StemmingLanguage) when is_binary(Text) ->
         {["setweight(to_tsvector('pg_catalog.",StemmingLanguage,"', $",integer_to_list(N),"), '",Level,"')"], Args1}
     end.
 
+-spec to_float(term()) -> float().
 to_float(undefined) ->
     undefined;
 to_float(Text) ->
@@ -870,7 +878,7 @@ define_custom_pivot(Module, Columns, Context) ->
                         Idx = [
                                 begin
                                     K = element(1,Col),
-                                    "CREATE INDEX " ++ z_convert:to_list(K) ++ "_key ON "
+                                    "CREATE INDEX " ++ TableName ++ "_" ++ z_convert:to_list(K) ++ "_key ON "
                                     ++ TableName ++ "(" ++ z_convert:to_list(K) ++ ")"
                                 end
                                 || Col <- Indexable

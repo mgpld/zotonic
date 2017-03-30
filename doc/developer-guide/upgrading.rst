@@ -46,6 +46,26 @@ Removed deprecated functions
 * The ``{% stream %}`` tag was removed.
 * Removed older TinyMCE versions 3.5.0 and 4.2.4.
 
+Templates
+^^^^^^^^^
+
+* The ``use_absolute_url`` argument of the ``url``, ``image`` and ``lib`` tags
+  was renamed to ``absolute_url``.
+
+
+Port, proxies and SSL certificates
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+SSL/https support has been completely refactored.
+
+ * SSL self signed certificates have been moved into the core
+ * New modules :ref:`mod_ssl_ca` and :ref:`mod_ssl_letsencrypt`
+ * Deleted module ``mod_ssl``
+ * Port configuration has been changed, see :ref:`ref-port-ssl-configuration`
+
+For an overview of https support, see :ref:`https-support`
+
+
 Erlang code, Controllers, Event handlers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -110,8 +130,8 @@ The controllers are simplified and will need some adaptations.
 
 The following callbacks are removed:
 
- * `init`
- * `ping`
+ * ``init``
+ * ``ping``
 
  All other callbacks have now a single *Context* argument, the *ReqData* argument has been removed.
  There is no need anymore for the ``?WM_REQ`` and ``?WM_REPLY`` macros, and they have been removed.
@@ -123,6 +143,11 @@ Other controller changes changes are:
  * Methods are now binaries in `allowed_methods` and `known_methods`
  * Encodings are now binaries in `content_encodings_provided`
  * The return value of `generate_etag` must be a binary
+
+Search
+^^^^^^
+
+* Search argument ``authoritative`` was renamed to ``is_authoritative``.
 
 
 
@@ -361,11 +386,11 @@ The following include files have been renamed:
 HTTPS support
 ^^^^^^^^^^^^^
 
-HTTPS support was moved from the core into a new module, :ref:`mod_ssl`.
+HTTPS support was moved from the core into a new module, *mod_ssl*.
 
 The global ``priv/config`` options ``ssl``, ``ssl_certfile``,
 ``ssl_keyfile`` and ``ssl_password`` do no longer have an effect. See
-:ref:`mod_ssl` on how to configure HTTPS support for Zotonic from 0.9
+*mod_ssl* on how to configure HTTPS support for Zotonic from 0.9
 and up.
 
 

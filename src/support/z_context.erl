@@ -28,7 +28,9 @@
     site/1,
     hostname/1,
     hostname_port/1,
+    hostname_ssl_port/1,
     site_protocol/1,
+    is_ssl_site/1,
 
     db_pool/1,
     db_driver/1,
@@ -71,6 +73,8 @@
     get_q_all/2,
     get_q_all_noz/1,
     get_q_validated/2,
+
+    is_zotonic_arg/1,
 
     add_script_session/1,
     add_script_page/1,
@@ -140,7 +144,7 @@
 -include_lib("zotonic.hrl").
 
 %% @doc Return a new empty context, no request is initialized.
--spec new( #context{} | atom() | cowboy_req:req() ) -> #context{}.
+-spec new( z:context() | atom() | cowboy_req:req() ) -> z:context().
 new(#context{} = C) ->
     #context{
         site=C#context.site,
@@ -171,10 +175,10 @@ new(Req) when is_map(Req) ->
     z_memo:enable(),
     z_depcache:in_process(true),
     Context = set_server_names(#context{req=Req, site=site(Req)}),
-    set_dispatch_from_path(set_default_language_tz(Context)).
+    set_default_language_tz(Context).
 
 %% @doc Create a new context record for a site with a certain language
--spec new( atom() | cowboy_req:req(), atom() ) -> #context{}.
+-spec new( atom() | cowboy_req:req(), atom() ) -> z:context().
 new(Site, Lang) when is_atom(Site), is_atom(Lang) ->
     Context = set_server_names(#context{site=Site}),
     Context#context{
@@ -187,6 +191,7 @@ new(Req, Module) when is_map(Req) ->
     Context#context{controller_module=Module}.
 
 
+-spec set_default_language_tz(z:context()) -> z:context().
 set_default_language_tz(Context) ->
     F = fun() -> {z_language:default_language(Context), tz_config(Context)} end,
     {DefaultLang, TzConfig} = z_depcache:memo(F, default_language_tz, ?DAY, [config], Context),
@@ -214,16 +219,8 @@ new_tests() ->
     Context.
 
 
-%% @doc Set the dispatch rule for this request to the context var 'zotonic_dispatch'
-set_dispatch_from_path(Context) ->
-    Bindings = cowmachine_req:path_info(Context),
-    case lists:keyfind(zotonic_dispatch, 1, Bindings) of
-        {zotonic_dispatch, Dispatch} -> set(zotonic_dispatch, Dispatch, Context);
-        false -> Context
-    end.
-
 %% @doc Set all server names for the given site.
--spec set_server_names(#context{}) -> #context{}.
+-spec set_server_names( z:context() ) -> z:context().
 set_server_names(#context{site=Site} = Context) ->
     SiteAsList = [$$ | atom_to_list(Site)],
     Depcache = list_to_atom("z_depcache"++SiteAsList),
@@ -243,7 +240,7 @@ set_server_names(#context{site=Site} = Context) ->
 
 
 %% @doc Maps the site in the request to a site in the sites folder.
--spec site(#context{}|cowboy_req:req()) -> atom().
+-spec site(z:context() | cowboy_req:req()) -> atom().
 site(#context{site=Site}) ->
     Site;
 site(Req) when is_map(Req) ->
@@ -254,38 +251,55 @@ site(Req) when is_map(Req) ->
 
 
 %% @doc Return the preferred hostname from the site configuration
--spec hostname(#context{}) -> binary().
+-spec hostname( z:context() ) -> binary().
 hostname(Context) ->
     case z_dispatcher:hostname(Context) of
-        Empty when Empty == undefined; Empty == <<>> ->
-            <<"localhost">>;
-        Hostname ->
-            Hostname
+        undefined -> <<"localhost">>;
+        <<>> -> <<"localhost">>;
+        Hostname -> Hostname
     end.
 
-%% @doc Return the preferred hostname, including port, from the site configuration
--spec hostname_port(#context{}) -> binary().
+%% @doc Return the hostname (and port) for http from the site configuration
+-spec hostname_port( z:context() ) -> binary().
 hostname_port(Context) ->
     case z_dispatcher:hostname_port(Context) of
         Empty when Empty =:= undefined; Empty =:= <<>> ->
-            <<"localhost">>;
+            case z_config:get(port) of
+                80 -> <<"localhost">>;
+                Port -> <<"localhost:", (integer_to_binary(Port))/binary>>
+            end;
         Hostname ->
             Hostname
     end.
 
+%% @doc Return the hostname (and port) for https from the site configuration
+-spec hostname_ssl_port( z:context() ) -> binary().
+hostname_ssl_port(Context) ->
+    case z_dispatcher:hostname_ssl_port(Context) of
+        Empty when Empty =:= undefined; Empty =:= <<>> ->
+            case z_config:get(ssl_port) of
+                443 -> <<"localhost">>;
+                Port -> <<"localhost:", (integer_to_binary(Port))/binary>>
+            end;
+        Hostname ->
+            Hostname
+    end.
 
 %% @doc Check if the current context is a request context
+-spec is_request( z:context() ) -> boolean().
 is_request(#context{req=undefined}) -> false;
 is_request(_Context) -> true.
 
 
 %% @doc Minimal prune, for ensuring that the context can safely used in two processes
+-spec prune_for_spawn( z:context() ) -> z:context().
 prune_for_spawn(#context{} = Context) ->
     Context#context{
         dbc=undefined
     }.
 
 %% @doc Make the context safe to use in a async message. This removes buffers and the db transaction.
+-spec prune_for_async( z:context() ) -> z:context().
 prune_for_async(#context{} = Context) ->
     #context{
         req=Context#context.req,
@@ -312,6 +326,7 @@ prune_for_async(#context{} = Context) ->
 
 
 %% @doc Cleanup a context for the output stream
+-spec prune_for_template( z:context() ) -> z:context().
 prune_for_template(#context{}=Context) ->
     #context{
         req=undefined,
@@ -328,6 +343,7 @@ prune_for_template(Output) -> Output.
 
 
 %% @doc Cleanup a context so that it can be used exclusively for database connections
+-spec prune_for_database( z:context() ) -> z:context().
 prune_for_database(Context) ->
     #context{
         site=Context#context.site,
@@ -347,6 +363,7 @@ prune_for_database(Context) ->
 
 %% @doc Cleanup a context for cacheable scomp handling.  Resets most of the accumulators to prevent duplicating
 %% between different (cached) renderings.
+-spec prune_for_scomp( z:context() ) -> z:context().
 prune_for_scomp(Context) ->
     Context#context{
         dbc=undefined,
@@ -383,57 +400,103 @@ prune_reqdata(Req) ->
     % }.
 
 %% @doc Make the url an absolute url by prepending the hostname.
-%% @spec abs_url(iolist(), Context) -> binary()
-abs_url(<<"http:", _/binary>> = Url, _Context) ->
-    Url;
-abs_url(<<"https", _/binary>> = Url, _Context) ->
-    Url;
-abs_url(<<"//", _/binary>> = Url, Context) ->
-    <<(site_protocol(Context))/binary, $:, Url/binary>>;
+-spec abs_url(iolist(), z:context()) -> binary().
 abs_url(Url, Context) when is_list(Url) ->
     abs_url(iolist_to_binary(Url), Context);
+abs_url(<<"//", _/binary>> = Url, Context) ->
+    case m_req:get(scheme, Context) of
+        undefined ->
+            case is_ssl_site(Context) of
+                true -> <<"https:", Url/binary>>;
+                false -> <<"http:", Url/binary>>
+            end;
+        https -> <<"https:", Url/binary>>;
+        http -> <<"http:", Url/binary>>
+    end;
+abs_url(<<$/, _/binary>> = Url, Context) ->
+    case z_notifier:first(#url_abs{url=Url}, Context) of
+        undefined ->
+            Hostname = hostname(Context),
+            case request_scheme_port(Context) of
+                {https, 443} -> <<"https://", Hostname/binary, Url/binary>>;
+                {http, 80} -> <<"http://", Hostname/binary, Url/binary>>;
+                {https, Port} -> <<"https://", Hostname/binary, $:, (integer_to_binary(Port))/binary, Url/binary>>;
+                {http, Port} -> <<"http://", Hostname/binary, $:, (integer_to_binary(Port))/binary, Url/binary>>
+            end;
+        AbsUrl ->
+            AbsUrl
+    end;
 abs_url(Url, Context) ->
     case has_url_protocol(Url) of
-        true ->
-            Url;
-        false ->
-            case z_notifier:first(#url_abs{url=Url}, Context) of
-                undefined ->
-                    z_convert:to_binary([site_protocol(Context), "://", hostname_port(Context), Url]);
-                AbsUrl ->
-                    AbsUrl
+        true -> Url;
+        false -> abs_url(<<$/, Url/binary>>, Context)
+    end.
+
+request_scheme_port(Context) ->
+    case m_req:get(scheme, Context) of
+        https ->
+            {https, z_config:get(ssl_port)};
+        _ ->
+            case is_ssl_site(Context) of
+                true -> {https, z_config:get(ssl_port)};
+                false -> {http, z_config:get(port)}
             end
     end.
 
-    has_url_protocol(<<>>) ->
-        false;
-    has_url_protocol(<<H, T/binary>>) when H >= $a andalso H =< $z ->
-        has_url_protocol(T);
-    has_url_protocol(<<$:, _/binary>>) ->
-        true;
-    has_url_protocol(_) ->
-        false.
+has_url_protocol(<<"http:">>) -> true;
+has_url_protocol(<<"https:">>) -> true;
+has_url_protocol(<<"ws:">>) -> true;
+has_url_protocol(<<"wss:">>) -> true;
+has_url_protocol(<<"ftp:">>) -> true;
+has_url_protocol(<<"email:">>) -> true;
+has_url_protocol(<<"file:">>) -> true;
+has_url_protocol(<<H, T/binary>>) when H >= $a andalso H =< $z ->
+    has_url_protocol_1(T);
+has_url_protocol(_) ->
+    false.
+
+has_url_protocol_1(<<H, T/binary>>) when H >= $a andalso H =< $z ->
+    has_url_protocol_1(T);
+has_url_protocol_1(<<$:, _/binary>>) -> true;
+has_url_protocol_1(_) -> false.
 
 
 %% @doc Fetch the pid of the database worker pool for this site
+-spec db_pool(z:context()) -> atom().
 db_pool(#context{db={Pool, _Driver}}) ->
     Pool.
 
 %% @doc Fetch the database driver module for this site
+-spec db_driver(z:context()) -> atom().
 db_driver(#context{db={_Pool, Driver}}) ->
     Driver.
 
 %% @doc Fetch the protocol for absolute urls referring to the site (defaults to http).
 %%      Useful when the site is behind a https proxy.
+-spec site_protocol(z:context()) -> binary().
 site_protocol(Context) ->
-    case z_convert:to_binary(m_config:get_value(site, protocol, Context)) of
-        <<>> -> <<"http">>;
-        P -> P
+    case is_ssl_site(Context) of
+        true -> <<"https">>;
+        false -> <<"http">>
+    end.
+
+%% @doc Check if the preferred protocol of the site is https
+%% @todo Refactor mod_ssl so that we don't need to check the mod_ssl config here 
+-spec is_ssl_site(z:context()) -> boolean().
+is_ssl_site(Context) ->
+    case z_config:get(port_ssl) of
+        none ->
+            false;
+        _ -> 
+            case z_config:get(ssl_only) of
+                true -> true;
+                false -> z_convert:to_bool(m_config:get_value(site, ssl_only, Context))
+            end
     end.
 
 %% @doc Pickle a context for storing in the database
 %% @todo pickle/depickle the visitor id (when any)
-%% @spec pickle(Context) -> tuple()
+-spec pickle( z:context() ) -> tuple().
 pickle(Context) ->
     {pickled_context,
         Context#context.site,
@@ -444,6 +507,7 @@ pickle(Context) ->
 
 %% @doc Depickle a context for restoring from a database
 %% @todo pickle/depickle the visitor id (when any)
+-spec depickle( tuple() ) -> z:context().
 depickle({pickled_context, Site, UserId, Language, _VisitorId}) ->
     depickle({pickled_context, Site, UserId, Language, 0, _VisitorId});
 depickle({pickled_context, Site, UserId, Language, Tz, _VisitorId}) ->
@@ -643,28 +707,28 @@ ensure_qs(Context) ->
 
 
 %% @doc Return the webmachine request data of the context
--spec get_reqdata(#context{}) -> cowboy_req:req() | undefined.
+-spec get_reqdata(z:context()) -> cowboy_req:req() | undefined.
 get_reqdata(Context) ->
     Context#context.req.
 
 %% @doc Set the webmachine request data of the context
--spec set_reqdata(cowboy_req:req() | undefined, #context{}) -> #context{}.
+-spec set_reqdata(cowboy_req:req() | undefined, z:context()) -> z:context().
 set_reqdata(Req, Context) when is_map(Req); Req =:= undefined ->
     Context#context{req=Req}.
 
 
 %% @doc Get the resource module handling the request.
--spec get_controller_module(#context{}) -> atom() | undefined.
+-spec get_controller_module(z:context()) -> atom() | undefined.
 get_controller_module(Context) ->
     Context#context.controller_module.
 
--spec set_controller_module(Module::atom(), #context{}) -> #context{}.
+-spec set_controller_module(Module::atom(), z:context()) -> z:context().
 set_controller_module(Module, Context) ->
     Context#context{controller_module=Module}.
 
 
 %% @doc Set the value of a request parameter argument
--spec set_q(string(), any(), #context{}) -> #context{}.
+-spec set_q(string(), any(), z:context()) -> z:context().
 set_q(Key, Value, Context) ->
     Qs = get_q_all(Context),
     Qs1 = proplists:delete(Key, Qs),
@@ -672,7 +736,7 @@ set_q(Key, Value, Context) ->
 
 
 %% @doc Get a request parameter, either from the query string or the post body.  Post body has precedence over the query string.
--spec get_q(string()|atom()|binary()|list(), #context{}) -> binary() | string() | #upload{} | undefined | list().
+-spec get_q(string()|atom()|binary()|list(), z:context()) -> binary() | string() | #upload{} | undefined | list().
 get_q([Key|_] = Keys, Context) when is_list(Key); is_atom(Key); is_binary(Key) ->
     lists:foldl(fun(K, Acc) ->
                     case get_q(K, Context) of
@@ -695,7 +759,7 @@ get_q(Key, Context) ->
 
 
 %% @doc Get a request parameter, either from the query string or the post body.  Post body has precedence over the query string.
--spec get_q(binary()|string()|atom(), #context{}, term()) -> binary() | string() | #upload{} | term().
+-spec get_q(binary()|string()|atom(), z:context(), term()) -> binary() | string() | #upload{} | term().
 get_q(Key, Context, Default) when is_list(Key) ->
     case get_q(list_to_binary(Key), Context, Default) of
         Value when is_binary(Value) -> binary_to_list(Value);
@@ -709,7 +773,7 @@ get_q(Key, Context, Default) ->
 
 
 %% @doc Get all parameters.
--spec get_q_all(#context{}) -> list({binary(), binary()|#upload{}}).
+-spec get_q_all(z:context()) -> list({binary(), binary()|#upload{}}).
 get_q_all(Context) ->
     case proplists:lookup('q', Context#context.props) of
         {'q', Qs} -> Qs;
@@ -718,7 +782,7 @@ get_q_all(Context) ->
 
 
 %% @doc Get the all the parameters with the same name, returns the empty list when non found.
--spec get_q_all(string()|atom()|binary(), #context{}) -> list().
+-spec get_q_all(string()|atom()|binary(), z:context()) -> list().
 get_q_all(Key, Context) when is_list(Key) ->
     Values = get_q_all(z_convert:to_binary(Key), Context),
     [
@@ -736,7 +800,7 @@ get_q_all(Key, Context) ->
 
 
 %% @doc Get all query/post args, filter the zotonic internal args.
--spec get_q_all_noz(#context{}) -> list({string(), term()}).
+-spec get_q_all_noz(z:context()) -> list({string(), term()}).
 get_q_all_noz(Context) ->
     lists:filter(fun({X,_}) -> not is_zotonic_arg(X) end, z_context:get_q_all(Context)).
 
@@ -760,7 +824,7 @@ is_zotonic_arg(_) -> false.
 
 %% @doc Fetch a query parameter and perform the validation connected to the parameter. An exception {not_validated, Key}
 %%      is thrown when there was no validator, when the validator is invalid or when the validation failed.
--spec get_q_validated(string()|atom()|binary(), #context{}) -> string() | term() | undefined.
+-spec get_q_validated(string()|atom()|binary(), z:context()) -> string() | term() | undefined.
 get_q_validated([Key|_] = Keys, Context) when is_list(Key); is_atom(Key) ->
     lists:foldl(fun (K, Acc) ->
                     case get_q_validated(K, Context) of
@@ -962,17 +1026,41 @@ set(PropList, Context) when is_list(PropList) ->
 %% @spec get(Key, Context) -> Value | undefined
 %% @doc Fetch the value of the context variable Key, return undefined when Key is not found.
 get(Key, Context) ->
-    case proplists:lookup(Key, Context#context.props) of
-        {Key, Value} -> Value;
-        none -> undefined
-    end.
+    get(Key, Context, undefined).
 
 %% @spec get(Key, Context, Default) -> Value | Default
 %% @doc Fetch the value of the context variable Key, return Default when Key is not found.
 get(Key, Context, Default) ->
-    case proplists:lookup(Key, Context#context.props) of
+    get_1(Key, Context, Default).
+
+get_1(Key, #context{props=Props} = Context, Default) ->
+    case lists:keyfind(Key, 1, Props) of
         {Key, Value} -> Value;
-        none -> Default
+        false -> get_maybe_path_info(Key, Context, Default)
+    end.
+
+get_maybe_path_info(z_language, Context, _Default) ->
+    z_context:language(Context);
+get_maybe_path_info(zotonic_site, Context, _Default) ->
+    z_context:site(Context);
+get_maybe_path_info(zotonic_dispatch, Context, Default) ->
+    get_path_info(zotonic_dispatch, Context, Default);
+get_maybe_path_info(zotonic_dispatch_path, Context, Default) ->
+    get_path_info(zotonic_dispatch_path, Context, Default);
+get_maybe_path_info(zotonic_dispatch_path_rewrite, Context, Default) ->
+    get_path_info(zotonic_dispatch_path_rewrite, Context, Default);
+get_maybe_path_info(_, _Context, Default) ->
+    Default.
+
+get_path_info(Key, Context, Default) ->
+    case cowmachine_req:req(Context) of
+        undefined ->
+            Default;
+        Req ->
+            case lists:keyfind(Key, 1, cowmachine_req:path_info(Req)) of
+                {Key, Value} -> Value;
+                false -> Default
+            end
     end.
 
 
@@ -992,7 +1080,7 @@ incr(Key, Value, Context) ->
     {R, set(Key, R, Context)}.
 
 %% @doc Return the selected language of the Context
--spec language(#context{}) -> atom().
+-spec language(z:context()) -> atom().
 language(Context) ->
     % A check on atom must exist because the language setting may be stored in mnesia and
     % passed to the context when the site starts
@@ -1002,7 +1090,7 @@ language(Context) ->
     end.
 
 %% @doc Return the first fallback language of the Context
--spec fallback_language(#context{}) -> atom().
+-spec fallback_language(z:context()) -> atom().
 fallback_language(Context) ->
     % Take the second item of the list, if it exists
     case Context#context.language of
@@ -1011,7 +1099,10 @@ fallback_language(Context) ->
     end.
 
 %% @doc Set the language of the context, either an atom (language) or a list (language and fallback languages)
--spec set_language(atom()|binary()|string()|list(), #context{}) -> #context{}.
+-spec set_language(atom()|binary()|string()|list(), z:context()) -> z:context().
+set_language('x-default', Context) ->
+    Lang = z_language:default_language(Context),
+    Context#context{language=[Lang,'x-default']};
 set_language(Lang, Context) when is_atom(Lang) ->
     Context#context{language=[Lang]};
 set_language(Langs, Context) when is_list(Langs) ->
@@ -1023,14 +1114,14 @@ set_language(Lang, Context) ->
     end.
 
 %% @doc Return the selected timezone of the Context; defaults to the site's timezone
--spec tz(#context{}) -> binary().
+-spec tz(z:context()) -> binary().
 tz(#context{tz=TZ}) when TZ =/= undefined; TZ =/= <<>> ->
     TZ;
 tz(Context) ->
     tz_config(Context).
 
 %% @doc Return the site's configured timezone.
--spec tz_config(#context{}) -> binary().
+-spec tz_config(z:context()) -> binary().
 tz_config(Context) ->
     case m_config:get_value(mod_l10n, timezone, Context) of
         None when None =:= undefined; None =:= <<>> ->
@@ -1040,7 +1131,7 @@ tz_config(Context) ->
     end.
 
 %% @doc Set the timezone of the context.
--spec set_tz(string()|binary(), #context{}) -> #context{}.
+-spec set_tz(string()|binary(), z:context()) -> z:context().
 set_tz(Tz, Context) when is_list(Tz) ->
     set_tz(z_convert:to_binary(Tz), Context);
 set_tz(Tz, Context) when is_binary(Tz), Tz =/= <<>> ->
@@ -1055,50 +1146,53 @@ set_tz(Tz, Context) ->
 
 %% @doc Set a response header for the request in the context.
 %% @spec set_resp_header(Header, Value, Context) -> NewContext
--spec set_resp_header(binary(), binary(), #context{}) -> #context{}.
+-spec set_resp_header(binary(), binary(), z:context()) -> z:context().
 set_resp_header(Header, Value, #context{req=Req} = Context) when is_map(Req) ->
     cowmachine_req:set_resp_header(Header, Value, Context).
 
 %% @doc Get a response header
--spec get_resp_header(binary(), #context{}) -> binary() | undefined.
+-spec get_resp_header(binary(), z:context()) -> binary() | undefined.
 get_resp_header(Header, #context{req=Req} = Context) when is_map(Req) ->
     cowmachine_req:get_resp_header(Header, Context).
 
 %% @doc Get a request header. The header MUST be in lower case.
--spec get_req_header(binary(), #context{}) -> binary() | undefined.
+-spec get_req_header(binary(), z:context()) -> binary() | undefined.
 get_req_header(Header, #context{req=Req} = Context) when is_map(Req) ->
     cowmachine_req:get_req_header(Header, Context).
 
 
 %% @doc Return the request path
--spec get_req_path(#context{}) -> binary().
+-spec get_req_path(z:context()) -> binary().
 get_req_path(#context{req=Req} = Context) when is_map(Req) ->
     cowmachine_req:raw_path(Context).
 
 
 %% @doc Fetch the cookie domain, defaults to 'undefined' which will equal the domain
 %% to the domain of the current request.
--spec cookie_domain(#context{}) -> binary() | undefined.
+-spec cookie_domain(z:context()) -> binary() | undefined.
 cookie_domain(Context) ->
     case m_site:get(cookie_domain, Context) of
-        Empty when Empty == undefined; Empty == []; Empty =:= <<>> ->
+        Empty when Empty =:= undefined; Empty =:= []; Empty =:= <<>> ->
             undefined;
         Domain ->
             z_convert:to_binary(Domain)
     end.
 
 %% @doc Fetch the domain and port for websocket connections
--spec websockethost(#context{}) -> binary().
+-spec websockethost(z:context()) -> binary().
 websockethost(Context) ->
     case m_site:get(websockethost, Context) of
-        Empty when Empty == undefined; Empty == []; Empty == <<>> ->
-            hostname_port(Context);
+        Empty when Empty =:= undefined; Empty =:= []; Empty =:= <<>> ->
+            case m_req:get(is_ssl, Context) of
+                true -> hostname_ssl_port(Context);
+                false -> hostname_port(Context)
+            end;
         Domain ->
             Domain
     end.
 
 %% @doc Return true iff this site has a separately configured websockethost
--spec has_websockethost(#context{}) -> boolean().
+-spec has_websockethost(z:context()) -> boolean().
 has_websockethost(Context) ->
     not z_utils:is_empty(m_site:get(websockethost, Context)).
 
@@ -1108,7 +1202,7 @@ has_websockethost(Context) ->
 %% ------------------------------------------------------------------------------------
 
 %% @doc Return the keys in the body of the request, only if the request is application/x-www-form-urlencoded
--spec parse_post_body(#context{}) -> {list({binary(),binary()}), #context{}}.
+-spec parse_post_body(z:context()) -> {list({binary(),binary()}), z:context()}.
 parse_post_body(Context) ->
     case cowmachine_req:get_req_header(<<"content-type">>, Context) of
         <<"application/x-www-form-urlencoded", _/binary>> ->
@@ -1132,7 +1226,7 @@ parse_post_body(Context) ->
 %% the content generated has a session. You can prevent addition of
 %% these headers by not calling z_context:ensure_session/1, or
 %% z_context:ensure_all/1.
--spec set_nocache_headers(#context{}) -> #context{}.
+-spec set_nocache_headers(z:context()) -> z:context().
 set_nocache_headers(Context = #context{req=Req}) when is_map(Req) ->
     C1 = cowmachine_req:set_resp_header(<<"cache-control">>, <<"no-store, no-cache, must-revalidate, post-check=0, pre-check=0">>, Context),
     C2 = cowmachine_req:set_resp_header(<<"expires">>, <<"Wed, 10 Dec 2008 14:30:00 GMT">>, C1),
@@ -1140,12 +1234,12 @@ set_nocache_headers(Context = #context{req=Req}) when is_map(Req) ->
     cowmachine_req:set_resp_header(<<"p3p">>, <<"CP=\"NOI ADM DEV PSAi COM NAV OUR OTRo STP IND DEM\"">>, C2).
 
 %% @doc Set the noindex header if the config is set, or the webmachine resource opt is set.
--spec set_noindex_header(#context{}) -> #context{}.
+-spec set_noindex_header(z:context()) -> z:context().
 set_noindex_header(Context) ->
     set_noindex_header(false, Context).
 
 %% @doc Set the noindex header if the config is set, the webmachine resource opt is set or Force is set.
--spec set_noindex_header(Force::term(), #context{}) -> #context{}.
+-spec set_noindex_header(Force::term(), z:context()) -> z:context().
 set_noindex_header(Force, Context) ->
     case z_convert:to_bool(m_config:get_value(seo, noindex, Context))
          orelse get(seo_noindex, Context, false)
@@ -1156,16 +1250,16 @@ set_noindex_header(Force, Context) ->
     end.
 
 %% @doc Set a cookie value with default options.
--spec set_cookie(binary(), binary(), #context{}) -> #context{}.
+-spec set_cookie(binary(), binary(), z:context()) -> z:context().
 set_cookie(Key, Value, Context) ->
     set_cookie(Key, Value, [], Context).
 
 %% @doc Set a cookie value with cookie options.
--spec set_cookie(binary(), binary(), list(), #context{}) -> #context{}.
+-spec set_cookie(binary(), binary(), list(), z:context()) -> z:context().
 set_cookie(Key, Value, Options, Context) ->
     case controller_websocket:is_websocket_request(Context) of
         true ->
-            %% Store the cookie in the session and trigger an ajax cookie fetch.
+            % Store the cookie in the session and trigger an ajax cookie fetch.
             z_session:add_cookie(Key, Value, Options, Context),
             add_script_page(<<"z_fetch_cookies();">>, Context),
             Context;
@@ -1176,17 +1270,41 @@ set_cookie(Key, Value, Options, Context) ->
                            {domain, _} -> Options;
                            none -> [{domain, z_context:cookie_domain(Context)}|Options]
                        end,
-            Options2 = z_notifier:foldl(#cookie_options{name=Key, value=ValueBin}, Options1, Context),
-            cowmachine_req:set_resp_cookie(Key, ValueBin, Options2, Context)
+            Options2 = secure_cookie_options(Key, Options1, Context),
+            Options3 = z_notifier:foldl(#cookie_options{name=Key, value=ValueBin}, Options2, Context),
+            cowmachine_req:set_resp_cookie(Key, ValueBin, Options3, Context)
     end.
+
+%% @doc Ensure that the session and autologon cookies are set to 'secure' (ssl only).
+secure_cookie_options(Name, Options, Context) ->
+    case is_ssl_site(Context) of
+        true ->
+            secure_cookie(Options);
+        false ->
+            case m_req:get(is_ssl, Context) 
+                andalso is_session_cookie(Name, Context)
+                andalso z_convert:to_bool(m_config:get(site, secure_session_cookie, Context))
+            of
+                true -> secure_cookie(Options);
+                false -> Options
+            end
+    end.
+
+secure_cookie(Options) ->
+    [{secure, true} | proplists:delete(secure, Options)].
+
+is_session_cookie(<<"z_sid">>, _Context) -> true;
+is_session_cookie(<<"z_logon">>, _Context) -> true;
+is_session_cookie(Cookie, Context) when is_binary(Cookie) ->
+    z_session_manager:get_session_cookie_name(Context) =:= Cookie.
 
 
 %% @doc Read a cookie value from the current request.
--spec get_cookie(binary(), #context{}) -> binary() | undefined.
+-spec get_cookie(binary(), z:context()) -> binary() | undefined.
 get_cookie(Key, #context{req=Req} = Context) when is_map(Req) ->
     cowmachine_req:get_cookie_value(Key, Context).
 
 %% @doc Read all cookie values with a certain key from the current request.
--spec get_cookies(binary(), #context{}) -> [ binary() ].
+-spec get_cookies(binary(), z:context()) -> [ binary() ].
 get_cookies(Key, #context{req=Req} = Context) when is_map(Req), is_binary(Key) ->
     proplists:get_all_values(Key, cowmachine_req:req_cookie(Context)).

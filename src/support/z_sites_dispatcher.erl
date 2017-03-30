@@ -53,44 +53,42 @@
 
 -include_lib("zotonic.hrl").
 
+-type dispatch_rule() :: {atom(), list(binary()), list()}.
+-type hostname() :: binary() | string().
+
 -record(state, {
-            rules = [],
-            fallback_site = zotonic_status
-        }).
+    rules = [] :: list(dispatch_rule()),
+    fallback_site = zotonic_status :: atom()
+}).
 
 -record(dispatch_nomatch, {
-            site = undefined :: atom(),
-            host = <<>> ::binary(),
-            path_tokens = [] :: [binary()],
-            bindings = [] :: [{atom(), binary()}],
-            context = undefined :: #context{}
-        }).
+    site = undefined :: atom(),
+    host = <<>> :: binary(),
+    path_tokens = [] :: [binary()],
+    bindings = [] :: [{atom(), binary()}],
+    context = undefined :: #context{} | undefined
+}).
 
 -record(dispatch_controller, {
-            dispatch_rule = undefined :: atom(), 
-            controller = undefined :: atom(),
-            controller_options = [] :: list(),
-            path_tokens = [] :: [binary()],
-            bindings :: [{atom(), binary()}],
-            context :: #context{}
-        }).
-
--record(site_dispatch_list, {
-            site,
-            hostname,
-            smtphost,
-            hostalias,
-            redirect,
-            dispatch_list
-        }).
-
+    dispatch_rule = undefined :: atom(),
+    controller = undefined :: atom(),
+    controller_options = [] :: list(),
+    path_tokens = [] :: [binary()],
+    bindings :: [{atom(), binary()}],
+    context :: #context{}
+}).
 
 -type dispatch() :: #dispatch_controller{}
-                  | #dispatch_nomatch{}
-                  | {redirect, Site::atom()}
-                  | {redirect, Site::atom(), NewPathOrURI::binary(), IsPermanent::boolean()}
-                  | {redirect_protocol, http|https, Site::atom(), IsPermanent::boolean()}.
+                    | #dispatch_nomatch{}
+                    | {redirect, Site :: atom()}
+                    | {redirect, Site :: atom(), NewPathOrURI :: binary(), IsPermanent :: boolean()}
+                    | {redirect_protocol, http|https, Site :: atom(), IsPermanent :: boolean()}
+                    | {stop_request, pos_integer()}.
 
+-export_type([
+    dispatch_rule/0,
+    hostname/0
+]).
 
 %%====================================================================
 %% API
@@ -106,8 +104,8 @@ start_link(Args) when is_list(Args) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, Args, []).
 
 
-%% @doc Update the webmachine dispatch information. Collects dispatch information from all sites and 
-%% recompiles the dispatch rules.
+%% @doc Update the webmachine dispatch information. Collects dispatch
+%% information from all sites and recompiles the dispatch rules.
 update_dispatchinfo() ->
     gen_server:cast(?MODULE, update_dispatchinfo).
 
@@ -115,8 +113,9 @@ update_dispatchinfo() ->
 
 %% @doc Cowboy middleware, route the new request. Continue with the cowmachine,
 %%      requests a redirect or return a 400 on an unknown host.
+%%      The cowmachine_proxy middleware must have been called before this.
 -spec execute(Req, Env) -> {ok, Req, Env} | {stop, Req}
-    when Req::cowboy_req:req(), Env::cowboy_middleware:env().
+    when Req :: cowboy_req:req(), Env :: cowboy_middleware:env().
 execute(Req, Env) ->
     case dispatch(Req) of
         #dispatch_controller{} = Match ->
@@ -132,16 +131,16 @@ execute(Req, Env) ->
                 bindings => Match#dispatch_controller.bindings,
                 context => Context
             }};
-        #dispatch_nomatch{site=Site, bindings=Bindings, context=Context} ->
+        #dispatch_nomatch{site = Site, bindings = Bindings, context = Context} ->
             handle_404(cowboy_req:method(Req), Site, Req, Env, Bindings, Context);
         {redirect, Site} ->
-            % trace(DispReq#dispatch.tracer_pid, undefined, redirect, [{location, Uri},{permanent,true}]),
             Uri = z_context:abs_url(raw_path(Req), z_context:new(Site)),
             redirect(Uri, true, Req);
         {redirect, Site, NewPathOrURI, IsPermanent} ->
-            % trace(DispReq#dispatch.tracer_pid, undefined, redirect, [{location, AbsURI},{permanent,IsPermanent}]),
             Uri = z_context:abs_url(NewPathOrURI, z_context:new(Site)),
             redirect(Uri, IsPermanent, Req);
+        {stop_request, RespCode} ->
+            {stop, cowboy_req:reply(RespCode, Req)};
         {redirect_protocol, Protocol, Host, IsPermanent} ->
             Uri = iolist_to_binary([
                         z_convert:to_binary(Protocol),
@@ -152,20 +151,17 @@ execute(Req, Env) ->
     end.
 
 %% @doc Match the host and path to a dispatch rule.
--spec dispatch(Req::cowboy_req:req()) -> {dispatch(), cowboy_req:req()}.
+-spec dispatch(cowboy_req:req()) -> dispatch().
 dispatch(Req) ->
-    Host = cowboy_req:host(Req),
+    Host = cowmachine_req:host(Req),
+    Scheme = cowmachine_req:scheme(Req),
     Path = cowboy_req:path(Req),
     Method = cowboy_req:method(Req),
-    Scheme = cowboy_req:scheme(Req),
     DispReq = #dispatch{
                     host=Host,
                     path=Path,
                     method=Method,
-                    protocol=case Scheme of
-                                <<"https">> -> https;
-                                <<"http">> -> http
-                             end,
+                    protocol=Scheme,
                     tracer_pid=undefined
               },
     z_depcache:in_process(true),
@@ -214,7 +210,6 @@ get_site_for_hostname(Hostname) ->
 raw_path(Req) ->
     Path = cowboy_req:path(Req),
     case cowboy_req:qs(Req) of
-        undefined -> Path;
         <<>> -> Path;
         Qs -> <<Path/binary, $?, Qs/binary>>
     end.
@@ -262,10 +257,17 @@ dispatch_1(DispReq, OptReq) ->
             Context = z_context:set_reqdata(OptReq, z_context:new(Site)),
             dispatch_site(DispReq, Context);
         [{_,Site,_Redirect}] ->
-            {redirect, Site}
+            case DispReq#dispatch.path of
+                <<"/.well-known/", _/binary>> ->
+                    Context = z_context:set_reqdata(OptReq, z_context:new(Site)),
+                    dispatch_site(DispReq, Context);
+                _ ->
+                    {redirect, Site}
+            end
     end.
 
-dispatch_site(#dispatch{tracer_pid=TracerPid, path=Path, host=Hostname} = DispReq, Context) ->
+-spec dispatch_site(#dispatch{}, #context{}) -> dispatch().
+dispatch_site(#dispatch{tracer_pid = TracerPid, path = Path, host = Hostname} = DispReq, Context) ->
     % {ok, ReqDataHost} = webmachine_request:set_metadata(zotonic_host, Site, ReqData),
     count_request(z_context:site(Context)),
     try
@@ -347,6 +349,7 @@ unescape(P) ->
         _ -> cow_qs:urldecode(P)
     end.
 
+-spec dispatch_rewrite(binary(), binary(), list(), boolean(), pid(), #context{}) -> tuple().
 dispatch_rewrite(Hostname, Path, Tokens, IsDir, TracerPid, Context) ->
     {Tokens1, Bindings} = z_notifier:foldl(
                             #dispatch_rewrite{is_dir=IsDir, path=Path, host=Hostname},
@@ -529,6 +532,7 @@ map_z_language_2(z_language) -> {z_language, {?MODULE, is_bind_language}};
 map_z_language_2(X) -> X.
 
 
+-spec do_dispatch_rule(tuple(), any(), any(), any(), any(), any()) -> #dispatch_controller{}.
 do_dispatch_rule({DispatchName, _, Mod, Props}, Bindings, Tokens, _IsDir, DispReq, Context) ->
     #dispatch{tracer_pid=TracerPid, host=Hostname, protocol=Protocol} = DispReq,
     Bindings1 = [ {zotonic_dispatch, DispatchName} | Bindings ],
@@ -540,29 +544,29 @@ do_dispatch_rule({DispatchName, _, Mod, Props}, Bindings, Tokens, _IsDir, DispRe
             {controller_options, Props},
             {bindings, Bindings1}
           ]),
-    case proplists:get_value(protocol, Props) of
-        % Force switch to normal http protocol
-        % MW: always use 'keep' (switching back to http was nice some years ago)
-        % undefined when Protocol =/= http ->
-        %     {Host1, HostPort} = split_host(z_context:hostname_port(Context)),
-        %     Host2 = add_port(http, Host1, HostPort),
-        %     trace(TracerPid, Tokens, protocol_switch, [{protocol, http}, {host, Host2}]),
-        %     {redirect_protocol, http, Host2, false};
-
-        % Force switch to other (eg. https) protocol
-        {NewProtocol, NewPort} when NewProtocol =/= Protocol ->
-            {Host1, _Port} = split_host(Hostname),
-            Host2 = add_port(NewProtocol, Host1, NewPort),
-            trace(TracerPid, Tokens, forced_protocol_switch, [{protocol, NewProtocol}, {host,Host2}]),
-            IsPermanent = case NewProtocol of
-                https -> z_convert:to_bool(m_config:get(mod_ssl, is_permanent, Context));
-                _ -> false
-            end,
-            {redirect_protocol, NewProtocol, Host2, IsPermanent};
-
-        % 'keep', undefined, or correct protocol
+    SslPort = z_config:get(ssl_port),
+    % Maybe switch between http and https
+    case proplists:get_value(ssl, Props, any) of
+        false when Protocol =:= https, Hostname =/= undefined ->
+            redirect_protocol(http, Hostname, TracerPid, Tokens, Context);
+        true when Protocol =:= http, is_integer(SslPort), Hostname =/= undefined  ->
+            redirect_protocol(https, Hostname, TracerPid, Tokens, Context);
+        any when Protocol =:= http, is_integer(SslPort), Hostname =/= undefined   ->
+            case z_context:is_ssl_site(Context) of
+                true ->
+                    redirect_protocol(https, Hostname, TracerPid, Tokens, Context);
+                false ->
+                    #dispatch_controller{
+                        dispatch_rule=DispatchName,
+                        controller=Mod,
+                        controller_options=Props,
+                        path_tokens=Tokens,
+                        bindings=Bindings1,
+                        context=maybe_set_language(Bindings1, Context)
+                    }
+            end;
         _ ->
-            % {Mod, ModOpts, HostTokens, Port, PathTokens, Bindings, AppRoot, StringPath}
+            % 'any', correct protocol, or no SSL port defined, or no host name
             #dispatch_controller{
                 dispatch_rule=DispatchName,
                 controller=Mod,
@@ -573,6 +577,19 @@ do_dispatch_rule({DispatchName, _, Mod, Props}, Bindings, Tokens, _IsDir, DispRe
             }
     end.
 
+-spec redirect_protocol(https|http, binary()|undefined, pid()|undefined, list(), #context{}) ->
+            {redirect_protocol, http|https, binary()|undefined, boolean()}.
+redirect_protocol(https, Hostname, TracerPid, Tokens, Context) ->
+    NewHostname = add_port(https, Hostname, z_config:get(ssl_port)),
+    trace(TracerPid, Tokens, forced_protocol_switch, [{protocol, https}, {host, NewHostname}]),
+    IsPermanent = z_convert:to_bool(m_config:get(site, ssl_permanent, Context)),
+    {redirect_protocol, https, NewHostname, IsPermanent};
+redirect_protocol(http, Hostname, TracerPid, Tokens, _Context) ->
+    NewHostname = add_port(http, Hostname, z_config:get(port)),
+    trace(TracerPid, Tokens, forced_protocol_switch, [{protocol, http}, {host, NewHostname}]),
+    {redirect_protocol, http, NewHostname, false}.
+
+-spec do_dispatch_fail(any(), any(), any(), any(), any()) -> #dispatch_controller{} | #dispatch_nomatch{}.
 do_dispatch_fail(Bindings, Tokens, _IsDir, DispReq, Context0) ->
     TokenPath = tokens_to_path(Tokens),
     trace(DispReq#dispatch.tracer_pid, DispReq#dispatch.path, notify_dispatch, []),
@@ -647,8 +664,8 @@ handle_rewrite({ok, #dispatch_match{
     Bindings1 = [{zotonic_dispatch, SDispatchName},{zotonic_site, MatchedSite}|SBindings] ++ Bindings,
     #dispatch_controller{
         dispatch_rule=SDispatchName,
-        controller=SMod, 
-        controller_options=SModOpts, 
+        controller=SMod,
+        controller_options=SModOpts,
         path_tokens=SPathTokens,
         bindings=Bindings1,
         context=maybe_set_language(Bindings1,Context)
@@ -667,17 +684,15 @@ handle_rewrite(undefined, DispReq, MatchedHost, NonMatchedPathTokens, Bindings, 
     }.
 
 
-set_dispatch_path(Match, undefined) ->
+set_dispatch_path(Match, []) ->
     Match;
-set_dispatch_path({{Mod, ModOpts, X, Y, PathTokens, Bindings, AppRoot, StringPath}, Host}, DispatchPath) ->
+set_dispatch_path(#dispatch_controller{bindings = Bindings} = DispatchController, DispatchPath) ->
     Bindings1 = [
         {zotonic_dispatch_path, DispatchPath},
         {zotonic_dispatch_path_rewrite, proplists:get_value(zotonic_dispatch_path, Bindings)}
         | proplists:delete(zotonic_dispatch_path, Bindings)
     ],
-    {{Mod, ModOpts, X, Y, PathTokens, Bindings1, AppRoot, StringPath}, Host};
-set_dispatch_path(Match, _DispatchPath) ->
-    Match.
+    DispatchController#dispatch_controller{bindings = Bindings1}.
 
 
 maybe_set_language(Bindings, Context) ->
@@ -745,8 +760,8 @@ collect_dispatchrules(Site) ->
         {error, _} ->
             #site_dispatch_list{
                 site=Site,
-                hostname="localhost",
-                smtphost="localhost",
+                hostname= <<"localhost">>,
+                smtphost= <<"localhost">>,
                 hostalias=[],
                 redirect=false,
                 dispatch_list=[]
@@ -789,21 +804,27 @@ split_host(Host) when is_binary(Host) ->
 
 %% @doc Filter all rules, also used to set/reset protocol (https) options.
 filter_rules(Rules, Site) ->
-    z_notifier:foldl(dispatch_rules, Rules, z_context:new(Site)).
+    z_notifier:foldl(#dispatch_rules{rules=Rules}, Rules, z_context:new(Site)).
 
 trace(undefined, _PathTokens, _What, _Args) ->
     ok;
 trace(TracerPid, PathTokens, What, Args) ->
     TracerPid ! {trace, PathTokens, What, Args}.
 
-trace_final(undefined, Match) ->
-    Match;
-trace_final(TracerPid, {{Mod, ModOpts, _X, _Y, _PathTokens, Bindings, _AppRoot, _StringPath}, _Host} = Match) ->
-    trace(TracerPid,
-          undefined,
-          dispatch,
-          [ {controller, Mod},
-            {controller_options, ModOpts},
+trace_final(undefined, R) ->
+    R;
+trace_final(TracerPid, #dispatch_controller{
+    controller = Controller,
+    controller_options = ControllerOptions,
+    bindings = Bindings
+} = Match) ->
+    trace(
+        TracerPid,
+        undefined,
+        dispatch,
+        [
+            {controller, Controller},
+            {controller_options, ControllerOptions},
             {bindings, Bindings}
           ]),
     Match;
@@ -815,7 +836,7 @@ add_port(http, Hostname, 80) ->
     Hostname;
 add_port(https, Hostname, 443) ->
     Hostname;
-add_port(_, Hostname, Port) -> 
+add_port(_, Hostname, Port) ->
     PortBin = z_convert:to_binary(Port),
     <<Hostname/binary, $:, PortBin/binary>>.
 

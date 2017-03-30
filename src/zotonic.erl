@@ -20,14 +20,26 @@
 -module(zotonic).
 -author('Marc Worrell <marc@worrell.nl>').
 
--export([start/0, start/1, stop/0, stop/1, ping/0, status/0, status/1, update/0, update/1, run_tests/0, ensure_started/1]).
--export([sni_fun/1]).
+-export([
+    start/0,
+    start/1,
+    stop/0,
+    stop/1,
+    ping/0,
+    status/0,
+    status/1,
+    update/0,
+    update/1,
+    run_tests/0,
+    ensure_started/1
+]).
 
 -compile([{parse_transform, lager_transform}]).
 
 -include_lib("zotonic.hrl").
 
--define(MIN_OTP_VERSION, "18"). %% note -- *without* the initial R (since OTP 17.0 the R is dropped)
+-define(MIN_OTP_VERSION, "18").
+-define(HTTP_REQUEST_TIMEOUT, 60000).
 
 -spec ensure_started(atom()) -> ok | {error, term()}.
 ensure_started(App) ->
@@ -45,7 +57,9 @@ ensure_started(App) ->
             {error, lists:flatten(io_lib:format("~s: ~s", [Tag, Msg]))};
         {error, {bad_return, {{M, F, Args}, Return}}} ->
             A = string:join([io_lib:format("~p", [A])|| A <- Args], ", "),
-            {error, lists:flatten(io_lib:format("~s failed to start due to a bad return value from call ~s:~s(~s):~n~p", [App, M, F, A, Return]))};
+            {error, lists:flatten(
+                        io_lib:format("~s failed to start due to a bad return value from call ~s:~s(~s):~n~p",
+                                      [App, M, F, A, Return]))};
         {error, Reason} ->
             {error, Reason}
     end.
@@ -79,7 +93,7 @@ stop() ->
 %% @doc Stop a zotonic server on a specific node
 -spec stop([node()]) -> any().
 stop([Node]) ->
-    io:format("Stopping:~p~n",[Node]),
+    io:format("Stopping:~p~n", [Node]),
     case net_adm:ping(Node) of
         pong -> rpc:cast(Node, init, stop, []);
         pang -> io:format("There is no node with this name~n")
@@ -99,10 +113,13 @@ status() ->
 %% @doc Get server status.  Prints the state of sites running.
 -spec status([node()]) -> ok.
 status([Node]) ->
-    [io:format("~-20s- ~s~n", [Site, Status]) || [Site,Status|_] <- rpc:call(Node, z_sites_manager, get_sites_status, [])],
+    [io:format(
+        "~-20s- ~s~n",
+        [Site, Status]
+    ) || [Site, Status | _] <- rpc:call(Node, z_sites_manager, get_sites_status, [])],
     ok.
 
-%% @doc Update the server.  Compiles and loads any new code, flushes caches and rescans all modules.
+%% @doc Update the server. Compiles and loads any new code, flushes caches and rescans all modules.
 -spec update() -> ok.
 update() ->
     z:m(),
@@ -121,39 +138,44 @@ stop_http_listeners() ->
 %% @doc Start the HTTP listeners
 -spec start_http_listeners() -> ok.
 start_http_listeners() ->
-    application:set_env(cowmachine, server_header, <<"Zotonic/", (z_convert:to_binary(?ZOTONIC_VERSION))/binary>>),
+    z_ssl_certs:ensure_dhfile(),
+    application:set_env(cowmachine, server_header,
+        <<"Zotonic/", (z_convert:to_binary(?ZOTONIC_VERSION))/binary>>),
     WebIp = z_config:get(listen_ip),
     WebPort = z_config:get(listen_port),
-    SSLPort = z_config:get(ssl_listen_port),
+    SSLPort = ssl_listen_port(),
+    lager:info("Web server listening on IPv4 ~p:~p, SSL ~p::~p", [WebIp, WebPort, WebIp, SSLPort]),
     CowboyOpts = #{
-        middlewares => [ z_sites_dispatcher, z_cowmachine_middleware ],
+        middlewares => [ cowmachine_proxy, z_sites_dispatcher, z_cowmachine_middleware ],
+        request_timeout => ?HTTP_REQUEST_TIMEOUT,
         env => #{}
     },
-
-    lager:info("Web server listening on IPv4 ~p:~p, SSL ~p::~p", [WebIp, WebPort, WebIp, SSLPort]),
+    WebIP4Opt = case WebIp of
+        any -> [];
+        _ -> [{ip, WebIp}]
+    end,
     {ok, _} = cowboy:start_clear(
         zotonic_http_listener_ipv4,
         z_config:get(inet_acceptor_pool_size),
         [   inet,
             {port, WebPort},
             {backlog, z_config:get(inet_backlog)}
-            | case WebIp of any -> []; _ -> [{ip, WebIp}] end
+            | WebIP4Opt
         ],
         CowboyOpts),
     case SSLPort of
         none ->
             ok;
         _ ->
-            {ok, _} = cowboy:start_tls(
+            {ok, _} = start_tls(
                 zotonic_https_listener_ipv4,
                 z_config:get(ssl_acceptor_pool_size),
                 [   inet,
                     {port, SSLPort},
-                    {backlog, z_config:get(ssl_backlog)},
-                    {certfile, "via_sni_fun"},
-                    {sni_fun, fun ?MODULE:sni_fun/1}
-                    | case WebIp of any -> []; _ -> [{ip, WebIp}] end
-                ],
+                    {backlog, z_config:get(ssl_backlog)}
+                ]
+                ++ z_ssl_certs:ssl_listener_options()
+                ++ WebIP4Opt,
                 CowboyOpts)
     end,
     case {WebIp, ipv6_supported()} of
@@ -173,16 +195,15 @@ start_http_listeners() ->
                 none ->
                     ok;
                 _ ->
-                    {ok, _} = cowboy:start_tls(
+                    {ok, _} = start_tls(
                         zotonic_https_listener_ipv6,
                         z_config:get(ssl_acceptor_pool_size),
                         [   inet6,
                             {ipv6_v6only, true},
                             {port, SSLPort},
-                            {backlog, z_config:get(ssl_backlog)},
-                            {certfile, "via_sni_fun"},
-                            {sni_fun, fun ?MODULE:sni_fun/1}
-                        ],
+                            {backlog, z_config:get(ssl_backlog)}
+                        ]
+                        ++ z_ssl_certs:ssl_listener_options(),
                         CowboyOpts),
                     ok
             end;
@@ -190,15 +211,32 @@ start_http_listeners() ->
             ok
     end.
 
-%% @doc Let sites return their own keys and certificates.
--spec sni_fun(string()) -> [ssl:ssl_option()] | undefined.
-sni_fun(Hostname) ->
-    HostnameBin = z_convert:to_binary(Hostname),
-    case z_sites_dispatcher:get_site_for_hostname(HostnameBin) of
-        undefined -> undefined;
-        {ok, Host} ->
-            z_notifier:first(#ssl_options{server_name=HostnameBin}, z_context:new(Host))
+%% @doc Check if we need to listen on SSL.
+%%      SSL will be disabled if ssl_listen_port is set to 'none'
+%%      A non-secure proxy might still want to connect forward securely, so this
+%%      setting is independent from ssl_port.
+ssl_listen_port() ->
+    case z_config:get(ssl_listen_port) of
+        none -> none;
+        Port when is_integer(Port) -> Port
     end.
+
+% @doc Copied from cowboy.erl, disable http2 till the cipher problems are resolved.
+-spec start_tls(ranch:ref(), non_neg_integer(), ranch_ssl:opts(), list()) -> {ok, pid()} | {error, any()}.
+start_tls(Ref, NbAcceptors, TransOpts0, ProtoOpts)
+        when is_integer(NbAcceptors), NbAcceptors > 0 ->
+    TransOpts = [
+        connection_type(ProtoOpts)
+        % {next_protocols_advertised, [<<"h2">>, <<"http/1.1">>]},
+        % {alpn_preferred_protocols, [<<"h2">>, <<"http/1.1">>]}
+    |TransOpts0],
+    ranch:start_listener(Ref, NbAcceptors, ranch_ssl, TransOpts, cowboy_tls, ProtoOpts).
+
+-spec connection_type(list()) -> {connection_type, worker | supervisor}.
+connection_type(ProtoOpts) ->
+    {_, Type} = maps:get(stream_handler, ProtoOpts, {cowboy_stream_h, supervisor}),
+    {connection_type, Type}.
+
 
 %% @todo Exclude platforms that do not support raw ipv6 socket options
 -spec ipv6_supported() -> boolean().
@@ -219,7 +257,7 @@ ensure_mnesia_schema() ->
                        "To enable persistency, add to erlang.config: {mnesia,[{dir,\"priv/mnesia\"}]}~n~n"),
             ok;
         {ok, Dir} ->
-            case filelib:is_dir(Dir) andalso filelib:is_regular(filename:join(Dir,"schema.DAT")) of
+            case filelib:is_dir(Dir) andalso filelib:is_regular(filename:join(Dir, "schema.DAT")) of
                 true ->
                     ok;
                 false ->
@@ -230,7 +268,7 @@ ensure_mnesia_schema() ->
 %% @doc Update the server on a specific node with new code on disk and flush the caches.
 -spec update([node()]) -> ok.
 update([Node]) ->
-    io:format("Update:~p~n",[Node]),
+    io:format("Update:~p~n", [Node]),
     case net_adm:ping(Node) of
         pong -> rpc:cast(Node, zotonic, update, []);
         pang -> io:format("There is no node with this name~n")
@@ -242,7 +280,10 @@ test_erlang_version() ->
     % Check for minimal OTP version
     case otp_release() of
         Version when Version < ?MIN_OTP_VERSION ->
-            io:format("Zotonic needs at least Erlang release ~p; this is ~p~n", [?MIN_OTP_VERSION, erlang:system_info(otp_release)]),
+            io:format(
+                "Zotonic needs at least Erlang release ~p; this is ~p~n",
+                [?MIN_OTP_VERSION, erlang:system_info(otp_release)]
+            ),
             erlang:exit({minimal_otp_version, ?MIN_OTP_VERSION});
         _ ->
             ok
@@ -250,7 +291,10 @@ test_erlang_version() ->
     % Check on problematic releases
     case otp_version() of
         "18.3.2" ->
-            io:format("Erlang version 18.3.2 has a problem with SSL and ranch, please upgrade your Erlang version to 18.3.3 or later~n"),
+            io:format(
+                "Erlang version 18.3.2 has a problem with SSL and ranch, please upgrade your "
+                "Erlang version to 18.3.3 or later~n"
+            ),
             erlang:exit({broken_otp_version, "18.3.2"});
         _ ->
             ok
@@ -264,10 +308,14 @@ otp_release() ->
         V -> V
     end.
 
-%% @doc Return the specific otp version, 
+%% @doc Return the specific otp version,
 -spec otp_version() -> string().
 otp_version() ->
-    case file:read_file(filename:join([code:root_dir(), "releases", erlang:system_info(otp_release), "OTP_VERSION"])) of
+    case file:read_file(
+        filename:join([
+            code:root_dir(), "releases", erlang:system_info(otp_release), "OTP_VERSION"]
+        )
+    ) of
         {ok, Version} -> binary_to_list(z_string:trim(Version));
         {error, _} -> erlang:system_info(otp_release)
     end.

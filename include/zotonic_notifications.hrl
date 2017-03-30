@@ -36,19 +36,24 @@
     path = <<>> :: binary(),
     method = <<"GET">> :: binary(),
     protocol = http :: http|https,
-    tracer_pid = undefined :: pid()|undefined
+    tracer_pid = undefined :: atom() | pid()
 }).
 
 -record(dispatch_redirect, {
     location = <<>> :: binary(),
     is_permanent = false :: boolean()
 }).
+
 -record(dispatch_match, {
     dispatch_name = undefined :: atom(),
     mod :: atom(),
     mod_opts = [] :: list(),
     path_tokens = [] :: list(binary()),
     bindings = [] :: list({atom(), binary()})
+}).
+
+-record(dispatch_rules, {
+    rules :: #site_dispatch_list{} | undefined
 }).
 
 
@@ -212,7 +217,7 @@
 %% Type: foldl
 -record(dispatch_rewrite, {
     is_dir = false :: boolean(),
-    path = "" :: string(),
+    path = <<>> :: binary(),
     host
 }).
 
@@ -384,9 +389,14 @@
 %% Type: notify
 -record(rsc_delete, {id, is_a}).
 
-%% @doc Foldr for an resource insert, modify the insertion properties.
+%% @doc Foldr for an resource insert, these are the initial properties and will overrule
+%% the properties in the insert request. Use with care.  The props are the properties of
+%% the later insert, after escaping/filtering but before the #rsc_update{} notification below.
 %% Type: foldr
--record(rsc_insert, {}).
+%% Return: proplist accumulator
+-record(rsc_insert, {
+    props :: list()
+}).
 
 %% @doc Map to signal merging two resources. Move any information from the looser to the
 %% winner. The looser will be deleted.
@@ -669,7 +679,7 @@
 -record(media_import, {
     url :: binary(),
     host_rev :: list(binary()),
-    mime :: binary,
+    mime :: binary(),
     metadata :: tuple()
 }).
 
@@ -680,7 +690,7 @@
     description :: binary() | {trans, list()},
     rsc_props :: list(),
     medium_props :: list(),
-    medium_url :: binary(),
+    medium_url = <<>> :: binary(),
     preview_url :: binary()
 }).
 
@@ -691,12 +701,12 @@
 %% Type: first
 %% Return: modified ``#media_upload_preprocess{}``
 -record(media_upload_preprocess, {
-    id :: integer() | 'insert_rsc',
+    id = insert_rsc :: m_rsc:resource_id() | insert_rsc,
     mime :: binary(),
-    file :: file:filename(),
-    original_filename :: file:filename(),
+    file :: file:filename() | undefined,
+    original_filename :: file:filename() | undefined,
     medium :: list(),
-    post_insert_fun :: function()
+    post_insert_fun :: function() | undefined
 }).
 
 %% @doc Notification that a medium file has been uploaded.
@@ -706,8 +716,8 @@
 -record(media_upload_props, {
     id :: integer() | 'insert_rsc',
     mime :: binary(),
-    archive_file,
-    options
+    archive_file :: file:filename() | undefined,
+    options :: list()
 }).
 
 %% @doc Notification that a medium file has been uploaded.
@@ -950,7 +960,7 @@
 %% Return: ``ok`` or ``undefined``
 -record(manage_data, {
     module :: atom(),
-    props :: list()
+    props :: tuple() | list()
 }).
 
 % Simple mod_development notifications:

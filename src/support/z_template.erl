@@ -84,7 +84,6 @@ render_block(OptBlock, #module_index{filepath=Filename, key=Key}, Vars, Context)
     render_block(OptBlock, Template, Vars, Context);
 render_block(OptBlock, Template, Vars, Context) when is_map(Vars) ->
     OldCaching = z_depcache:in_process(true),
-    Vars1 = ensure_zotonic_vars(Vars, Context),
     Opts =  [
         {runtime, z_template_compiler_runtime},
         {context_name, z_context:site(Context)},
@@ -96,46 +95,47 @@ render_block(OptBlock, Template, Vars, Context) when is_map(Vars) ->
     ],
     Result = case OptBlock of
                 undefined ->
-                    template_compiler:render(Template, Vars1, Opts, Context);
+                    template_compiler:render(Template, Vars, Opts, Context);
                 Block when is_atom(Block) ->
-                    template_compiler:render_block(Block, Template, Vars1, Opts, Context)
+                    template_compiler:render_block(Block, Template, Vars, Opts, Context)
              end,
     z_depcache:in_process(OldCaching),
     case Result of
         {ok, Output} ->
             Output;
-        {error, {{ErrFile,Line,Col}, _YeccModule, Error}} ->
+        {error, {{ErrFile, Line, Col}, _YeccModule, Error}} ->
             try
                 Error1 = iolist_to_binary(Error),
-                lager:error("[~p] Error rendering template: ~s:~p (~s)~n",
-                           [z_context:site(Context), ErrFile, Line, Col, Error1])
+                lager:error(
+                    "Error rendering template ~s:~p:~p due to ~s~n",
+                    [ErrFile, Line, Col, Error1]
+                )
             catch
                 _:_ ->
-                    lager:error("[~p] Error rendering template: ~s:~p (~p)~n",
-                               [z_context:site(Context), ErrFile, Line, Col, Error])
+                    lager:error(
+                        "Error rendering template ~s:~p:~p due to ~p~n",
+                        [ErrFile, Line, Col, Error]
+                    )
             end,
             <<>>;
         {error, Reason} when is_list(Reason); is_binary(Reason) ->
             try
                 Reason1 = iolist_to_binary(Reason),
-                lager:error("[~p] Error rendering template: ~s (~s)~n",
-                           [z_context:site(Context), Template, Reason1])
+                lager:error(
+                    "Error rendering template ~s due to ~s~n",
+                    [Template, Reason1]
+                )
             catch
                 _:_ ->
-                    lager:error("[~p] Error rendering template: ~s (~p)~n",
-                               [z_context:site(Context), Template, Reason])
+                    lager:error(
+                        "Error rendering template ~s due to ~p~n",
+                        [Template, Reason]
+                    )
             end,
             <<>>;
         {error, _} = Error ->
-            lager:info("[~p] template render of ~p returns ~p",
-                       [z_context:site(Context), Template, Error]),
+            lager:info("template render of ~p returns ~p", [Template, Error]),
             <<>>
-    end.
-
-ensure_zotonic_vars(Vars, Context) ->
-    case maps:get(z_language, Vars, undefined) of
-        undefined -> Vars#{z_language => z_context:language(Context)};
-        _ -> Vars
     end.
 
 props_to_map([], Map) ->
@@ -148,7 +148,8 @@ props_to_map([K|Rest], Map) ->
 
 %% @doc Render a template to an iolist().  This removes all scomp state etc from the rendered html and appends the
 %% information in the scomp states to the context for later rendering.
--spec render_to_iolist(template_compiler:template(), list()|map(), #context{}) -> {iolist(), #context{}}.
+-spec render_to_iolist(template_compiler:template() | #module_index{},
+    list() | map(), #context{}) -> {iolist(), #context{}}.
 render_to_iolist(File, Vars, Context) ->
     Html = render(File, Vars, Context),
     z_render:render_to_iolist(Html, Context).
