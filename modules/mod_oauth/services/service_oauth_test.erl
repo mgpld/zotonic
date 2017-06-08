@@ -1,8 +1,9 @@
 %% @author Arjan Scherpenisse <arjan@scherpenisse.net>
-%% @copyright 2010 Arjan Scherpenisse
-%% @date 2010-01-30
-%% @doc Module implementing a sandbox website for unit testing purposes.
+%% @copyright 2017 Marc Worrell
+%% @doc Test service for OAuth requests and app/token registry.
 
+%% Copyright 2017 Marc Worrell
+%%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
@@ -15,9 +16,27 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
--module(testsandbox).
--author("Arjan Scherpenisse <arjan@scherpenisse.net>").
+-module(service_oauth_test).
 
--mod_title("Test sandbox").
--mod_description("Module implementing a sandbox website with database for testing purposes.").
--mod_prio(10).
+-author("Marc Worrell <marc@worrell.nl>").
+
+-svc_title("Test service for OAuth.").
+-svc_needauth(true).
+
+-export([
+    process_get/1,
+    process_post/1
+]).
+
+process_post(Context) ->
+    check_auth(Context).
+
+process_get(Context) ->
+    check_auth(Context).
+
+check_auth(Context) ->
+    case z_acl:user(Context) of
+        undefined -> {struct, [ {user, <<"anon">>} ]};
+        _UserId -> {struct, [ {user, <<"auth">>} ]}
+    end.
+

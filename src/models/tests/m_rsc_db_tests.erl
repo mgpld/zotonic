@@ -7,13 +7,13 @@
 -include_lib("zotonic.hrl").
 
 modify_rsc_test() ->
-    ok = z_sites_manager:await_startup(testsandboxdb),
-    C = z_context:new(testsandboxdb),
+    ok = z_sites_manager:await_startup(testsandbox),
+    C = z_context:new(testsandbox),
     AdminC = z_acl:logon(?ACL_ADMIN_USER_ID, C),
     CatId = m_rsc:rid(text, C),
 
-    ?assertThrow({{error, nocategory}, _Trace}, m_rsc:insert([{title, "Hello."}], C)),
-    ?assertThrow({{error, eacces}, _Trace}, m_rsc:insert([{title, "Hello."}, {category_id, CatId}], C)),
+    ?assertEqual({error, nocategory}, m_rsc:insert([{title, "Hello."}], C)),
+    ?assertEqual({error, eacces}, m_rsc:insert([{title, "Hello."}, {category_id, CatId}], C)),
 
     {ok, Id} = m_rsc:insert([{title, "Hello."}, {category_id, CatId}], AdminC),
 
@@ -32,7 +32,7 @@ modify_rsc_test() ->
     ?assertEqual(undefined, m_rsc:p(Id, title, C)), %% not visible for anonymous yet
 
     %% Update
-    ?assertThrow({error, eacces}, m_rsc:update(Id, [{title, "Bye."}, {is_published, true}], C)),
+    ?assertEqual({error, eacces}, m_rsc:update(Id, [{title, "Bye."}, {is_published, true}], C)),
 
     {ok, Id} = m_rsc:update(Id, [{title, "Bye."}, {is_published, true}], AdminC),
     ?assertEqual(<<"Bye.">>, m_rsc:p(Id, title, AdminC)),
@@ -40,7 +40,7 @@ modify_rsc_test() ->
     ?assertEqual(2, m_rsc:p(Id, version, AdminC)),
 
     %% Delete
-    ?assertThrow({error, eacces}, m_rsc:delete(Id, C)),
+    ?assertEqual({error, eacces}, m_rsc:delete(Id, C)),
     ?assertEqual(ok, m_rsc:delete(Id, AdminC)),
 
     %% verify that it's gone
@@ -54,8 +54,8 @@ modify_rsc_test() ->
 
 
 page_path_test() ->
-    ok = z_sites_manager:await_startup(testsandboxdb),
-    C = z_context:new(testsandboxdb),
+    ok = z_sites_manager:await_startup(testsandbox),
+    C = z_context:new(testsandbox),
     AdminC = z_acl:logon(?ACL_ADMIN_USER_ID, C),
 
     {ok, Id} = m_rsc:insert([{title, "Hello."}, {category, text}, {page_path, "/foo/bar"}], AdminC),
@@ -64,8 +64,8 @@ page_path_test() ->
 
 %% @doc Resource name instead of id as argument.
 name_rid_test() ->
-    ok = z_sites_manager:await_startup(testsandboxdb),
-    C = z_context:new(testsandboxdb),
+    ok = z_sites_manager:await_startup(testsandbox),
+    C = z_context:new(testsandbox),
     AdminC = z_acl:logon(?ACL_ADMIN_USER_ID, C),
     {ok, Id} = m_rsc:insert([{title, <<"What’s in a name?"/utf8>>}, {category_id, text}, {name, rose}],
         AdminC),

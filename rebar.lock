@@ -24,7 +24,7 @@
   0},
  {<<"depcache">>,
   {git,"https://github.com/zotonic/depcache.git",
-       {ref,"8ff8cdbaae2562b04716b94957e4755bc2212043"}},
+       {ref,"20f17f652754bb28a2b6f36af7887b020e4d9579"}},
   0},
  {<<"dh_date">>,
   {git,"https://github.com/zotonic/dh_date.git",
@@ -77,7 +77,7 @@
   1},
  {<<"gen_smtp">>,
   {git,"https://github.com/Vagabond/gen_smtp.git",
-       {ref,"2c02d357b6cdedf9adcfdc49f6b250c5eb7203e2"}},
+       {ref,"263b29241666f676f7979f7c6b156d8fe1e69f59"}},
   0},
  {<<"getopt">>,{pkg,<<"getopt">>,<<"0.8.2">>},1},
  {<<"goldrush">>,{pkg,<<"goldrush">>,<<"0.1.8">>},1},
@@ -157,7 +157,7 @@
  {<<"yamerl">>,{pkg,<<"yamerl">>,<<"0.4.0">>},1},
  {<<"z_stdlib">>,
   {git,"https://github.com/zotonic/z_stdlib.git",
-       {ref,"7b1dc61b3c4bfe51fc92ca03d008fe9b8b53a5da"}},
+       {ref,"e4e68d066f95b770f9b8f24582fcc9c931ed17a1"}},
   0}]}.
 [
 {pkg_hash,[

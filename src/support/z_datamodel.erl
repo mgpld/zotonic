@@ -50,12 +50,14 @@ manage(Module, Datamodel, Context) ->
 -spec manage(atom(), #datamodel{}, datamodel_options(), #context{}) -> ok.
 manage(Module, Datamodel, Options, Context) ->
     AdminContext = z_acl:sudo(Context),
-    [manage_category(Module, Cat, Options, AdminContext) || Cat <- Datamodel#datamodel.categories],
-    [manage_predicate(Module, Pred, Options, AdminContext) || Pred <- Datamodel#datamodel.predicates],
-    [manage_resource(Module, R, Options, AdminContext) || R <- Datamodel#datamodel.resources],
-    [manage_medium(Module, Medium, Options, AdminContext) || Medium <- Datamodel#datamodel.media],
-    [manage_edge(Module, Edge, Options, AdminContext) || Edge <- Datamodel#datamodel.edges],
-    [manage_data(Module, Data, AdminContext) || Data <- Datamodel#datamodel.data],
+    jobs:run(manage_module_jobs, fun() ->
+        [manage_category(Module, Cat, Options, AdminContext) || Cat <- Datamodel#datamodel.categories],
+        [manage_predicate(Module, Pred, Options, AdminContext) || Pred <- Datamodel#datamodel.predicates],
+        [manage_resource(Module, R, Options, AdminContext) || R <- Datamodel#datamodel.resources],
+        [manage_medium(Module, Medium, Options, AdminContext) || Medium <- Datamodel#datamodel.media],
+        [manage_edge(Module, Edge, Options, AdminContext) || Edge <- Datamodel#datamodel.edges],
+        [manage_data(Module, Data, AdminContext) || Data <- Datamodel#datamodel.data]
+    end),
     ok.
 
 manage_medium(Module, {Name, Props}, Options, Context) ->
@@ -233,12 +235,14 @@ manage_predicate_validfor(Id, [{SubjectCat, ObjectCat} | Rest], Options, Context
     case SubjectCat of
         undefined -> nop;
         _ ->
-            F(Id, true, m_rsc:name_to_id_check(SubjectCat, Context))
+            {ok, SubjectCatId} = m_rsc:name_to_id(SubjectCat, Context),
+            F(Id, true, SubjectCatId)
     end,
     case ObjectCat of
         undefined -> nop;
         _ ->
-            F(Id, false, m_rsc:name_to_id_check(ObjectCat, Context))
+            {ok, ObjectCatId} = m_rsc:name_to_id(ObjectCat, Context),
+            F(Id, false, ObjectCatId)
     end,
     manage_predicate_validfor(Id, Rest, Options, Context).
 
@@ -273,7 +277,7 @@ manage_edge(_Module, {SubjectName, PredicateName, ObjectName, EdgeOptions}, _Opt
     Object = m_rsc:name_to_id(ObjectName, Context),
     case {Subject, Predicate, Object} of
         {{ok, SubjectId}, {ok, PredicateId}, {ok,ObjectId}} ->
-            m_edge:insert(SubjectId, PredicateId, ObjectId, EdgeOptions, Context);
+            {ok, _} = m_edge:insert(SubjectId, PredicateId, ObjectId, EdgeOptions, Context);
         _ ->
             skip %% One part of the triple was MIA
     end.
