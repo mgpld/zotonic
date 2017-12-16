@@ -1,10 +1,9 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2010-2015 Marc Worrell
-%% Date: 2010-05-18
+%% @copyright 2010-2017 Marc Worrell
 %% @doc Simple server to manage the translations, owns the ets table containing all translations.
 %% When new translations are read then the previous table is kept and the one before the previous is deleted.
 
-%% Copyright 2010-2015 Marc Worrell
+%% Copyright 2010-2017 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -42,40 +41,45 @@
 %% API
 %%====================================================================
 
+-spec start_tests() -> {ok, pid()} | {error, term()}.
 start_tests() ->
     io:format("Starting trans server.~n"),
     gen_server:start_link({local, 'z_trans_server$test'}, ?MODULE, test, []).
 
-%% @spec start_link(SiteProps) -> {ok,Pid} | ignore | {error,Error}
 %% @doc Starts the server
-start_link(SiteProps) ->
-    {site, Site} = proplists:lookup(site, SiteProps),
+-spec start_link(Site :: atom()) -> {ok, pid()} | {error, term()}.
+start_link(Site) ->
     Name = z_utils:name_for_site(?MODULE, Site),
-    gen_server:start_link({local, Name}, ?MODULE, [Site, Name], []).
+    gen_server:start_link({local, Name}, ?MODULE, {Site, Name}, []).
 
 
 %% @doc Parse all .po files and reload the found translations in the trans server
+-spec load_translations(z:context()) -> ok.
 load_translations(Context) ->
     Ts = z_trans:parse_translations(Context),
     load_translations(Ts, Context).
 
 %% @doc Take a proplist with dicts and reload the translations table.
 %% After reloading the the template server is flushed.
+-spec load_translations(map(), z:context()) -> ok.
 load_translations(Trans, Context) ->
     Name = z_utils:name_for_site(?MODULE, z_context:site(Context)),
     gen_server:cast(Name, {load_translations, Trans}).
 
 %% @doc Return the name of the ets table holding all translations
+-spec table(atom()|z:context()) -> atom().
 table(Site) when is_atom(Site) ->
     z_utils:name_for_site(?MODULE, Site);
 table(#context{} = Context) ->
     Context#context.translation_table.
 
 %% @doc Set the table id in the context to the newest table id
+-spec set_context_table(z:context()) -> z:context().
 set_context_table(#context{} = Context) ->
     Context#context{translation_table=table(z_context:site(Context))}.
 
 %% @doc Reload the translations when modules are changed.
+-spec observe_module_ready(module_ready, z:context()) -> ok.
 observe_module_ready(module_ready, Context) ->
     load_translations(Context).
 
@@ -84,12 +88,9 @@ observe_module_ready(module_ready, Context) ->
 %% gen_server callbacks
 %%====================================================================
 
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore               |
-%%                     {stop, Reason}
 %% @doc Initiates the server.
-init([Site, Name]) ->
+-spec init({ Site :: atom(), Name :: atom() }) -> {ok, #state{}}.
+init({Site, Name}) ->
     lager:md([
         {site, Site},
         {module, ?MODULE}
@@ -99,31 +100,22 @@ init([Site, Name]) ->
     Table = ets:new(Name, [named_table, set, protected, {read_concurrency, true}]),
     {ok, #state{table=Table, site=Site}}.
 
-%% @spec handle_call(Request, From, State) -> {reply, Reply, State} |
-%%                                      {reply, Reply, State, Timeout} |
-%%                                      {noreply, State} |
-%%                                      {noreply, State, Timeout} |
-%%                                      {stop, Reason, Reply, State} |
-%%                                      {stop, Reason, State}
 %% @doc Trap unknown calls
 handle_call(Message, _From, State) ->
     {stop, {unknown_call, Message}, State}.
 
 
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
 %% @doc Rebuild the translations table. Call the template flush routines afterwards.
-%% Trans is a dict with all translations per translatable string.
+%% Trans is a map with all translations per translatable string.
 handle_cast({load_translations, Trans}, State) ->
-    F = fun(Key,Value,Acc) ->
+    F = fun(Key, Value, Acc) ->
             Value1 = case proplists:get_value(en, Value) of
-                        undefined -> [{en,Key}|Value];
-                        _ -> Value
-                    end,
+                undefined -> [{en,Key}|Value];
+                _ -> Value
+            end,
             [{Key,Value1}|Acc]
         end,
-    List = dict:fold(F, [], Trans),
+    List = maps:fold(F, [], Trans),
     sync_to_table(List, State#state.table),
     z_template:reset(State#state.site),
     {noreply, State};
@@ -132,25 +124,19 @@ handle_cast({load_translations, Trans}, State) ->
 handle_cast(Message, State) ->
     {stop, {unknown_cast, Message}, State}.
 
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                       {noreply, State, Timeout} |
-%%                                       {stop, Reason, State}
 %% @doc Handling all non call/cast messages
 handle_info(_Info, State) ->
     {noreply, State}.
 
-%% @spec terminate(Reason, State) -> void()
 %% @doc This function is called by a gen_server when it is about to
 %% terminate. It should be the opposite of Module:init/1 and do any necessary
 %% cleaning up. When it returns, the gen_server terminates with Reason.
 %% The return value is ignored.
 terminate(_Reason, State) ->
-    z_notifier:detach(module_ready, {?MODULE, observe_module_ready}, State#state.site),
+    z_notifier:detach(module_ready, State#state.site),
     ok.
 
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
 %% @doc Convert process state when code is changed
-
 code_change(_OldVsn, State, _Extra) ->
 	case State of
 		{state, Table, _OldTable} ->

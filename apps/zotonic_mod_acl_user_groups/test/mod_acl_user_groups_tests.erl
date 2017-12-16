@@ -76,7 +76,7 @@ acl_is_allowed_override_test() ->
     z_notifier:observe(acl_is_allowed, {?MODULE, is_allowed_always_true}, 10, Context),
     {ok, Id} = m_rsc:insert([{category_id, text}], Context),
     ?assertEqual(m_rsc:rid(default_content_group, Context), m_rsc:p(Id, content_group_id, Context)),
-    z_notifier:detach(acl_is_allowed, {?MODULE, is_allowed_always_true}, Context).
+    z_notifier:detach(acl_is_allowed, Context).
 
 publish_test() ->
     Context = context(),
@@ -107,7 +107,7 @@ context() ->
 start_modules(Context) ->
     ok = z_module_manager:activate_await(mod_content_groups, Context),
     ok = z_module_manager:activate_await(mod_acl_user_groups, Context),
-    ok = z_module_manager:await_upgrade(Context).
+    ok = z_module_manager:upgrade_await(Context).
 
 is_allowed_always_true(#acl_is_allowed{}, _Context) ->
     true.

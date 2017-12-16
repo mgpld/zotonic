@@ -20,9 +20,7 @@
 -module(m_email_status).
 
 -export([
-    m_find_value/3,
-    m_to_list/2,
-    m_value/2,
+    m_get/2,
 
     is_valid/2,
     is_ok_to_send/2,
@@ -30,6 +28,8 @@
 
     clear_status/3,
     clear_status/2,
+
+    block/2,
 
     mark_received/2,
 
@@ -43,20 +43,42 @@
 
 -include_lib("zotonic_core/include/zotonic.hrl").
 
-m_find_value(is_valid, #m{value=undefined} = M, _Context) ->
-    M#m{value=is_valid};
-m_find_value(Email, #m{value=is_valid}, Context) when is_binary(Email); is_list(Email) ->
-    is_valid(Email, Context);
-m_find_value(Email, #m{value=undefined}, Context) when is_binary(Email); is_list(Email) ->
-    get(Email, Context);
-m_find_value(_X, #m{}, _Context) ->
-    undefined.
+%% @doc Fetch the value for the key from a model source
+-spec m_get( list(), z:context() ) -> {term(), list()}.
+m_get([ is_valid, Email | Rest ], Context) ->
+    {is_valid(Email, Context), Rest};
+m_get([ Email | Rest ], Context) ->
+    {get(Email, Context), Rest};
+m_get(Vs, _Context) ->
+    lager:error("Unknown ~p lookup: ~p", [?MODULE, Vs]),
+    {undefined, []}.
 
-m_to_list(_m, _Context) ->
-    [].
 
-m_value(_m, _Context) ->
-    undefined.
+-spec block(binary(), #context{}) -> ok.
+block(Email0, Context) ->
+    Email = normalize(Email0),
+    case z_db:q("
+        update email_status
+        set is_valid = false,
+            is_blocked = true
+        where email = $1",
+        [Email],
+        Context)
+    of
+        1 ->
+            maybe_notify(Email, false, false, true, Context),
+            ok;
+        0 ->
+            z_db:q("
+                insert into email_status
+                    (email, is_valid, is_blocked)
+                values
+                    ($1, false, true)
+                ",
+                [Email],
+                Context),
+            ok
+    end.
 
 %% @doc Clear the status of the email address
 clear_status(undefined, Email0, Context) ->
@@ -75,11 +97,12 @@ clear_status(Id, Email0, Context) ->
 clear_status(Email, Context) ->
     case z_db:q("update email_status
             set is_valid = true,
+                is_blocked = false,
                 recent_error = null,
                 recent_error_ct = 0,
                 modified = now()
             where email = $1
-              and (is_valid = false or recent_error_ct > 0)",
+              and (is_valid = false or is_blocked or recent_error_ct > 0)",
             [Email],
             Context)
     of
@@ -112,16 +135,17 @@ is_valid_cached(Email0, Context) ->
 
 -spec is_valid_nocache(Email::binary(), #context{}) -> {IsValid::boolean(), IsOkToSend::boolean()}.
 is_valid_nocache(Email, Context) ->
-    case z_db:q("select is_valid, recent_error, recent_error_ct, error_is_final
+    case z_db:q("select is_valid, is_blocked, recent_error, recent_error_ct, error_is_final
                  from email_status where email = $1",
                 [Email],
                 Context)
     of
         [] -> {true, true};
-        [{true, _, _, _}] -> {true, true};
-        [{false, undefined, _, _}] -> {false, true};
-        [{false, _, _RecentErrorCt, false}] -> {false, true};
-        [{false, _, RecentErrorCt, true}] -> {false, RecentErrorCt < 5}
+        [{_IsValid, true, _RecentError, _RecentErrorCt, _ErrorIsFinal}] -> {false, false};
+        [{true, _IsBlocked, _RecentError, _RecentErrorCt, _ErrorIsFinal}] -> {true, true};
+        [{false, _IsBlocked, undefined, _RecentErrorCt, _ErrorIsFinal}] -> {false, true};
+        [{false, _IsBlocked, _RecentError, _RecentErrorCt, false}] -> {false, true};
+        [{false, _IsBlocked, _RecentError, RecentErrorCt, true}] -> {false, RecentErrorCt < 5}
     end.
 
 
@@ -169,7 +193,7 @@ mark_read(Email0, Context) ->
     {IsValid, _} = is_valid_nocache(Email, Context),
     case z_db:q("
             update email_status
-            set is_valid = true,
+            set is_valid = not is_blocked,
                 read = now(),
                 read_ct = read_ct + 1,
                 recent_error_ct = 0,
@@ -223,7 +247,7 @@ mark_sent(Email0, true, Context) ->
     {IsValid, _} = is_valid_nocache(Email, Context),
     case z_db:q("
         update email_status
-        set is_valid = true,
+        set is_valid = not is_blocked,
             recent_error_ct = 0,
             recent_error = null,
             modified = now()
@@ -391,6 +415,7 @@ install(Context) ->
                 create table email_status (
                     email character varying (200) not null,
                     is_valid boolean not null default true,
+                    is_blocked boolean not null default false,
 
                     read timestamp with time zone,
                     read_ct integer not null default 0,
@@ -441,6 +466,16 @@ install(Context) ->
                         true ->
                             ok
                     end
+            end,
+            case lists:member(is_blocked, Names) of
+                false ->
+                    z_db:q("alter table email_status
+                            add column is_blocked boolean not null default false",
+                           Context),
+                    z_db:flush(Context),
+                    ok;
+                true ->
+                    ok
             end
     end,
     ok.

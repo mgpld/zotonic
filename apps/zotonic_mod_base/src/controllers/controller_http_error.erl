@@ -168,9 +168,10 @@ map_extension(Context) ->
 
 do_html(Context0) ->
     Context = set_headers(Context0),
-    ContextQs = z_context:ensure_all(z_context:ensure_qs(Context)),
+    ContextQs = z_context:continue_all(z_context:ensure_qs(Context)),
+    ErrorCode = error_code(Context),
     Vars = [
-        {error_code, cowmachine_req:get_metadata(http_status_code, Context)}
+        {error_code, ErrorCode}
         | z_context:get_all(ContextQs)
     ],
     Vars1 = case bt_simplify(cowmachine_req:get_metadata(error_reason, Context)) of
@@ -188,12 +189,20 @@ do_html(Context0) ->
                 undefined ->
                     Vars
             end,
-    StatusTpl = <<"error.", (z_convert:to_binary(cowmachine_req:get_metadata(http_status_code, Context)))/binary, ".tpl">>,
+    StatusTpl = <<"error.", (z_convert:to_binary(ErrorCode))/binary, ".tpl">>,
     Rendered = case z_module_indexer:find(template, StatusTpl, ContextQs) of
                     {ok, ModuleIndex} -> z_template:render(ModuleIndex, Vars1, ContextQs);
                     {error, enoent} -> z_template:render(<<"error.tpl">>, Vars1, ContextQs)
                end,
     z_context:output(Rendered, ContextQs).
+
+error_code(Context) ->
+    case z_context:get_q(http_status_code, Context) of
+        StatusCode when is_integer(StatusCode) ->
+            StatusCode;
+        _ ->
+            cowmachine_req:get_metadata(http_status_code, Context)
+    end.
 
 do_text(Context0) ->
     Context = set_headers(Context0),
@@ -284,44 +293,57 @@ bt_table([{Module, Fun, ArityArgs, Loc} | T], Acc) ->
     bt_table(T, [bt_row(Module, Fun, ArityArgs, proplists:get_value(file, Loc), proplists:get_value(line, Loc)) | Acc]).
 
 bt_row(Module, Fun, ArityArgs, File, Line) ->
+    SFun = case is_integer(ArityArgs) of
+                true -> z_convert:to_list(Fun) ++ "/" ++ integer_to_list(ArityArgs);
+                false -> z_convert:to_list(Fun) ++ "/" ++ integer_to_list(length(ArityArgs))
+           end,
     case is_template(Module) of
-        {true, Mod, Template} ->
-            [true, Mod, Template, simplify_args(ArityArgs), loc(File, Line)];
+        {true, TplName} ->
+            [true, TplName, SFun, simplify_args(ArityArgs), loc(File,Line)];
         false ->
-            SFun = case is_integer(ArityArgs) of
-                        true -> z_convert:to_list(Fun) ++ "/" ++ integer_to_list(ArityArgs);
-                        false -> z_convert:to_list(Fun) ++ "/" ++ integer_to_list(length(ArityArgs))
-                   end,
             [false, Module, SFun, simplify_args(ArityArgs), loc(File,Line)]
     end.
 
-loc(undefined,undefined) -> undefined;
-loc(File,undefined) -> z_convert:to_list(File);
-loc(File,Line) -> z_convert:to_list(File)++":"++z_convert:to_list(Line).
+loc(undefined,undefined) -> {undefined, undefined};
+loc(File,undefined) -> {z_convert:to_list(File), undefined};
+loc(File,Line) -> {z_convert:to_list(File), integer_to_list(Line)}.
 
 simplify_args(N) when is_integer(N) -> undefined;
 simplify_args(L) ->
     As = [ simplify_arg(A) || A <- L ],
-    iolist_to_binary([$[, z_utils:combine(", ", As), $]]).
+    iolist_to_binary(["[ ", z_utils:combine(", ", As), " ]"]).
 
-    simplify_arg(N) when is_integer(N) -> integer_to_list(N);
-    simplify_arg(A) when is_atom(A) -> atom_to_list(A);
-    simplify_arg(B) when is_binary(B) -> B;
-    simplify_arg([]) -> "[]";
-    simplify_arg({}) -> "{}";
-    simplify_arg(L) when is_list(L) -> "[...]";
-    simplify_arg({A,B}) when is_atom(A), is_atom(B) -> [${,atom_to_list(A),$,,atom_to_list(B),$}];
-    simplify_arg(T) when is_tuple(T) ->
-        case is_atom(element(1, T)) of
-            true -> [$#, atom_to_list(element(1,T)), "{}"];
-            false -> io_lib:format("~p", [T])
-        end;
-    simplify_arg(X) -> io_lib:format("~p", [X]).
+simplify_arg(N) when is_integer(N) -> integer_to_list(N);
+simplify_arg(A) when is_atom(A) -> atom_to_list(A);
+simplify_arg(B) when is_binary(B) -> B;
+simplify_arg([]) -> "[]";
+simplify_arg({}) -> "{}";
+simplify_arg(L) when is_list(L) -> "[...]";
+simplify_arg({A,B}) when is_atom(A), is_atom(B) -> [${,atom_to_list(A),$,,atom_to_list(B),$}];
+simplify_arg(#context{} = Context) ->
+    [ "#context{site=", z_convert:to_binary(z_context:site(Context)), "}" ];
+simplify_arg(T) when is_tuple(T) ->
+    case is_atom(element(1, T)) of
+        true -> [$#, atom_to_list(element(1,T)), "{}"];
+        false -> io_lib:format("~p", [T])
+    end;
+simplify_arg(X) -> io_lib:format("~p", [X]).
 
 
 is_template(Module) ->
     case template_compiler:is_template_module(Module) of
-        true -> {true, Module, Module:filename()};
-        false -> false
+        true ->
+            MF = Module:filename(),
+            case binary:split(MF, <<"/lib/">>) of
+                [_, Tpl] ->
+                    case binary:split(Tpl, <<"/priv/templates/">>) of
+                        [Mod, Template] -> {true, {Mod, Template}};
+                        _ -> {true, {undefined, Tpl}}
+                    end;
+                _ ->
+                    {true, {undefined, MF}}
+            end;
+        false ->
+            false
     end.
 

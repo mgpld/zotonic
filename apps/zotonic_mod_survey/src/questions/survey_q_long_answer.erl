@@ -31,13 +31,13 @@
 
 answer(Block, Answers, _Context) ->
     Name = proplists:get_value(name, Block),
-    case proplists:get_value(Name, Answers) of
+    case maps:get(Name, Answers, undefined) of
         undefined ->
             {error, missing};
         Value ->
             case z_string:trim(Value) of
                 [] -> {error, missing};
-                V -> {ok, [{Name, {text, z_convert:to_binary(V)}}]}
+                 V -> {ok, [{Name, z_convert:to_binary(V)}]}
             end
     end.
 
@@ -49,7 +49,7 @@ prep_answer_header(Block, _Context) ->
 
 prep_answer(_Q, [], _Context) ->
     <<>>;
-prep_answer(_Q, [{_Name, {_Value, Text}}|_], _Context) ->
+prep_answer(_Q, [{_Name, Text}|_], _Context) ->
     z_convert:to_binary(Text).
 
 

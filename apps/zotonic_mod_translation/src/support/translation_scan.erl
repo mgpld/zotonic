@@ -1,8 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2010-2015 Marc Worrell
+%% @copyright 2010-2017 Marc Worrell
 %% @doc Parse templates / erlang files in modules, extract all translations.
 
-%% Copyright 2010-2015 Marc Worrell
+%% Copyright 2010-2017 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -72,7 +72,6 @@ merge_args([{Lang,Text}|Rest], Args) ->
         _ -> merge_args(Rest, Args)
     end.
 
-
 %% @doc Parse the template or Erlang module. Extract all translation tags.
 scan_file(".tpl", File) ->
     case template_compiler:translations(File) of
@@ -82,7 +81,7 @@ scan_file(".tpl", File) ->
           lager:error("POT generation, erlang error in \"~s\": ~p~n", [File, Reason])
     end;
 scan_file(".erl", File) ->
-    IncludeDirs = case zotonic_compile:compile_options(File) of
+    IncludeDirs = case zotonic_filehandler:compile_options(File) of
         {ok, Options} -> proplists:get_all_values(i, Options);
         false -> []
     end,

@@ -29,9 +29,7 @@
 -type hash() :: bcrypt_hash() | sha1_salted_hash().
 
 -export([
-    m_find_value/3,
-    m_to_list/2,
-    m_value/2,
+    m_get/2,
 
     is_user/2,
     get_username/1,
@@ -56,6 +54,9 @@
     lookup_by_verify_key/2,
     lookup_by_type_and_key/3,
     lookup_by_type_and_key_multi/3,
+
+    lookup_users_by_type_and_key/3,
+    lookup_users_by_verified_type_and_key/3,
 
     lookup_by_rememberme_token/2,
     get_rememberme_token/2,
@@ -90,39 +91,57 @@
 
 
 %% @doc Fetch the value for the key from a model source
-%% @spec m_find_value(Key, Source, Context) -> term()
-m_find_value(Id, #m{value = undefined} = M, _Context) ->
-    M#m{value = Id};
-m_find_value(is_user, #m{value = RscId}, Context) ->
-    is_user(RscId, Context);
-m_find_value(username, #m{value = RscId}, Context) ->
-    get_username(RscId, Context);
-m_find_value(all, #m{value = RscId} = M, _Context) ->
-    M#m{value = {all, RscId}};
-m_find_value(all_types, #m{value = RscId}, Context) ->
-    get_rsc_types(RscId, Context);
-m_find_value(Type, #m{value = {all, RscId}}, Context) ->
-    get_rsc_by_type(RscId, Type, Context);
-m_find_value(get, #m{value = undefined} = M, _Context) ->
-    M#m{value = get};
-m_find_value(IdnId, #m{value = get}, Context) ->
-    get(IdnId, Context);
-m_find_value(Type, #m{value = RscId}, Context) ->
-    get_rsc(RscId, Type, Context).
-
-%% @doc Transform a m_config value to a list, used for template loops
-%% @spec m_to_list(Source, Context) -> List
-m_to_list(#m{value = {all, RscId}}, Context) ->
-    get_rsc(RscId, Context);
-m_to_list(#m{}, _Context) ->
-    [].
-
-%% @doc Transform a model value so that it can be formatted or piped through filters
-%% @spec m_value(Source, Context) -> term()
-m_value(#m{value = undefined}, _Context) ->
-    undefined;
-m_value(#m{value = V}, _Context) ->
-    V.
+-spec m_get( list(), z:context()) -> {term(), list()}.
+m_get([ Id, is_user | Rest ], Context) ->
+    IsUser = case z_acl:rsc_visible(Id, Context) of
+        true -> is_user(Id, Context);
+        false -> undefined
+    end,
+    {IsUser, Rest};
+m_get([ Id, username | Rest ], Context) ->
+    Username = case z_acl:rsc_editable(Id, Context) of
+        true -> get_username(Id, Context);
+        false -> undefined
+    end,
+    {Username, Rest};
+m_get([ Id, all_types | Rest ], Context) ->
+    Idns = case z_acl:rsc_editable(Id, Context) of
+        true -> get_rsc_types(Id, Context);
+        false -> []
+    end,
+    {Idns, Rest};
+m_get([ Id, all ], Context) ->
+    IdnRsc = case z_acl:rsc_editable(Id, Context) of
+        true -> get_rsc(Id, Context);
+        false -> []
+    end,
+    {IdnRsc, []};
+m_get([ Id, all, Type | Rest ], Context) ->
+    IdnRsc = case z_acl:rsc_editable(Id, Context) of
+        true -> get_rsc_by_type(Id, Type, Context);
+        false -> []
+    end,
+    {IdnRsc, Rest};
+m_get([ get, IdnId | Rest ], Context) ->
+    Idn1 = case get(IdnId, Context) of
+        undefined -> undefined;
+        Idn ->
+            RscId = proplists:get_value(rsc_id, Idn),
+            case z_acl:rsc_editable(RscId, Context) of
+                true -> Idn;
+                false -> undefined
+            end
+    end,
+    {Idn1, Rest};
+m_get([ Id, Type | Rest ], Context) ->
+    Idn = case z_acl:rsc_editable(Id, Context) of
+        true -> get_rsc(Id, Type, Context);
+        false -> undefined
+    end,
+    {Idn, Rest};
+m_get(Vs, _Context) ->
+    lager:error("Unknown ~p lookup: ~p", [?MODULE, Vs]),
+    {undefined, []}.
 
 
 %% @doc Check if the resource has any credentials that will make him/her an user
@@ -390,7 +409,7 @@ check_username_pw("admin", Empty, _Context) when Empty =:= []; Empty =:= <<>> ->
 check_username_pw("admin", Password, Context) ->
     Password1 = z_convert:to_list(Password),
     case z_convert:to_list(m_site:get(admin_password, Context)) of
-        "admin" ->
+        "admin" when Password1 =:= "admin" ->
             % Only allow default password from whitelisted ip addresses
             case is_peer_whitelisted(Context) of
                 true ->
@@ -654,17 +673,17 @@ is_valid_key(email, Key, _Context) ->
     z_email_utils:is_email(Key);
 is_valid_key(username_pw, Key, _Context) ->
     not is_reserved_name(Key);
-is_valid_key(_Type, _Key, _Context) ->
+is_valid_key(Type, _Key, _Context) when is_atom(Type) ->
     true.
 
-normalize_key(_Type, undefined) ->
-    undefined;
-normalize_key(email, Key) ->
-    z_convert:to_binary(z_string:trim(z_string:to_lower(Key)));
-normalize_key(username_pw, Key) ->
-    z_convert:to_binary(z_string:trim(z_string:to_lower(Key)));
-normalize_key(_Type, Key) ->
-    Key.
+normalize_key(_Type, undefined) -> undefined;
+normalize_key(username_pw, Key) -> z_convert:to_binary(z_string:trim(z_string:to_lower(Key)));
+normalize_key(email, Key) -> z_convert:to_binary(z_string:trim(z_string:to_lower(Key)));
+normalize_key("username_pw", Key) -> normalize_key(username_pw, Key);
+normalize_key("email", Key) -> normalize_key(email, Key);
+normalize_key(<<"username_pw">>, Key) -> normalize_key(username_pw, Key);
+normalize_key(<<"email">>, Key) -> normalize_key(email, Key);
+normalize_key(_Type, Key) -> Key.
 
 
 %% @doc Create an unique identity record.
@@ -776,13 +795,13 @@ delete(IdnId, Context) ->
 
 %% @doc Move the identities of two resources, the identities are removed from the source id.
 -spec merge(m_rsc:resource(), m_rsc:resource(), #context{}) -> ok | {error, term()}.
-merge(WinnerId, LooserId, Context) ->
-    case z_acl:rsc_editable(WinnerId, Context) andalso z_acl:rsc_editable(LooserId, Context) of
+merge(WinnerId, LoserId, Context) ->
+    case z_acl:rsc_editable(WinnerId, Context) andalso z_acl:rsc_editable(LoserId, Context) of
         true ->
             F = fun(Ctx) ->
                 % Move all identities to the winner, except for duplicate type+key combinations
-                LooserIdns = z_db:q("select type, key, id from identity where rsc_id = $1",
-                    [m_rsc:rid(LooserId, Context)], Ctx),
+                LoserIdns = z_db:q("select type, key, id from identity where rsc_id = $1",
+                    [m_rsc:rid(LoserId, Context)], Ctx),
                 WinIdns = z_db:q("select type, key from identity where rsc_id = $1",
                     [m_rsc:rid(WinnerId, Context)], Ctx),
                 AddIdns = lists:filter(
@@ -794,7 +813,7 @@ merge(WinnerId, LooserId, Context) ->
                                 not lists:member({Type, Key}, WinIdns)
                         end
                     end,
-                    LooserIdns),
+                    LoserIdns),
                 lists:foreach(
                     fun({_Type, _Key, Id}) ->
                         z_db:q("update identity set rsc_id = $1 where id = $2",
@@ -811,7 +830,7 @@ merge(WinnerId, LooserId, Context) ->
                 end
             end,
             z_db:transaction(F, Context),
-            z_mqtt:publish(["~site", "rsc", m_rsc:rid(LooserId, Context), "identity"], {identity, all},
+            z_mqtt:publish(["~site", "rsc", m_rsc:rid(LoserId, Context), "identity"], {identity, all},
                 Context),
             z_mqtt:publish(["~site", "rsc", m_rsc:rid(WinnerId, Context), "identity"], {identity, all},
                 Context),
@@ -865,13 +884,40 @@ delete_by_type_and_key(RscId, Type, Key, Context) ->
     end.
 
 lookup_by_username(Key, Context) ->
-    lookup_by_type_and_key("username_pw", z_string:to_lower(Key), Context).
+    lookup_by_type_and_key(username_pw, z_string:to_lower(Key), Context).
 
 lookup_by_type_and_key(Type, Key, Context) ->
-    z_db:assoc_row("select * from identity where type = $1 and key = $2", [Type, Key], Context).
+    Key1 = normalize_key(Type, Key),
+    z_db:assoc_row("select * from identity where type = $1 and key = $2", [Type, Key1], Context).
 
 lookup_by_type_and_key_multi(Type, Key, Context) ->
-    z_db:assoc("select * from identity where type = $1 and key = $2", [Type, Key], Context).
+    Key1 = normalize_key(Type, Key),
+    z_db:assoc("select * from identity where type = $1 and key = $2", [Type, Key1], Context).
+
+lookup_users_by_type_and_key(Type, Key, Context) ->
+    Key1 = normalize_key(Type, Key),
+    z_db:assoc(
+        "select usr.*
+         from identity tp, identity usr
+         where tp.rsc_id = usr.rsc_id
+           and usr.type = 'username_pw'
+           and tp.type = $1
+           and tp.key = $2",
+        [Type, Key1],
+        Context).
+
+lookup_users_by_verified_type_and_key(Type, Key, Context) ->
+    Key1 = normalize_key(Type, Key),
+    z_db:assoc(
+        "select usr.*
+         from identity tp, identity usr
+         where tp.rsc_id = usr.rsc_id
+           and usr.type = 'username_pw'
+           and tp.type = $1
+           and tp.key = $2
+           and tp.is_verified",
+        [Type, Key1],
+        Context).
 
 lookup_by_verify_key(Key, Context) ->
     z_db:assoc_row("select * from identity where verify_key = $1", [Key], Context).

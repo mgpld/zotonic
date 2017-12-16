@@ -1,8 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2011-2016 Marc Worrell
+%% @copyright 2011-2017 Marc Worrell
 %% @doc Notifications used in Zotonic core
 
-%% Copyright 2011-2016 Marc Worrell
+%% Copyright 2011-2017 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -399,11 +399,11 @@
     props :: list()
 }).
 
-%% @doc Map to signal merging two resources. Move any information from the looser to the
-%% winner. The looser will be deleted.
+%% @doc Map to signal merging two resources. Move any information from the loser to the
+%% winner. The loser will be deleted.
 -record(rsc_merge, {
     winner_id :: integer(),
-    looser_id :: integer()
+    loser_id :: integer()
 }).
 
 %% @doc An updated resource is about to be persisted.
@@ -572,7 +572,8 @@
     service_uid :: binary(),
     service_props = [] :: list(),
     props = [] :: list({atom(), any()}),
-    is_connect = false :: boolean()
+    is_connect = false :: boolean(),
+    is_signup_confirm = false :: boolean()
 }).
 
 %% @doc Called after parsing the query arguments
@@ -890,6 +891,15 @@
     data :: any()
 }).
 
+%% @doc mod_export - return the {ok, Disposition} for the content disposition.
+%% Type: first
+%% Return: {ok, <<"inline">>} or {ok, <<"attachment">>}
+-record(export_resource_content_disposition, {
+    dispatch :: atom(),
+    id :: integer(),
+    content_type :: string()
+}).
+
 %% @doc mod_export - Check if the resource or dispatch is visible for export.
 %% Type: first
 %% Return: ``true`` or ``false``
@@ -956,13 +966,6 @@
     state :: term()
 }).
 
-%% @doc Notify modules of a data model entry defined in manage_schema
-%% Type: first
-%% Return: ``ok`` or ``undefined``
--record(manage_data, {
-    module :: atom(),
-    props :: tuple() | list()
-}).
 
 % Simple mod_development notifications:
 % development_reload - Reload all template, modules etc

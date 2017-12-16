@@ -9,7 +9,7 @@
 </div>
 {% endblock %}
 
-{% block widget_show_minimized %}{% with m.rsc[id] as r %}{{ not ((r.date_start|in_past and r.date_end|in_future) or r.is_a.event or r.is_a.survey) }}{% endwith %}{% endblock %}
+{% block widget_show_minimized %}{{ not ((id.date_start|in_past and id.date_end|in_future) or id.is_a.event or id.is_a.survey) }}{% endblock %}
 {% block widget_id %}sidebar-date-range{% endblock %}
 
 {% block widget_content %}
@@ -20,7 +20,7 @@
             <div>
                 <input type="text" id="{{ #remarks }}{{ lang_code_for_id }}" name="date_remarks{{ lang_code_with_dollar }}"
                     value="{{ is_i18n|if : id.translation[lang_code].date_remarks : id.date_remarks }}"
-                    {% if not is_editable %}disabled="disabled"{% endif %}
+                    {% if not id.is_editable %}disabled="disabled"{% endif %}
                     {% include "_language_attrs.tpl" language=lang_code class="field-title form-control" %}
                     placeholder="{_ e.g. might change _}"
                 />

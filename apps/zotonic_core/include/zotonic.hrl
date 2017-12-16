@@ -16,9 +16,6 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
-%% The release information
--include("zotonic_release.hrl").
-
 %% @doc The request context, session information and other
 -record(context, {
         %% Cowboy request data (only set when this context is used because of a request)
@@ -38,7 +35,6 @@
 
         %% Servers and supervisors for the site
         depcache            :: pid() | atom(),
-        notifier            :: pid() | atom(),
         session_manager     :: pid() | atom(),
         dispatcher          :: pid() | atom(),
         template_server     :: pid() | atom(),
@@ -121,9 +117,6 @@
         result :: any()
     }).
 
-%% Model value interface for templates
--record(m, {model, value}).
-
 %% Used for specifying resource id lists, as returned by object/subject lookup
 -record(rsc_list, {list}).
 
@@ -191,14 +184,26 @@
 -record(column_def, {name, type, length, is_nullable=true, default, primary_key, unique=false}).
 
 %% For the datamodel: default resources to create.
--record(datamodel, {categories=[], predicates=[], resources=[], media=[], edges=[], data=[]}).
+-record(datamodel, {
+    categories = [] :: list(),
+    predicates = [] :: list(),
+    resources = [] :: list(),
+    media = [] :: list(),
+    edges = [] :: list()
+}).
 
 %% ACL administrator user id
 -define(ACL_ADMIN_USER_ID, 1).
 -define(ACL_ANY_USER_ID, -1).
 
 %% ACL objects
--record(acl_rsc, {category, mime, size, props}).
+-record(acl_rsc, {
+    category :: atom(),
+    mime :: binary(),
+    size :: non_neg_integer(),
+    props :: list()
+}).
+
 -record(acl_edge, {
     subject_id :: m_rsc:resource(),
     predicate :: pos_integer() | atom(),
@@ -255,7 +260,7 @@
 %% The name of the persistent data cookie
 -define(PERSIST_COOKIE, <<"z_pid">>).
 
-%% Max age of the person cookie, 10 years or so.
+%% Max age of the persistent cookie, 10 years or so.
 -define(PERSIST_COOKIE_MAX_AGE, 3600*24*3650).
 
 %% Millisecs of no activity before the visitor process is stopped (if there are no attached sessions).
@@ -270,9 +275,6 @@
 
 %% Our default WWW-Authenticate header
 -define(WWW_AUTHENTICATE, <<"OAuth-1.0">>).
-
-%% Notifier defines
--define(NOTIFIER_DEFAULT_PRIORITY, 500).
 
 %% Wrapper macro to put Erlang terms in a bytea database column.
 %% Extraction is automatic, based on a magic marker prefixed to the serialized term.

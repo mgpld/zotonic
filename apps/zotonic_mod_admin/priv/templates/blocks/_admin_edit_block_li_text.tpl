@@ -10,10 +10,9 @@
 {% block widget_header %}{% endblock %}
 
 {% block widget_content %}
-{% with m.rsc[id] as r %}
 <fieldset>
 	<div>
-		{% if is_editable %}
+		{% if id.is_editable %}
 			<textarea rows="10"
 			    id="block-{{name}}-body{{ lang_code_for_id }}"
 			    name="block-{{name}}-body{{ lang_code_with_dollar }}"
@@ -24,7 +23,6 @@
 		{% endif %}
 	</div>
 </fieldset>
-{% endwith %}
 {% endblock %}
 
 {% block widget_content_nolang %}

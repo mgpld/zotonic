@@ -23,9 +23,7 @@
 
 %% interface functions
 -export([
-    m_find_value/3,
-    m_to_list/2,
-    m_value/2,
+    m_get/2,
     identify/2,
     get/2,
     get_file_data/2,
@@ -66,22 +64,18 @@
 -define(MEDIA_MAX_LENGTH_DOWNLOAD, 500 * 1024 * 1024).
 -define(MEDIA_TIMEOUT_DOWNLOAD, 60 * 1000).
 
+
 %% @doc Fetch the value for the key from a model source
-%% @spec m_find_value(Key, Source, Context) -> term()
-m_find_value(Id, #m{value = undefined}, Context) ->
-    get(Id, Context);
-m_find_value(_Key, #m{}, _Context) ->
-    undefined.
-
-%% @doc Transform a m_config value to a list, used for template loops
-%% @spec m_to_list(Source, Context) -> List
-m_to_list(#m{}, _Context) ->
-    [].
-
-%% @doc Transform a model value so that it can be formatted or piped through filters
-%% @spec m_value(Source, Context) -> term()
-m_value(#m{}, _Context) ->
-    undefined.
+-spec m_get( list(), z:context() ) -> {term(), list()}.
+m_get([ Id | Rest ], Context) ->
+    Media = case z_acl:rsc_visible(Id, Context) of
+        true -> get(Id, Context);
+        false -> undefined
+    end,
+    {Media, Rest};
+m_get(Vs, _Context) ->
+    lager:error("Unknown ~p lookup: ~p", [?MODULE, Vs]),
+    {undefined, []}.
 
 
 %% @doc Return the identification of a medium. Used by z_media_identify:identify()
@@ -264,23 +258,23 @@ replace(Id, Props, Context) ->
 
 %% @doc Move a medium between resources, iff the destination doesn't have an associated medium.
 %%      This is called when merging two resources (and the FromId is subsequently deleted).
-merge(WinnerId, LooserId, Context) ->
-    case z_acl:rsc_editable(LooserId, Context) andalso z_acl:rsc_editable(WinnerId, Context) of
+merge(WinnerId, LoserId, Context) ->
+    case z_acl:rsc_editable(LoserId, Context) andalso z_acl:rsc_editable(WinnerId, Context) of
         true ->
             case z_db:q1("select count(*) from medium where id = $1", [WinnerId], Context) of
                 1 ->
                     ok;
                 0 ->
-                    case z_db:q1("select count(*) from medium where id = $1", [LooserId], Context) of
+                    case z_db:q1("select count(*) from medium where id = $1", [LoserId], Context) of
                         0 ->
                             ok;
                         1 ->
-                            Depicts = depicts(LooserId, Context),
+                            Depicts = depicts(LoserId, Context),
                             1 = z_db:q("update medium set id = $1 where id = $2",
-                                [WinnerId, LooserId],
+                                [WinnerId, LoserId],
                                 Context),
                             [z_depcache:flush(DepictId, Context) || DepictId <- Depicts],
-                            z_depcache:flush(LooserId, Context),
+                            z_depcache:flush(LoserId, Context),
                             z_depcache:flush(WinnerId, Context),
                             ok
                     end

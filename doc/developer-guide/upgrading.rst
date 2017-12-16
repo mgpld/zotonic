@@ -60,6 +60,7 @@ Authentication
 
     observe_auth_logon(#auth_logon{}, Context, _Context) ->
 
+
 Configuration
 ^^^^^^^^^^^^^
 
@@ -111,6 +112,15 @@ Export
 * Modules mod_atom and mod_atom_feed were removed. You can export data in a
   variety of formats using :ref:`mod_export`.
 
+JSON
+^^^^
+
+* Mochijson structures replaced with Erlang maps.
+* All JSON encoding/decoding now relies on JSX and goes through
+  ``z_json:encode/1`` and ``z_json:decode/1``.
+* ``{trans, _}`` tuples should now be unpacked by the client, before calling
+  ``z_json:encode/1`` (previously ``z_json:to_mochijson/2``).
+
 Removed deprecated functions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -134,6 +144,9 @@ Resources
   After::
 
     {ok, Id} = m_rsc:name_to_id(Value, Context).
+
+* Inserting or deleting an edge no longer modifies the last modified and
+  modifier properties of the edge’s subject resource.
 
 Sites and modules
 ^^^^^^^^^^^^^^^^^
@@ -168,6 +181,23 @@ Sites and modules
             ...
         rebar.config
 
+
+Module schema and data initialization
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The `#datamodel.data` field has been removed.
+The notifier `#manage_data` has also been removed.
+
+Now the call to (the optional) `manage_schema/2` will be followed by a call
+to `manage_data/2`. Note that `manage_data` will be called if and only if
+you have a `manage_schema/2` function exported (and the `-mod_schema(..)`
+version changes or the module is installed).
+
+The `manage_schema/2` function is called inside a transaction. The
+`manage_data/2` function is called after that transaction and also after
+all (optional) `#datamodel` changes are applied.
+
+
 Templates
 ^^^^^^^^^
 
@@ -175,7 +205,23 @@ Templates
   was renamed to ``absolute_url``.
 * Templates are now stored in :file:`yoursite/templates/priv/` instead of
   :file:`yoursite/templates/`.
-* The ``maxage`` caching argument was renamed to ``max-age``.
+* The ``maxage`` caching argument was renamed to ``max_age``.
+* The models have now extra ACL checks.
+
+  The ``m.config``, ``m.site`` and ``m.sysconfig`` models are only accessible
+  as administrator. Use the models *owning* the various settings to access the
+  configurations.
+
+  Exception is that the hostname and site-title information is publicly accessible
+  using ``m.site``.
+
+  Examples:
+
+   * ``m.config.site.title.value`` is now ``m.site.title``
+   * ``m.config.mod_editor_tinymce.version.value`` is now ``m.editor_tinymce.version``
+
+  Check the various models of the modules for the new lookups.
+
 
 Port, proxies and SSL certificates
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

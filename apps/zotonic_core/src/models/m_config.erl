@@ -1,11 +1,9 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009 Marc Worrell
-%% Date: 2009-04-09
-%%
+%% @copyright 2009-2017 Marc Worrell
 %% @doc Model for the zotonic config table. Performs a fallback to the site configuration when
 %% a key is not defined in the configuration table.
 
-%% Copyright 2009 Marc Worrell
+%% Copyright 2009-2017 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,16 +24,19 @@
 
 %% interface functions
 -export([
-    m_find_value/3,
-    m_to_list/2,
-    m_value/2,
+    m_get/2,
     all/1,
     get/2,
     get/3,
     get_value/3,
     get_value/4,
+
+    get_boolean/3,
+    get_boolean/4,
+
     set_value/4,
     set_prop/5,
+
     delete/3,
     get_id/3
 ]).
@@ -43,25 +44,25 @@
 -include_lib("zotonic.hrl").
 
 %% @doc Fetch the value for the key from a model source
-%% @spec m_find_value(Key, Source, Context) -> term()
-m_find_value(Module, #m{value = undefined} = M, _Context) ->
-    M#m{value = Module};
-m_find_value(Key, #m{value = Module}, Context) ->
-    get(Module, Key, Context).
-
-%% @doc Transform a m_config value to a list, used for template loops
-%% @spec m_to_list(Source, Context) -> List
-m_to_list(#m{value = undefined}, Context) ->
-    all(Context);
-m_to_list(#m{value = Module}, Context) ->
-    get(Module, Context).
-
-%% @doc Transform a model value so that it can be formatted or piped through filters
-%% @spec m_value(Source, Context) -> term()
-m_value(#m{value = undefined}, Context) ->
-    all(Context);
-m_value(#m{value = Module}, Context) ->
-    get(Module, Context).
+-spec m_get( list(), z:context()) -> {term(), list()}.
+m_get([], Context) ->
+    case z_acl:is_admin(Context) of
+        true -> {all(Context), []};
+        false -> {[], []}
+    end;
+m_get([ Module ], Context) ->
+    case z_acl:is_admin(Context) of
+        true -> {get(Module, Context), []};
+        false -> {[], []}
+    end;
+m_get([ Module, Key | Rest ], Context) ->
+    case z_acl:is_admin(Context) of
+        true -> {get(Module, Key, Context), Rest};
+        false -> {[], Rest}
+    end;
+m_get(Vs, _Context) ->
+    lager:error("Unknown ~p lookup: ~p", [?MODULE, Vs]),
+    {undefined, []}.
 
 
 %% @doc Return all configurations from the configuration table. Returns a nested proplist (module, key)
@@ -153,6 +154,11 @@ get_value(Module, Key, Default, Context) when is_atom(Module) andalso is_atom(Ke
         Value -> Value
     end.
 
+get_boolean(Module, Key, Context) ->
+    z_convert:to_bool(get_value(Module, Key, Context)).
+
+get_boolean(Module, Key, Default, Context) ->
+    z_convert:to_bool(get_value(Module, Key, Default, Context)).
 
 %% @doc Set a "simple" config value.
 -spec set_value(atom(), atom(), term(), #context{}) -> ok.

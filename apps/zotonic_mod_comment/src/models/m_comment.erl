@@ -25,9 +25,7 @@
 
 %% interface functions
 -export([
-    m_find_value/3,
-    m_to_list/2,
-    m_value/2,
+    m_get/2,
 
     list_rsc/2,
     get/2,
@@ -47,34 +45,44 @@
 
 
 %% @doc Fetch the value for the key from a model source
-%% @spec m_find_value(Key, Source, Context) -> term()
-m_find_value(rsc, #m{value=undefined} = M, _Context) ->
-    M#m{value=rsc};
-m_find_value(Id, #m{value=rsc}, Context) ->
-    % All comments of the resource.
-    list_rsc(Id, Context);
-m_find_value(count, #m{value=undefined} = M, _Context) ->
-    M#m{value=count};
-m_find_value(Id, #m{value=count}, Context) ->
-    count_rsc(Id, Context);
-m_find_value(get, #m{value=undefined} = M, _Context) ->
-    M#m{value=get};
-m_find_value(CommentId, #m{value=get}, Context) ->
-    % Specific comment of the resource.
-    get(CommentId, Context);
-m_find_value(_Key, #m{value=undefined}, _Context) ->
-   undefined.
-
-%% @doc Transform a m_config value to a list, used for template loops
-%% @spec m_to_list(Source, Context) -> []
-m_to_list(_, _Context) ->
-    [].
-
-%% @doc Transform a model value so that it can be formatted or piped through filters
-%% @spec m_value(Source, Context) -> term()
-m_value(#m{value=undefined}, _Context) ->
-    undefined.
-
+-spec m_get( list(), z:context() ) -> {term(), list()}.
+m_get([ anonymous | Rest ], Context) ->
+    Anon = case m_config:get_value(mod_comment, anonymous, Context) of
+        undefined -> true;
+        V -> z_convert:to_bool(V)
+    end,
+    {Anon, Rest};
+m_get([ moderate | Rest ], Context) ->
+    Mod = case m_config:get_value(mod_comment, moderate, Context) of
+        undefined -> false;
+        <<>> -> false;
+        V -> z_convert:to_bool(V)
+    end,
+    {Mod, Rest};
+m_get([ rsc, Id | Rest ], Context) ->
+    case z_acl:rsc_visible(Id, Context) of
+        true -> {list_rsc(Id, Context), Rest};
+        false -> {[], Rest}
+    end;
+m_get([ count, Id | Rest ], Context) ->
+    case z_acl:rsc_visible(Id, Context) of
+        true -> {count_rsc(Id, Context), Rest};
+        false -> {undefined, Rest}
+    end;
+m_get([ get, CommentId | Rest ], Context) ->
+    Cmt = case get(CommentId, Context) of
+        undefined -> undefined;
+        Comment ->
+            RscId = proplists:get_value(rsc_id, Comment),
+            case z_acl:rsc_visible(RscId, Context) of
+                true -> Comment;
+                false -> undefined
+            end
+    end,
+    {Cmt, Rest};
+m_get(Vs, _Context) ->
+    lager:error("Unknown ~p lookup: ~p", [?MODULE, Vs]),
+    {undefined, []}.
 
 
 %% @doc List all comments of the resource.
@@ -192,13 +200,13 @@ gravatar_code(Email) ->
 
 %% @doc Move all comments from one resource to another
 -spec merge(m_rsc:resource(), m_rsc:resource(), #context{}) -> ok.
-merge(WinnerId, LooserId, Context) ->
+merge(WinnerId, LoserId, Context) ->
     z_db:q("update comment
             set rsc_id = $1
             where rsc_id = $2",
-           [m_rsc:rid(WinnerId, Context), m_rsc:rid(LooserId, Context)],
+           [m_rsc:rid(WinnerId, Context), m_rsc:rid(LoserId, Context)],
            Context),
-    z_depcache:flush({comment_rsc, m_rsc:rid(LooserId, Context)}, Context),
+    z_depcache:flush({comment_rsc, m_rsc:rid(LoserId, Context)}, Context),
     z_depcache:flush({comment_rsc, m_rsc:rid(WinnerId, Context)}, Context),
     ok.
 

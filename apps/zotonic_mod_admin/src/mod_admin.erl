@@ -78,7 +78,7 @@ class_to_opts(Class) ->
             [];
         {match, Ms} ->
             [
-                mochijson:encode({struct, [{A,V} || [A,V] <- Ms]}),
+                z_json:encode([{A,V} || [A,V] <- Ms]),
                 32
             ]
     end.
@@ -213,14 +213,19 @@ event(#postback_notify{message= <<"feedback">>, trigger= <<"dialog-connect-find"
     Cats = case Category of
                 <<"p:", Predicate/binary>> -> feedback_categories(SubjectId, Predicate, ObjectId, Context);
                 <<>> -> [];
-                CatId -> [{z_convert:to_integer(CatId)}]
+                CatId -> [{m_rsc:rid(CatId, Context)}]
            end,
     Vars = [
         {subject_id, SubjectId},
         {cat, Cats},
         {predicate, Predicate},
         {text, Text}
-    ],
+    ]++ case z_context:get_q(find_cg, Context) of
+        <<>> -> [];
+        undefined -> [];
+        <<"me">> -> [ {creator_id, z_acl:user(Context)} ];
+        CgId -> [ {content_group, m_rsc:rid(CgId, Context)}]
+    end,
     z_render:wire([
         {remove_class, [{target, TargetId}, {class, "loading"}]},
         {update, [{target, TargetId}, {template, "_action_dialog_connect_tab_find_results.tpl"} | Vars]}

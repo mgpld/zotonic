@@ -1,10 +1,8 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2009 Marc Worrell
-%% Date: 2009-04-09
-%%
+%% @copyright 2009-2017 Marc Worrell
 %% @doc Model for the zotonic site configuration
 
-%% Copyright 2009 Marc Worrell
+%% Copyright 2009-2017 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,9 +23,7 @@
 
 %% interface functions
 -export([
-    m_find_value/3,
-    m_to_list/2,
-    m_value/2,
+    m_get/2,
     load_config/1,
     load_config/2,
     all/1,
@@ -38,27 +34,46 @@
 -include_lib("zotonic.hrl").
 
 %% @doc Fetch the value for the key from a model source
-%% @spec m_find_value(Key, Source, Context) -> term()
-m_find_value(hostname, #m{value=undefined}, Context) ->
-    z_context:hostname(Context);
-m_find_value(hostname_port, #m{value=undefined}, Context) ->
-    z_context:hostname_port(Context);
-m_find_value(hostname_ssl_port, #m{value=undefined}, Context) ->
-    z_context:hostname_ssl_port(Context);
-m_find_value(protocol, #m{value=undefined}, Context) ->
-    z_context:site_protocol(Context);
-m_find_value(Key, #m{value=undefined}, Context) ->
-    get(Key, Context).
+-spec m_get( list(), z:context() ) -> {term(), list()}.
+m_get([ hostname | Rest ], Context) ->
+    {z_context:hostname(Context), Rest};
+m_get([ hostname_port | Rest ], Context) ->
+    {z_context:hostname_port(Context), Rest};
+m_get([ hostname_ssl_port | Rest ], Context) ->
+    {z_context:hostname_ssl_port(Context), Rest};
+m_get([ hostalias | Rest ], Context) ->
+    {get(hostalias, Context), Rest};
+m_get([ protocol | Rest ], Context) ->
+    {z_context:site_protocol(Context), Rest};
+m_get([ is_ssl | Rest ], Context) ->
+    {z_context:is_ssl_site(Context), Rest};
+m_get([ title | Rest ], Context) ->
+    Title = m_config:get_value(site, title, Context),
+    {Title, Rest};
+m_get([ subtitle | Rest ], Context) ->
+    SubTitle = m_config:get_value(site, subtitle, Context),
+    {SubTitle, Rest};
+m_get([ pagelen | Rest ], Context) ->
+    PageLen = case m_config:get_value(site, pagelen, Context) of
+        undefined -> ?SEARCH_PAGELEN;
+        <<>> -> ?SEARCH_PAGELEN;
+        V -> z_convert:to_integer(V)
+    end,
+    {PageLen, Rest};
+m_get([ Key | Rest ], Context) ->
+    case z_acl:is_admin(Context) of
+        true -> {get(Key, Context), Rest};
+        false -> {undefined, Rest}
+    end;
+m_get([], Context) ->
+    case z_acl:is_admin(Context) of
+        true -> {all(Context), []};
+        false -> {[], []}
+    end;
+m_get(Vs, _Context) ->
+    lager:error("Unknown ~p lookup: ~p", [?MODULE, Vs]),
+    {undefined, []}.
 
-%% @doc Transform a m_config value to a list, used for template loops
-%% @spec m_to_list(Source, Context) -> All
-m_to_list(#m{value=undefined}, Context) ->
-    all(Context).
-
-%% @doc Transform a model value so that it can be formatted or piped through filters
-%% @spec m_value(Source, Context) -> term()
-m_value(#m{value=undefined}, Context) ->
-    all(Context).
 
 -spec load_config(atom()|z:context()) -> ok | {error, term()}.
 load_config(#context{} = Context) ->
@@ -108,7 +123,7 @@ get(Key, Context) when is_atom(Key) ->
         end
     catch
         error:badarg ->
-            % Special case on site setup where the depcache is not yet running
+            % Special case on site setup when the depcache is not yet running
             {ok, Cfg} = z_sites_manager:get_site_config(z_context:site(Context)),
             proplists:get_value(Key, Cfg)
     end.

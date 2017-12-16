@@ -48,6 +48,7 @@
 
     pickle/1,
     depickle/1,
+    depickle_site/1,
 
     combine_results/2,
 
@@ -151,7 +152,6 @@ new(#context{} = C) ->
         language=C#context.language,
         tz=C#context.tz,
         depcache=C#context.depcache,
-        notifier=C#context.notifier,
         session_manager=C#context.session_manager,
         dispatcher=C#context.dispatcher,
         template_server=C#context.template_server,
@@ -163,9 +163,10 @@ new(#context{} = C) ->
         translation_table=C#context.translation_table
     };
 new(undefined) ->
+    % TODO: check if the fallback site is running
     case z_sites_dispatcher:get_fallback_site() of
-        undefined -> throw({error, no_site_enabled});
-        Site -> new(Site)
+        {ok, Site} -> new(Site);
+        undefined -> throw({error, no_site_enabled})
     end;
 new(Site) when is_atom(Site) ->
     set_default_language_tz(
@@ -193,12 +194,24 @@ new(Req, Module) when is_map(Req) ->
 
 -spec set_default_language_tz(z:context()) -> z:context().
 set_default_language_tz(Context) ->
-    F = fun() -> {z_language:default_language(Context), tz_config(Context)} end,
-    {DefaultLang, TzConfig} = z_depcache:memo(F, default_language_tz, ?DAY, [config], Context),
-    Context#context{
-        language= [DefaultLang],
-        tz= TzConfig
-    }.
+    try
+        F = fun() ->
+            {z_language:default_language(Context), tz_config(Context)}
+        end,
+        {DefaultLang, TzConfig} = z_depcache:memo(F, default_language_tz, ?DAY, [config], Context),
+        Context#context{
+            language = [DefaultLang],
+            tz = TzConfig
+        }
+    catch
+        error:badarg ->
+            % The depache is gone, happens during race conditions on site shutdown.
+            % Silently return a default.
+            Context#context{
+                language = [ en ],
+                tz = z_config:get(timezone)
+            }
+    end.
 
 % @doc Create a new context used when testing parts of zotonic
 new_tests() ->
@@ -206,8 +219,7 @@ new_tests() ->
             #context{
                 site=test,
                 language=[en],
-                tz= <<"UTC">>,
-                notifier='z_notifier$test'
+                tz= <<"UTC">>
             }),
     case ets:info(Context#context.translation_table) of
         undefined ->
@@ -226,7 +238,6 @@ set_server_names(#context{site=Site} = Context) ->
     Depcache = list_to_atom("z_depcache"++SiteAsList),
     Context#context{
         depcache=Depcache,
-        notifier=list_to_atom("z_notifier"++SiteAsList),
         session_manager=list_to_atom("z_session_manager"++SiteAsList),
         dispatcher=list_to_atom("z_dispatcher"++SiteAsList),
         template_server=list_to_atom("z_template"++SiteAsList),
@@ -245,8 +256,11 @@ site(#context{site=Site}) ->
     Site;
 site(Req) when is_map(Req) ->
     case maps:get(cowmachine_site, Req, undefined) of
-        undefined -> z_sites_dispatcher:get_fallback_site();
-        Site when is_atom(Site) -> Site
+        undefined ->
+            {ok, Site} = z_sites_dispatcher:get_fallback_site(),
+            Site;
+        Site when is_atom(Site) ->
+            Site
     end.
 
 
@@ -312,7 +326,6 @@ prune_for_async(#context{} = Context) ->
         acl=Context#context.acl,
         props=Context#context.props,
         depcache=Context#context.depcache,
-        notifier=Context#context.notifier,
         session_manager=Context#context.session_manager,
         dispatcher=Context#context.dispatcher,
         template_server=Context#context.template_server,
@@ -351,7 +364,6 @@ prune_for_database(Context) ->
         site=Context#context.site,
         dbc=Context#context.dbc,
         depcache=Context#context.depcache,
-        notifier=Context#context.notifier,
         session_manager=Context#context.session_manager,
         dispatcher=Context#context.dispatcher,
         template_server=Context#context.template_server,
@@ -500,7 +512,6 @@ is_ssl_site(Context) ->
     end.
 
 %% @doc Pickle a context for storing in the database
-%% @todo pickle/depickle the visitor id (when any)
 -spec pickle( z:context() ) -> tuple().
 pickle(Context) ->
     {pickled_context,
@@ -511,7 +522,6 @@ pickle(Context) ->
         undefined}.
 
 %% @doc Depickle a context for restoring from a database
-%% @todo pickle/depickle the visitor id (when any)
 -spec depickle( tuple() ) -> z:context().
 depickle({pickled_context, Site, UserId, Language, _VisitorId}) ->
     depickle({pickled_context, Site, UserId, Language, 0, _VisitorId});
@@ -521,6 +531,13 @@ depickle({pickled_context, Site, UserId, Language, Tz, _VisitorId}) ->
         undefined -> Context;
         _ -> z_acl:logon(UserId, Context)
     end.
+
+%% @doc Depickle a context, return the site name.
+-spec depickle_site( tuple() ) -> z:context().
+depickle_site({pickled_context, Site, _UserId, _Language, _VisitorId}) ->
+    Site;
+depickle_site({pickled_context, Site, _UserId, _Language, _Tz, _VisitorId}) ->
+    Site.
 
 %% @spec output(list(), Context) -> {io_list(), Context}
 %% @doc Replace the contexts in the output with their rendered content and collect all scripts
@@ -1024,8 +1041,11 @@ set(Key, Value, Context) ->
 %% @doc Set the value of the context variables to all {Key, Value} properties.
 set(PropList, Context) when is_list(PropList) ->
     NewProps = lists:foldl(
-        fun ({Key,Value}, Props) ->
-            z_utils:prop_replace(Key, Value, Props)
+        fun
+            ({Key,Value}, Props) ->
+                z_utils:prop_replace(Key, Value, Props);
+            (Key, Props) ->
+                z_utils:prop_replace(Key, true, Props)
         end, Context#context.props, PropList),
     Context#context{props = NewProps}.
 

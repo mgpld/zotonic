@@ -21,23 +21,28 @@
 -behaviour(gen_model).
 
 -export([
-    m_find_value/3,
-    m_to_list/2,
-    m_value/2
-    ]).
+    m_get/2
+]).
 
 -include_lib("zotonic_core/include/zotonic.hrl").
 
-m_find_value(list_backups, #m{}, Context) ->
-    mod_backup:list_backups(Context);
-m_find_value(is_backup_in_progress, #m{}, Context) ->
-    mod_backup:backup_in_progress(Context);
-m_find_value(_, #m{}, _Context) ->
-    undefined.
-
-m_to_list(#m{}, _Context) ->
-    [].
-
-m_value(#m{}, _Context) ->
-    undefined.
+%% @doc Fetch the value for the key from a model source
+-spec m_get( list(), z:context() ) -> {term(), list()}.
+m_get([ admin_panel | Rest ], Context) ->
+    {m_config:get_value(mod_backup, admin_panel, Context), Rest};
+m_get([ daily_dump | Rest ], Context) ->
+    {m_config:get_value(mod_backup, daily_dump, Context), Rest};
+m_get([ list_backups | Rest ], Context) ->
+    case z_acl:is_allowed(use, mod_backup, Context) of
+        true -> {mod_backup:list_backups(Context), Rest};
+        false -> {[], Rest}
+    end;
+m_get([ is_backup_in_progress | Rest ], Context) ->
+    case z_acl:is_allowed(use, mod_backup, Context) of
+        true -> {mod_backup:backup_in_progress(Context), Rest};
+        false -> {[], Rest}
+    end;
+m_get(Vs, _Context) ->
+    lager:error("Unknown ~p lookup: ~p", [?MODULE, Vs]),
+    {undefined, []}.
 

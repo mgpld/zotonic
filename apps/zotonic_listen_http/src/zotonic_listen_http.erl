@@ -108,8 +108,7 @@ stop_http_listeners() ->
 -spec start_http_listeners() -> ok.
 start_http_listeners() ->
     z_ssl_certs:ensure_dhfile(),
-    application:set_env(cowmachine, server_header,
-        <<"Zotonic/", (z_convert:to_binary(?ZOTONIC_VERSION))/binary>>),
+    application:set_env(cowmachine, server_header, z_config:get(server_header)),
     start_http_listeners_ip4(z_config:get(listen_ip), z_config:get(listen_port)),
     start_https_listeners_ip4(z_config:get(listen_ip), z_config:get(ssl_listen_port)),
     case ipv6_supported() of
@@ -134,7 +133,7 @@ start_http_listeners_ip4(WebIp, WebPort) ->
         any -> [];
         _ -> [{ip, WebIp}]
     end,
-    {ok, _} = cowboy:start_clear(
+    case cowboy:start_clear(
         zotonic_http_listener_ipv4,
         [   inet,
             {port, WebPort},
@@ -142,7 +141,11 @@ start_http_listeners_ip4(WebIp, WebPort) ->
             {num_acceptors, z_config:get(inet_acceptor_pool_size)}
             | WebOpt
         ],
-        cowboy_options()).
+        cowboy_options())
+    of
+        {ok, _} = OK -> OK;
+        {error, {already_started, Pid}} -> {ok, Pid}
+    end.
 
 %% @doc Start IPv4 HTTPS listeners
 start_https_listeners_ip4(none, _SSLPort) -> ignore;
@@ -155,7 +158,7 @@ start_https_listeners_ip4(WebIp, SSLPort) ->
         any -> [];
         _ -> [{ip, WebIp}]
     end,
-    {ok, _} = start_tls(
+    case start_tls(
         zotonic_https_listener_ipv4,
         [   inet,
             {port, SSLPort},
@@ -164,7 +167,11 @@ start_https_listeners_ip4(WebIp, SSLPort) ->
         ]
         ++ z_ssl_certs:ssl_listener_options()
         ++ WebOpt,
-        cowboy_options()).
+        cowboy_options())
+    of
+        {ok, _} = OK -> OK;
+        {error, {already_started, Pid}} -> {ok, Pid}
+    end.
 
 %% @doc As we don't have a separate listen_ipv6 config yet, only start ip6 on 'any'
 start_http_listeners_ip6(none, _WebPort) -> ignore;

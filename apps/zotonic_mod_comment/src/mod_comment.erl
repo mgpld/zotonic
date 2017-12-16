@@ -52,7 +52,7 @@ event(#submit{message={newcomment, Args}, form=FormId}, Context) ->
             Email = <<"">>
     end,
     Message = z_context:get_q_validated(<<"message">>, Context),
-    Is_visible = case m_config:get_value(comments, moderate, Context) of <<"1">> -> false; _Else -> true end,
+    Is_visible = case m_config:get_value(?MODULE, moderate, Context) of <<"1">> -> false; _Else -> true end,
     case m_comment:insert(Id, Name, Email, Message, Is_visible, Context) of
         {ok, CommentId} ->
             CommentsListElt = proplists:get_value(comments_list, Args, "comments-list"),
@@ -92,8 +92,8 @@ observe_search_query(_, _Context) ->
     undefined.
 
 %% @doc Move all comments from one resource to another
-observe_rsc_merge(#rsc_merge{looser_id=LooserId, winner_id=WinnerId}, Context) ->
-    m_comment:merge(WinnerId, LooserId, Context).
+observe_rsc_merge(#rsc_merge{loser_id=LoserId, winner_id=WinnerId}, Context) ->
+    m_comment:merge(WinnerId, LoserId, Context).
 
 %% @doc Check the installation of the comment table. A bit more complicated because 0.1 and 0.2 had a table
 %% in the default installer, this module installs a different table.

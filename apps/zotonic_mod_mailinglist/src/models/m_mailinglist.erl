@@ -25,9 +25,7 @@
 
 %% interface functions
 -export([
-    m_find_value/3,
-    m_to_list/2,
-    m_value/2,
+    m_get/2,
 
 	get_stats/2,
 	get_enabled_recipients/2,
@@ -64,81 +62,100 @@
 
 
 %% @doc Fetch the value for the key from a model source
-%% @spec m_find_value(Key, Source, Context) -> term()
-m_find_value(stats, #m{value=undefined} = M, _Context) ->
-   M#m{value=stats};
-m_find_value(Id, #m{value=stats}, Context) ->
-   get_stats(Id, Context);
-m_find_value(rsc_stats, #m{value=undefined} = M, _Context) ->
-   M#m{value=rsc_stats};
-m_find_value(Id, #m{value=rsc_stats}, Context) ->
-   get_rsc_stats(Id, Context);
-m_find_value(recipient, #m{value=undefined} = M, _Context) ->
-   M#m{value=recipient};
-m_find_value(Id, #m{value=recipient}, Context) ->
-   recipient_get(Id, Context);
-m_find_value(scheduled, #m{value=undefined} = M, _Context) ->
-   M#m{value=scheduled};
-m_find_value(Id, #m{value=scheduled}, Context) ->
-   get_scheduled(Id, Context);
-m_find_value(confirm_key, #m{value=undefined} = M, _Context) ->
-   M#m{value=confirm_key};
-m_find_value(ConfirmKey, #m{value=confirm_key}, Context) ->
-   get_confirm_key(ConfirmKey, Context);
-m_find_value(subscription, #m{value=undefined} = M, _Context) ->
-   M#m{value=subscription};
-m_find_value(ListId, #m{value=subscription} = M, _Context) ->
-   M#m{value={subscription, ListId}};
-m_find_value(Email, #m{value={subscription, ListId}}, Context) ->
-   recipient_get(ListId, Email, Context);
-m_find_value(bounce_reason, #m{value=undefined} = M, _Context) ->
-   M#m{value=bounce_reason};
-m_find_value(Email, #m{value=bounce_reason}, Context) ->
-    bounce_reason(Email, Context);
-m_find_value(_Key, #m{value=undefined}, _Context) ->
-   undefined.
-
-%% @doc Transform a m_config value to a list, used for template loops
-%% @spec m_to_list(Source, Context) -> list()
-m_to_list(_, _Context) ->
-    [].
-
-%% @doc Transform a model value so that it can be formatted or piped through filters
-%% @spec m_value(Source, Context) -> term()
-m_value(#m{value=undefined}, _Context) ->
-    undefined.
+-spec m_get( list(), z:context() ) -> {term(), list()}.
+m_get([ stats, MailingId | Rest ], Context) ->
+    case z_acl:rsc_editable(MailingId, Context) of
+        true -> {get_stats(MailingId, Context), Rest};
+        false -> {{undefined, undefined}, Rest}
+    end;
+m_get([ rsc_stats, RscId | Rest ], Context) ->
+    Stats = case z_acl:is_allowed(use, mod_mailinglist, Context) of
+        true -> get_rsc_stats(RscId, Context);
+        false -> undefined
+    end,
+    {Stats, Rest};
+m_get([ recipient, RecipientId | Rest ], Context) ->
+    Rcpt = case z_acl:is_allowed(use, mod_mailinglist, Context) of
+        true -> recipient_get(RecipientId, Context);
+        false -> undefined
+    end,
+    {Rcpt, Rest};
+m_get([ scheduled, RscId | Rest ], Context) ->
+    Scheduled = case z_acl:rsc_visible(RscId, Context) of
+        true -> get_scheduled(RscId, Context);
+        false -> undefined
+    end,
+    {Scheduled, Rest};
+m_get([ confirm_key, ConfirmKey | Rest ], Context) ->
+    {get_confirm_key(ConfirmKey, Context), Rest};
+m_get([ subscription, ListId, Email | Rest ], Context) ->
+    Sub = case z_acl:is_allowed(use, mod_mailinglist, Context) of
+        true -> recipient_get(ListId, Email, Context);
+        false -> undefined
+    end,
+    {Sub, Rest};
+m_get([ bounce_reason, Email | Rest ], Context) ->
+    Reason = case z_acl:is_allowed(use, mod_mailinglist, Context) of
+        true -> bounce_reason(Email, Context);
+        false -> undefined
+    end,
+    {Reason, Rest};
+m_get(Vs, _Context) ->
+    lager:error("Unknown ~p lookup: ~p", [?MODULE, Vs]),
+    {undefined, []}.
 
 
 %% @doc Get the stats for the mailing. Number of recipients and list of scheduled resources.
-%% @spec get_stats(int(), Context) -> {Count::int(), [RscId::int()]}
-get_stats(Id, Context) ->
+-spec get_stats( m_rsc:resource_id(), z:contex() ) -> {SubscriberCount:: non_neg_integer(), [ ScheduledId::m_rsc:resource_id() ]}.
+get_stats(ListId, Context) ->
 	Count = z_db:q1("
 			select count(*) from mailinglist_recipient
-			where mailinglist_id = $1", [Id], Context),
+			where mailinglist_id = $1", [ListId], Context),
 	Scheduled = z_db:q("
 					select page_id
 					from mailinglist_scheduled
 							join rsc on id = page_id
 					where mailinglist_id = $1
-					order by publication_start", [Id], Context),
-	{Count + length(m_edge:subjects(Id, subscriber_of, Context)), Scheduled}.
+					order by publication_start", [ListId], Context),
+	{Count + length(m_edge:subjects(ListId, subscriber_of, Context)), Scheduled}.
 
 
 %% @doc Get the stats for all mailing lists which have been sent to a rsc (content_id)
-%% @spec get_rsc_stats(int(), Context) -> [ {ListId::int(), Statuslist} ]
+-spec get_rsc_stats( m_rsc:resource_id(), z:context() ) -> [ {ListId::m_rsc:resource_id(), Statuslist} ]
+    when Statuslist :: list( binary() ).
 get_rsc_stats(Id, Context) ->
     F = fun() ->
-                Stats = [ {ListId, [{created, Created}, {total, Total}]} ||
-                            {ListId, Created, Total} <- z_db:q("select other_id, min(created) as sent_on, count(distinct(envelop_to)) from log_email where content_id = $1 group by other_id", [Id], Context)],
-                %% merge in all mailer statuses
-                lists:foldl(fun({ListId, Status, Count}, St) ->
-                                    z_utils:prop_replace(ListId,
-                                                         [{z_convert:to_atom(Status), Count}|proplists:get_value(ListId, St, [])],
-                                                         St)
-                            end,
-                            Stats,
-                            z_db:q("select other_id, mailer_status, count(envelop_to) from log_email where content_id = $1 group by other_id, mailer_status", [Id], Context))
-        end,
+        RsLog = z_db:q("
+            select other_id, min(created) as sent_on, count(distinct(envelop_to))
+            from log_email
+            where content_id = $1
+            group by other_id",
+            [Id],
+            Context),
+
+        Stats = lists:map(
+                    fun({ListId, Created, Total}) ->
+                        {ListId, [{created, Created}, {total, Total}]}
+                    end,
+                    RsLog),
+        %% merge in all mailer statuses
+        PerStatus = z_db:q("
+            select other_id, mailer_status, count(envelop_to)
+            from log_email
+            where content_id = $1
+            group by other_id, mailer_status",
+            [Id],
+            Context),
+
+        lists:foldl(
+            fun({ListId, Status, Count}, St) ->
+                z_utils:prop_replace(ListId,
+                                     [{z_convert:to_atom(Status), Count}|proplists:get_value(ListId, St, [])],
+                                     St)
+            end,
+            Stats,
+            PerStatus)
+    end,
     z_depcache:memo(F, {mailinglist_stats, Id}, 1, [Id], Context). %% Cache a little while to prevent database DOS while mail is sending
 
 
@@ -198,7 +215,7 @@ recipient_delete1(RecipientProps, Quiet, Context) ->
     ok.
 
 %% @doc Confirm the recipient with the given unique confirmation key.
-%% @spec recipient_confirm(ConfirmKey, Context) -> {ok, RecipientId} | {error, Reason}
+-spec recipient_confirm( binary(), z:context() ) -> {ok, m_rsc:resource_id()} | {error, term()}.
 recipient_confirm(ConfirmKey, Context) ->
 	case z_db:q_row("select id, is_enabled, mailinglist_id from mailinglist_recipient where confirm_key = $1", [ConfirmKey], Context) of
 		{RecipientId, _IsEnabled, ListId} ->
@@ -211,14 +228,14 @@ recipient_confirm(ConfirmKey, Context) ->
 	end.
 
 %% @doc Clear all recipients of the list
-%% @spec recipients_clear(ListId, Context) -> ok
+-spec recipients_clear( m_rsc:resource_id(), z:context() ) -> ok.
 recipients_clear(ListId, Context) ->
     %% TODO clear person edges to list
     z_db:q("delete from mailinglist_recipient where mailinglist_id = $1", [ListId], Context),
     ok.
 
 %% @doc Fetch the information for a confirmation key
-%% @spec get_confirm_key(ConfirmKey, Context) -> Proplist | undefined
+-spec get_confirm_key( binary(), z:context() ) -> proplists:proplist() | undefined.
 get_confirm_key(ConfirmKey, Context) ->
 	z_db:assoc_row("select id, mailinglist_id, email, confirm_key from mailinglist_recipient where confirm_key = $1", [ConfirmKey], Context).
 
@@ -288,7 +305,8 @@ update_recipient(RcptId, Props, Context) ->
 
 
 %% @doc Replace all recipients of the mailinglist. Do not send welcome messages to the recipients.
--spec insert_recipients(ListId::integer(), Recipients::list() | binary(), IsTruncate::boolean(), #context{}) -> ok | {error, term()}.
+-spec insert_recipients(ListId::m_rsc:resource_id(), Recipients::list( binary()|string() ) | binary(), IsTruncate::boolean(), z:context()) ->
+    ok | {error, term()}.
 insert_recipients(ListId, Bin, IsTruncate, Context) when is_binary(Bin) ->
     Lines = z_string:split_lines(Bin),
     Rcpts = lines_to_recipients(Lines),

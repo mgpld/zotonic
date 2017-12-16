@@ -137,14 +137,14 @@ merge_delete(WinnerId, LoserId, Context) ->
 %% @doc Merge two resources, delete the 'loser'
 -spec merge_delete_nocheck(integer(), integer(), #context{}) -> ok.
 merge_delete_nocheck(WinnerId, LoserId, Context) ->
-    z_notifier:map(#rsc_merge{winner_id = WinnerId, looser_id = LoserId}, Context),
+    z_notifier:map(#rsc_merge{winner_id = WinnerId, loser_id = LoserId}, Context),
     ok = m_edge:merge(WinnerId, LoserId, Context),
     m_media:merge(WinnerId, LoserId, Context),
     m_identity:merge(WinnerId, LoserId, Context),
     move_creator_modifier_ids(WinnerId, LoserId, Context),
-    PropsLooser = m_rsc:get(LoserId, Context),
+    PropsLoser = m_rsc:get(LoserId, Context),
     ok = delete_nocheck(LoserId, WinnerId, Context),
-    case merge_copy_props(WinnerId, PropsLooser, Context) of
+    case merge_copy_props(WinnerId, PropsLoser, Context) of
         [] ->
             ok;
         UpdProps ->
@@ -296,8 +296,8 @@ update_editable_check(#rscupd{id = Id, is_acl_check = true} = RscUpd, Props, Con
 update_editable_check(RscUpd, Props, Context) ->
     update_normalize_props(RscUpd, Props, Context).
 
-update_normalize_props(#rscupd{id = Id} = RscUpd, Props, Context) when is_list(Props) ->
-    AtomProps = normalize_props(Id, Props, Context),
+update_normalize_props(#rscupd{id = Id, is_import = IsImport} = RscUpd, Props, Context) when is_list(Props) ->
+    AtomProps = normalize_props(Id, Props, [{is_import, IsImport}], Context),
     update_transaction(RscUpd, fun(_, _, _) -> {ok, AtomProps} end, Context);
 update_normalize_props(RscUpd, Func, Context) when is_function(Func) ->
     update_transaction(RscUpd, Func, Context).
@@ -1171,7 +1171,7 @@ recombine_languages(Props, Context) ->
         [] ->
             Props;
         L ->
-            Cfg = [atom_to_binary(Code, utf8) || Code <- config_langs(Context)],
+            Cfg = [atom_to_binary(Code, utf8) || Code <- z_language:enabled_language_codes(Context)],
             L1 = filter_langs(edited_languages(Props, L), Cfg),
             {LangProps, OtherProps} = comb_lang(Props, L1, [], []),
             LangProps ++ [{language, [binary_to_atom(Lang, 'utf8') || Lang <- L1]} | proplists:delete(
@@ -1332,15 +1332,6 @@ filter_langs(L, Cfg) ->
         lists:member(LangS, Cfg)
     end,
     L).
-
-
-
-config_langs(Context) ->
-    case m_config:get(i18n, language_list, Context) of
-        undefined -> [en];
-        Cfg -> [Code || {Code, _} <- proplists:get_value(list, Cfg, [{en, []}])]
-    end.
-
 
 update_page_path_log(RscId, OldProps, NewProps, Context) ->
     Old = proplists:get_value(page_path, OldProps),
