@@ -38,6 +38,7 @@
     insert/2,
     delete/2,
     merge_delete/3,
+    merge_delete/4,
     update/3,
     update/4,
     duplicate/3,
@@ -329,7 +330,12 @@ delete(Id, Context) ->
 %% @doc Merge a resource with another, delete the loser.
 -spec merge_delete(resource(), resource(), #context{}) -> ok | {error, term()}.
 merge_delete(WinnerId, LoserId, Context) ->
-    m_rsc_update:merge_delete(WinnerId, LoserId, Context).
+    m_rsc_update:merge_delete(WinnerId, LoserId, [ {is_merge_trans, false} ], Context).
+
+%% @doc Merge a resource with another, delete the loser.
+-spec merge_delete(resource(), resource(), list(), #context{}) -> ok | {error, term()}.
+merge_delete(WinnerId, LoserId, Options, Context) ->
+    m_rsc_update:merge_delete(WinnerId, LoserId, Options, Context).
 
 %% @doc Update a resource
 -spec update(resource(), props(), #context{}) -> {ok, resource()}.
@@ -534,6 +540,11 @@ p_no_acl(Id, email_raw, Context) ->
 %         undefined -> Title;
 %         OtherTitle -> OtherTitle
 %     end;
+p_no_acl(Id, title_slug, Context) ->
+    case p_cached(Id, title_slug, Context) of
+        undefined -> p_cached(Id, slug, Context);
+        Slug -> Slug
+    end;
 
 % Check if the requested predicate is a readily available property or an edge
 p_no_acl(Id, Predicate, Context) when is_integer(Id) ->
@@ -769,7 +780,9 @@ page_url(Id, IsAbs, Context) ->
                     opt_url_abs(Url, IsAbs, Context);
                 undefined ->
                     Args = [
-                        {id, RscId}, {slug, p(RscId, slug, Context)} | z_context:get(extra_args, Context, [])
+                        {id,RscId},
+                        {slug, slug(RscId, Context)}
+                        | z_context:get(extra_args, Context, [])
                     ],
                     Url = page_url_path(CatPath, Args, Context),
                     case IsAbs of
@@ -794,6 +807,13 @@ page_url_path([CatName | Rest], Args, Context) ->
         Url -> Url
     end.
 
+slug(Id, Context) ->
+    case m_rsc:p(Id, title_slug, Context) of
+        undefined -> undefined;
+        <<>> -> undefined;
+        {trans, _} = Tr -> z_trans:lookup_fallback(Tr, Context);
+        Slug when is_binary(Slug) -> Slug
+    end.
 
 %% @doc Depending on the context or the requested property we make the URL absolute
 opt_url_abs(undefined, _IsAbs, _Context) ->
@@ -927,7 +947,7 @@ common_properties(_Context) ->
         name,
 
         seo_noindex,
-        slug,
+        title_slug,
         custom_slug,
         seo_desc
     ].

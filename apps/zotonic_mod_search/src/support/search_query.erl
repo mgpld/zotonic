@@ -118,6 +118,7 @@ request_arg(<<"hasanyobject">>)        -> hasanyobject;
 request_arg(<<"is_authoritative">>)    -> is_authoritative;
 request_arg(<<"is_featured">>)         -> is_featured;
 request_arg(<<"is_published">>)        -> is_published;
+request_arg(<<"is_public">>)           -> is_public;
 request_arg(<<"date_start_after">>)    -> date_start_after;
 request_arg(<<"date_start_before">>)   -> date_start_before;
 request_arg(<<"date_start_year">>)     -> date_start_year;
@@ -155,6 +156,7 @@ filter_empty(Q) ->
 empty_term([]) -> true;
 empty_term(<<>>) -> true;
 empty_term(undefined) -> true;
+empty_term(null) -> true;
 empty_term([X, _]) -> empty_term(X);
 empty_term(_) -> false.
 
@@ -220,66 +222,12 @@ parse_query([{id_exclude, _Id}|Rest], Context, Result)  ->
     parse_query(Rest, Context, Result);
 
 
-%% hassubject=[id]
-%% Give all things which have an incoming edge to Id
-parse_query([{hassubject, Id}|Rest], Context, Result) when is_integer(Id); is_binary(Id) ->
-    parse_query([{hassubject, maybe_split_list(Id)}|Rest], Context, Result);
-parse_query([{hassubject, [$[|_] = Arg}|Rest], Context, Result) ->
-    parse_query([{hassubject, maybe_split_list(Arg)}|Rest], Context, Result);
-parse_query([{hassubject, [Id]}|Rest], Context, Result) ->
-    {A, Result1} = add_edge_join("object_id", Result),
-    {Arg, Result2} = add_arg(m_rsc:rid(Id, Context), Result1),
-    Result3 = add_where(A ++ ".subject_id = " ++ Arg, Result2),
-    parse_query(Rest, Context, Result3);
-
-%% hassubject=[id,predicate,[alias]]
-%% Give all things which have an incoming edge to Id with the given predicate
-parse_query([{hassubject, [Id, Predicate]}|Rest], Context, Result) ->
-    parse_query([{hassubject, [Id, Predicate, "rsc"]}|Rest], Context, Result);
-parse_query([{hassubject, [Id, Predicate, Alias]}|Rest], Context, Result) ->
-    {A, Result1} = add_edge_join(Alias, "object_id", Result),
-    Result2 = case Id of
-                  undefined -> Result1;
-                  _ -> {Arg1, R} = add_arg(m_rsc:rid(Id,Context), Result1),
-                       add_where(A ++ ".subject_id = " ++ Arg1, R)
-              end,
-    PredicateId = predicate_to_id(Predicate, Context),
-    {Arg2, Result3} = add_arg(PredicateId, Result2),
-    Result4 = add_where(A ++ ".predicate_id = " ++ Arg2, Result3),
-    parse_query(Rest, Context, Result4);
-parse_query([{hassubject, Id}|Rest], Context, Result) when is_list(Id) ->
-    parse_query([{hassubject, [m_rsc:rid(Id,Context)]}|Rest], Context, Result);
-
-
-%% hasobject=[id]
-%% Give all things which have an outgoing edge to Id
-parse_query([{hasobject, Id}|Rest], Context, Result) when is_integer(Id); is_binary(Id) ->
-    parse_query([{hasobject, maybe_split_list(Id)}|Rest], Context, Result);
-parse_query([{hasobject, [$[|_] = Arg}|Rest], Context, Result) ->
-    parse_query([{hasobject, maybe_split_list(Arg)}|Rest], Context, Result);
-parse_query([{hasobject, [Id]}|Rest], Context, Result) ->
-    {A, Result1} = add_edge_join("subject_id", Result),
-    {Arg, Result2} = add_arg(m_rsc:rid(Id,Context), Result1),
-    Result3 = add_where(A ++ ".object_id = " ++ Arg, Result2),
-    parse_query(Rest, Context, Result3);
-
-%% hasobject=[id,predicate,[alias]]
-%% Give all things which have an outgoing edge to Id with the given predicate
-parse_query([{hasobject, [Id, Predicate]}|Rest], Context, Result) ->
-    parse_query([{hasobject, [Id, Predicate, "rsc"]}|Rest], Context, Result);
-parse_query([{hasobject, [Id, Predicate, Alias]}|Rest], Context, Result) ->
-    {A, Result1} = add_edge_join(Alias, "subject_id", Result),
-    Result2 = case Id of
-                  undefined -> Result1;
-                  _ -> {Arg1, R} = add_arg(m_rsc:rid(Id,Context), Result1),
-                       add_where(A ++ ".object_id = " ++ Arg1, R)
-              end,
-    PredicateId = predicate_to_id(Predicate, Context),
-    {Arg2, Result3} = add_arg(PredicateId, Result2),
-    Result4 = add_where(A ++ ".predicate_id = " ++ Arg2, Result3),
-    parse_query(Rest, Context, Result4);
-parse_query([{hasobject, Id}|Rest], Context, Result) when is_list(Id) ->
-    parse_query([{hasobject, [m_rsc:rid(Id,Context)]}|Rest], Context, Result);
+parse_query([{hassubject, Id} | Rest], Context, Result) ->
+    Result1 = parse_edges(hassubject, maybe_split_list(Id), Result, Context),
+    parse_query(Rest, Context, Result1);
+parse_query([{hasobject, Id} | Rest], Context, Result) ->
+    Result1 = parse_edges(hasobject, maybe_split_list(Id), Result, Context),
+    parse_query(Rest, Context, Result1);
 
 %% hasanyobject=[[id,predicate]|id, ...]
 %% Give all things which have an outgoing edge to Id with any of the given object/predicate combinations
@@ -325,8 +273,8 @@ parse_query([{is_featured, Boolean}|Rest], Context, Result) ->
 %% Filter on whether an item is published or not.
 parse_query([{is_published, Boolean}|Rest], Context, Result) ->
     Result1 = Result#search_sql{extra=[no_publish_check,Result#search_sql.extra]},
-    case z_convert:to_list(Boolean) of
-        "all" ->
+    case z_convert:to_binary(Boolean) of
+        <<"all">> ->
             parse_query(Rest, Context, Result1);
         _ ->
             Result2 = case z_convert:to_bool(Boolean) of
@@ -344,6 +292,21 @@ parse_query([{is_published, Boolean}|Rest], Context, Result) ->
             parse_query(Rest, Context, Result2)
     end;
 
+%% is_public or is_public={false,true,all}
+%% Filter on whether an item is publicly visible or not.
+parse_query([{is_public, Boolean}|Rest], Context, Result) ->
+    case z_convert:to_binary(Boolean) of
+        <<"all">> ->
+            parse_query(Rest, Context, Result);
+        _ ->
+            Result2 = case z_convert:to_bool(Boolean) of
+                          true ->
+                              add_where("rsc.visible_for = 0", Result);
+                          false ->
+                              add_where("rsc.visible_for > 0", Result)
+                      end,
+            parse_query(Rest, Context, Result2)
+    end;
 
 %% upcoming
 %% Filter on items whose start date lies in the future
@@ -585,6 +548,39 @@ parse_query([Term|_], _Context, _Result) ->
 %% Helper functions
 %%
 
+%% @doc Parse hassubject and hasobject edges.
+-spec parse_edges(hassubject | hasobject, list(), #search_sql{}, z:context()) -> #search_sql{}.
+parse_edges(Term, [[Id, Predicate]], Result, Context) ->
+    parse_edges(Term, [[Id, Predicate, "rsc"]], Result, Context);
+parse_edges(hassubject, [[Id, Predicate, Alias]], Result, Context) ->
+    {A, Result1} = add_edge_join(Alias, "object_id", Result),
+    Result2 = case Id of
+                  undefined -> Result1;
+                  _ -> {Arg1, R} = add_arg(m_rsc:rid(Id, Context), Result1),
+                      add_where(A ++ ".subject_id = " ++ Arg1, R)
+              end,
+    PredicateId = predicate_to_id(Predicate, Context),
+    {Arg2, Result3} = add_arg(PredicateId, Result2),
+    add_where(A ++ ".predicate_id = " ++ Arg2, Result3);
+parse_edges(hassubject, [Id], Result, Context) ->
+    {A, Result1} = add_edge_join("object_id", Result),
+    {Arg, Result2} = add_arg(m_rsc:rid(Id, Context), Result1),
+    add_where(A ++ ".subject_id = " ++ Arg, Result2);
+parse_edges(hasobject, [[Id, Predicate, Alias]], Result, Context) ->
+    {A, Result1} = add_edge_join(Alias, "subject_id", Result),
+    Result2 = case Id of
+                  undefined -> Result1;
+                  _ -> {Arg1, R} = add_arg(m_rsc:rid(Id, Context), Result1),
+                      add_where(A ++ ".object_id = " ++ Arg1, R)
+              end,
+    PredicateId = predicate_to_id(Predicate, Context),
+    {Arg2, Result3} = add_arg(PredicateId, Result2),
+    add_where(A ++ ".predicate_id = " ++ Arg2, Result3);
+parse_edges(hasobject, [Id], Result, Context) ->
+    {A, Result1} = add_edge_join("subject_id", Result),
+    {Arg, Result2} = add_arg(m_rsc:rid(Id, Context), Result1),
+    add_where(A ++ ".object_id = " ++ Arg, Result2).
+
 %% Add a value to a proplist. If it is already there, the value is
 %% replaced by a list of values.
 add_or_append(Key, Value, PropList) ->
@@ -812,6 +808,8 @@ display_error(Msg, Context) ->
 
 
 %% Add filters
+add_filters(<<"[", _/binary>> = Filter, Result) ->
+    add_filters( maybe_split_list(Filter), Result );
 add_filters([ [Column|_] | _ ] = Filters, Result) when is_list(Column); is_binary(Column); is_atom(Column) ->
     add_filters_or(Filters, Result);
 add_filters({'or', Filters}, Result) ->
@@ -884,19 +882,19 @@ map_filter_operator(Op) -> throw({error, {unknown_filter_operator, Op}}).
 
 
 % Convert an expression like [123,hasdocument]
-maybe_split_list(Id) when is_integer(Id) ->
-    [Id];
-maybe_split_list(<<"[", Rest/binary>>) ->
-    split_list(Rest);
+maybe_split_list(<<"[", _/binary>> = Term) ->
+    unquote_all(search_parse_list:parse(Term));
 maybe_split_list([$[|Rest]) ->
-    split_list(z_convert:to_binary(Rest));
+    unquote_all(search_parse_list:parse(z_convert:to_binary(Rest)));
 maybe_split_list(Other) ->
     [Other].
 
-split_list(Bin) ->
-    Bin1 = binary:replace(Bin, <<"]">>, <<>>, [global]),
-    Parts = binary:split(Bin1, <<",">>, [global]),
-    [ unquot(z_string:trim(P)) || P <- Parts ].
+unquote_all(L) when is_list(L) ->
+    lists:map(fun unquote_all/1, L);
+unquote_all(B) when is_binary(B) ->
+    unquot(z_string:trim(B));
+unquote_all(T) ->
+    T.
 
 unquot(<<C, Rest/binary>>) when C =:= $'; C =:= $"; C =:= $` ->
     binary:replace(Rest, <<C>>, <<>>);

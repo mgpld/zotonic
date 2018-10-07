@@ -22,7 +22,8 @@
 
 -export([
     is_authorized/1,
-    get_id/1
+    get_id/1,
+    get_configured_id/1
  ]).
 
 
@@ -53,11 +54,28 @@ is_authorized(Context) ->
 %% @doc Fetch the id from the request or the dispatch configuration.
 -spec get_id(z:context()) -> m_rsc:resource_id() | undefined.
 get_id(Context) ->
-    ReqId = case z_context:get(id, Context) of
-        undefined -> z_context:get_q(<<"id">>, Context);
+    case get_configured_id(Context) of
+        undefined -> rid(z_context:get_q("id", Context), Context);
         ConfId -> ConfId
-    end,
-    m_rsc:rid(ReqId, Context).
+    end.
+
+%% @doc Fetch the id from the dispatch configuration.
+-spec get_configured_id(z:context()) -> m_rsc:resource_id() | undefined.
+get_configured_id(Context) ->
+    case z_context:get(id, Context) of
+        user_id -> z_acl:user(Context);
+        ConfId -> rid(ConfId, Context)
+    end.
+
+rid(undefined, _Context) ->
+    undefined;
+rid(Id, _Context) when is_integer(Id) ->
+    Id;
+rid(ReqId, Context) ->
+    case m_rsc:name_to_id(ReqId, Context) of
+        {ok, RscId} -> RscId;
+        _ -> undefined
+    end.
 
 %%
 %% Helpers

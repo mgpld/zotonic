@@ -27,7 +27,7 @@
     update/3,
     update/4,
     duplicate/3,
-    merge_delete/3,
+    merge_delete/4,
 
     flush/2,
 
@@ -37,6 +37,7 @@
     delete_nocheck/2,
     props_filter/3,
 
+    to_slug/1,
     test/0
 ]).
 
@@ -112,14 +113,14 @@ delete_nocheck(Id, OptFollowUpId, Context) when is_integer(Id) ->
     ok.
 
 %% @doc Merge two resources, delete the losing resource.
--spec merge_delete(m_rsc:resource(), m_rsc:resource(), #context{}) -> ok | {error, term()}.
-merge_delete(WinnerId, WinnerId, _Context) ->
+-spec merge_delete(m_rsc:resource(), m_rsc:resource(), list(), #context{}) -> ok | {error, term()}.
+merge_delete(WinnerId, WinnerId, _Options, _Context) ->
     ok;
-merge_delete(_WinnerId, 1, _Context) ->
+merge_delete(_WinnerId, 1, _Options, _Context) ->
     {error, eacces};
-merge_delete(_WinnerId, admin, _Context) ->
+merge_delete(_WinnerId, admin, _Options, _Context) ->
     {error, eacces};
-merge_delete(WinnerId, LoserId, Context) ->
+merge_delete(WinnerId, LoserId, Options, Context) ->
     case z_acl:rsc_deletable(LoserId, Context)
         andalso z_acl:rsc_editable(WinnerId, Context)
     of
@@ -128,23 +129,29 @@ merge_delete(WinnerId, LoserId, Context) ->
                 true ->
                     m_category:delete(LoserId, WinnerId, Context);
                 false ->
-                    merge_delete_nocheck(m_rsc:rid(WinnerId, Context), m_rsc:rid(LoserId, Context), Context)
+                    merge_delete_nocheck(m_rsc:rid(WinnerId, Context), m_rsc:rid(LoserId, Context), Options, Context)
             end;
         false ->
             {error, eacces}
     end.
 
 %% @doc Merge two resources, delete the 'loser'
--spec merge_delete_nocheck(integer(), integer(), #context{}) -> ok.
-merge_delete_nocheck(WinnerId, LoserId, Context) ->
-    z_notifier:map(#rsc_merge{winner_id = WinnerId, loser_id = LoserId}, Context),
+-spec merge_delete_nocheck(integer(), integer(), list(), #context{}) -> ok.
+merge_delete_nocheck(WinnerId, LoserId, Opts, Context) ->
+    IsMergeTrans = proplists:get_value(is_merge_trans, Opts, false),
+    z_notifier:map(#rsc_merge{
+            winner_id = WinnerId,
+            loser_id = LoserId,
+            is_merge_trans = IsMergeTrans
+        },
+        Context),
     ok = m_edge:merge(WinnerId, LoserId, Context),
     m_media:merge(WinnerId, LoserId, Context),
     m_identity:merge(WinnerId, LoserId, Context),
     move_creator_modifier_ids(WinnerId, LoserId, Context),
     PropsLoser = m_rsc:get(LoserId, Context),
     ok = delete_nocheck(LoserId, WinnerId, Context),
-    case merge_copy_props(WinnerId, PropsLoser, Context) of
+    case merge_copy_props(WinnerId, PropsLoser, IsMergeTrans, Context) of
         [] ->
             ok;
         UpdProps ->
@@ -173,28 +180,113 @@ move_creator_modifier_ids(WinnerId, LoserId, Context) ->
         end,
         Ids).
 
-merge_copy_props(WinnerId, Props, Context) ->
-    merge_copy_props(WinnerId, Props, [], Context).
+merge_copy_props(WinnerId, Props, IsMergeTrans, Context) ->
+    Props1 = ensure_merge_language(Props, Context),
+    merge_copy_props_1(WinnerId, Props1, IsMergeTrans, [], Context).
 
-merge_copy_props(_WinnerId, [], Acc, _Context) ->
+merge_copy_props_1(_WinnerId, [], _IsMergeTrans, Acc, _Context) ->
     lists:reverse(Acc);
-merge_copy_props(WinnerId, [{P, _} | Ps], Acc, Context)
+merge_copy_props_1(WinnerId, [{P,_}|Ps], IsMergeTrans, Acc, Context)
     when P =:= creator; P =:= creator_id; P =:= modifier; P =:= modifier_id;
          P =:= created; P =:= modified; P =:= version;
          P =:= id; P =:= is_published; P =:= is_protected; P =:= is_dependent;
          P =:= is_authoritative; P =:= pivot_geocode; P =:= pivot_geocode_qhash;
          P =:= category_id ->
-    merge_copy_props(WinnerId, Ps, Acc, Context);
-merge_copy_props(WinnerId, [{_, Empty} | Ps], Acc, Context)
+    merge_copy_props_1(WinnerId, Ps, IsMergeTrans, Acc, Context);
+merge_copy_props_1(WinnerId, [{blocks, LoserBs}|Ps], IsMergeTrans, Acc, Context) ->
+    WinnerBs = m_rsc:p_no_acl(WinnerId, blocks, Context),
+    NewBs = merge_copy_props_blocks(WinnerBs, LoserBs, IsMergeTrans, Context),
+    merge_copy_props_1(WinnerId, Ps, IsMergeTrans, [ {blocks, NewBs} | Acc ], Context);
+merge_copy_props_1(WinnerId, [{_,Empty}|Ps], IsMergeTrans, Acc, Context)
     when Empty =:= []; Empty =:= <<>>; Empty =:= undefined ->
-    merge_copy_props(WinnerId, Ps, Acc, Context);
-merge_copy_props(WinnerId, [{P, _} = PV | Ps], Acc, Context) ->
+    merge_copy_props_1(WinnerId, Ps, IsMergeTrans, Acc, Context);
+merge_copy_props_1(WinnerId, [{P,LoserValue} = PV|Ps], IsMergeTrans, Acc, Context) ->
     case m_rsc:p_no_acl(WinnerId, P, Context) of
+        undefined when IsMergeTrans, P =:= language, is_list(LoserValue) ->
+            V1 = lists:usort([ z_language:default_language(Context) ] ++ LoserValue),
+            merge_copy_props_1(WinnerId, Ps, IsMergeTrans, [{P,V1}|Acc], Context);
         Empty when Empty =:= []; Empty =:= <<>>; Empty =:= undefined ->
-            merge_copy_props(WinnerId, Ps, [PV | Acc], Context);
+            merge_copy_props_1(WinnerId, Ps, IsMergeTrans, [PV|Acc], Context);
+        Value when IsMergeTrans, P =:= language, is_list(Value), is_list(LoserValue) ->
+            V1 = lists:usort(Value ++ LoserValue),
+            merge_copy_props_1(WinnerId, Ps, IsMergeTrans, [{P,V1}|Acc], Context);
+        Value when IsMergeTrans ->
+            V1 = merge_trans(Value, LoserValue, Context),
+            merge_copy_props_1(WinnerId, Ps, IsMergeTrans, [{P,V1}|Acc], Context);
         _Value ->
-            merge_copy_props(WinnerId, Ps, Acc, Context)
+            merge_copy_props_1(WinnerId, Ps, IsMergeTrans, Acc, Context)
     end.
+
+ensure_merge_language(Props, Context) ->
+    case proplists:get_value(language, Props) of
+        undefined -> [ {language, [ z_language:default_language(Context) ]} | Props ];
+        _ -> Props
+    end.
+
+merge_trans({trans, Winner}, {trans, Loser}, _Context) ->
+    Tr = lists:foldl(
+        fun ({Lang,Text}, Acc) ->
+            case proplists:get_value(Lang, Acc) of
+                undefined -> [ {Lang,Text} | Acc ];
+                _ -> Acc
+            end
+        end,
+        Winner,
+        Loser),
+    {trans, Tr};
+merge_trans(Winner, {trans, _} = Loser, Context) when is_binary(Winner) ->
+    V1 = {trans, [ {z_language:default_language(Context), Winner} ]},
+    merge_trans(V1, Loser, Context);
+merge_trans({trans, _} = Winner, Loser, Context) when is_binary(Loser) ->
+    V1 = {trans, [ {z_language:default_language(Context), Loser} ]},
+    merge_trans(Winner, V1, Context);
+merge_trans(Winner, _Loser, _Context) ->
+    Winner.
+
+
+% Merge the blocks.
+% Problem is that we don't know for sure if we want to merge blocks to a superset.
+% Merging might have some unintentional side effects (think of surveys, and randomly named blocks).
+% So for now we only merge the translations in the like-named blocks, and only if their type is the
+% same.
+merge_copy_props_blocks(WinnerBs, LoserBs, _IsMergeTrans, _Context) when not is_list(LoserBs) ->  WinnerBs;
+merge_copy_props_blocks(WinnerBs, LoserBs, _IsMergeTrans, _Context) when not is_list(WinnerBs) ->  LoserBs;
+merge_copy_props_blocks(WinnerBs, _LoserBs, false, _Context) -> WinnerBs;
+merge_copy_props_blocks(WinnerBs, LoserBs, true, Context) ->
+    lists:map(
+        fun(WB) ->
+            case find_block( proplists:get_value(name, WB), LoserBs ) of
+                undefined ->
+                    WB;
+                LB ->
+                    WT = proplists:get_value(type,WB),
+                    case proplists:get_value(type, LB) of
+                        WT -> merge_block_single(WB, LB, Context);
+                        _ -> WB
+                    end
+            end
+        end,
+        WinnerBs).
+
+find_block(_Name, []) -> undefined;
+find_block(Name, [ B | Bs ]) ->
+    case proplists:get_value(name, B) of
+        Name -> B;
+        _ -> find_block(Name, Bs)
+    end.
+
+merge_block_single(W, L, Context) ->
+    lists:map(
+        fun({K, WV}) ->
+            case proplists:get_value(K, L) of
+                undefined ->
+                    {K, WV};
+                LV ->
+                    WV1 = merge_trans(WV, LV, Context),
+                    {K, WV1}
+            end
+        end,
+        W).
 
 
 %% Flush all cached entries depending on this entry, one of its subjects or its categories.
@@ -224,7 +316,7 @@ duplicate(Id, DupProps, Context) ->
                 SafeDupProps ++ [
                     {name, undefined}, {uri, undefined}, {page_path, undefined},
                     {is_authoritative, true}, {is_protected, false},
-                    {slug, undefined}
+                    {title_slug, undefined}, {slug, undefined}
                 ]),
             {ok, NewId} = insert(InsProps, false, Context),
             m_edge:duplicate(Id, NewId, Context),
@@ -691,22 +783,24 @@ props_filter([{page_path, Path} | T], Acc, Context) ->
         false ->
             props_filter(T, Acc, Context)
     end;
-props_filter([{slug, undefined} | T], Acc, Context) ->
-    props_filter(T, [{slug, []} | Acc], Context);
-props_filter([{slug, <<>>} | T], Acc, Context) ->
-    props_filter(T, [{slug, []} | Acc], Context);
-props_filter([{slug, ""} | T], Acc, Context) ->
-    props_filter(T, [{slug, []} | Acc], Context);
-props_filter([{slug, Slug} | T], Acc, Context) ->
-    props_filter(T, [{slug, to_slug(Slug, Context)} | Acc], Context);
-props_filter([{custom_slug, P} | T], Acc, Context) ->
-    props_filter(T, [{custom_slug, z_convert:to_bool(P)} | Acc], Context);
+props_filter([{title_slug, Slug}|T], Acc, Context) ->
+    case z_utils:is_empty(Slug) of
+        true ->
+            props_filter(T, [ {title_slug, <<>>}, {slug, <<>>} | Acc], Context);
+        false ->
+            Slug1 = to_slug(Slug),
+            SlugNoTr = z_trans:lookup_fallback(Slug1, en, Context),
+            Acc1 = proplists:delete(slug, Acc),
+            T1 = proplists:delete(slug, T),
+            props_filter(T1, [ {title_slug, Slug1}, {slug, SlugNoTr} | Acc1 ], Context)
+    end;
 
 props_filter([{B, P}|T], Acc, Context)
     when  B =:= is_published; B =:= is_featured; B=:= is_protected;
           B =:= is_dependent; B =:= is_query_live; B =:= date_is_all_day;
           B =:= is_website_redirect; B =:= is_page_path_multiple;
-          B =:= is_authoritative ->
+          B =:= is_authoritative;
+          B =:= custom_slug; B =:= seo_noindex ->
     props_filter(T, [{B, z_convert:to_bool(P)} | Acc], Context);
 
 props_filter([{P, DT} | T], Acc, Context)
@@ -833,31 +927,37 @@ props_autogenerate(Id, Props, Context) ->
     Props1 = case proplists:get_value(title, Props) of
                  undefined -> Props;
                  Title ->
-                     case {proplists:get_value(custom_slug, Props), m_rsc:p(custom_slug, Id, Context)} of
+                    case {proplists:get_value(custom_slug, Props), m_rsc:p(Id, custom_slug, Context)} of
                          {true, _} -> Props;
                          {_, true} -> Props;
                          _X ->
-                             %% Determine the slug from the title.
-                             [{slug, to_slug(Title, Context)} | proplists:delete(slug, Props)]
-                     end
-             end,
+                            %% Determine the slug from the title.
+                            Slug = to_slug(Title),
+                            SlugNoTr = z_trans:lookup_fallback(Slug, en, Context),
+                            PropsSlug = proplists:delete(slug, proplists:delete(title_slug, Props)),
+                            [ {title_slug, Slug}, {slug, SlugNoTr} | PropsSlug ]
+                    end
+            end,
     Props1.
 
 
 %% @doc Fill in some defaults for empty props on insert.
 props_defaults(Props, Context) ->
     % Generate slug from the title (when there is a title)
-    Props1 = case proplists:get_value(slug, Props) of
-                 undefined ->
-                     case proplists:get_value(title, Props) of
-                         undefined ->
-                             Props;
-                         Title ->
-                             lists:keystore(slug, 1, Props, {slug, to_slug(Title, Context)})
-                     end;
-                 _ ->
-                     Props
-             end,
+    Props1 = case proplists:get_value(title_slug, Props) of
+        undefined ->
+            case proplists:get_value(title, Props) of
+                undefined ->
+                    Props;
+                Title ->
+                    Slug = to_slug(Title),
+                    SlugNoTr = z_trans:lookup_fallback(Slug, en, Context),
+                    PropsSlug = lists:keystore(slug, 1, Props, {slug, SlugNoTr}),
+                    lists:keystore(title_slug, 1, PropsSlug, {title_slug, Slug})
+            end;
+        _ ->
+            Props
+    end,
     % Assume content is authoritative, unless stated otherwise
     case proplists:get_value(is_authoritative, Props1) of
         undefined -> [{is_authoritative, true} | Props1];
@@ -873,14 +973,42 @@ props_filter_protected(Props, RscUpd) ->
         Props).
 
 
-to_slug(undefined, _Context) -> undefined;
-to_slug({trans, _} = Tr, Context) ->
-    to_slug(z_trans:lookup_fallback(Tr, en, Context), Context);
-to_slug(B, _Context) when is_binary(B) -> truncate_slug(z_string:to_slug(B));
-to_slug(X, Context) -> to_slug(z_convert:to_binary(X), Context).
+to_slug(undefined) ->
+    undefined;
+to_slug({trans, Tr}) ->
+    Tr1 = lists:map(
+        fun({Lang, V}) -> {Lang, to_slug(V)} end,
+        Tr),
+    {trans, Tr1};
+to_slug(B) when is_binary(B) ->
+    B1 = z_string:to_lower(z_html:unescape(B)),
+    truncate_slug(slugify(B1, false, <<>>));
+to_slug(X) ->
+    to_slug(z_convert:to_binary(X)).
 
-truncate_slug(<<Slug:78/binary, _/binary>>) -> Slug;
-truncate_slug(Slug) -> Slug.
+truncate_slug(Slug) ->
+    z_string:truncate(Slug, 70, <<>>).
+
+slugify(<<>>, _Last, Acc) ->
+    Acc;
+slugify(<<C/utf8, T/binary>>, $-, Acc) ->
+    case is_slugchar(C) of
+        false -> slugify(T, $-, Acc);
+        true when Acc =:= <<>> -> slugify(T, false, <<C/utf8>>);
+        true -> slugify(T, false, <<Acc/binary, $-, C/utf8>>)
+    end;
+slugify(<<C/utf8, T/binary>>, false, Acc) ->
+    case is_slugchar(C) of
+        false -> slugify(T, $-, Acc);
+        true -> slugify(T, false, <<Acc/binary, C/utf8>>)
+    end.
+
+is_slugchar(C) when C =< 32 -> false;
+is_slugchar(254) -> false;
+is_slugchar(255) -> false;
+is_slugchar(C) when C > 128 -> true;
+is_slugchar(C) -> z_url:url_unreserved_char(C).
+
 
 %% @doc Map property names to an atom, fold pivot and computed fields together for later filtering.
 map_property_name(IsImport, P) when not is_binary(P) ->
@@ -919,7 +1047,6 @@ is_trimmable(website, _) -> true;
 is_trimmable(page_path, _) -> true;
 is_trimmable(name, _) -> true;
 is_trimmable(slug, _) -> true;
-is_trimmable(custom_slug, _) -> true;
 is_trimmable(category, _) -> true;
 is_trimmable(rsc_id, _) -> true;
 is_trimmable(_, _) -> false.
@@ -932,9 +1059,17 @@ recombine_dates(Id, Props, Context) ->
     {Dates1, DateGroups} = group_dates(Dates),
     {DateGroups1, DatesNull} = collect_empty_date_groups(DateGroups, [], []),
     {Dates2, DatesNull1} = collect_empty_dates(Dates1, [], DatesNull),
-    Dates3 = [{Name, date_from_default(LocalNow, D)} || {Name, D} <- Dates2],
-    DateGroups2 = [{Name, dategroup_fill_parts(date_from_default(LocalNow, S),
-        E)} || {Name, {S, E}} <- DateGroups1],
+    Dates3 = [
+        {Name, date_from_default(default_date(Name, LocalNow), D)}
+        || {Name, D} <- Dates2
+    ],
+    DateGroups2 = [
+        {Name, dategroup_fill_parts(
+                    Name,
+                    date_from_default(default_date(Name, LocalNow), S),
+                    E)}
+        || {Name, {S,E}} <- DateGroups1
+    ],
     Dates4 = lists:foldl(
         fun({Name, {S, E}}, Acc) ->
             [
@@ -1093,41 +1228,63 @@ group_dates([{Name, D} | T], Groups, Acc) ->
             end
     end.
 
+default_date("date", _LocalNow) -> undefined;
+default_date("date_start", _LocalNow) -> undefined;
+default_date("date_end", _LocalNow) -> undefined;
+default_date("org_pubdate", _LocalNow) -> undefined;
+default_date(_, LocalNow) -> LocalNow.
 
-dategroup_fill_parts(S, {{undefined, undefined, undefined}, {undefined, undefined, undefined}}) ->
+dategroup_fill_parts( "date", S, {{undefined,undefined,undefined},{undefined,undefined,undefined}} ) ->
+    {S, undefined};
+dategroup_fill_parts( _Name, S, {{undefined,undefined,undefined},{undefined,undefined,undefined}} ) ->
     {S, ?ST_JUTTEMIS};
-dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{undefined, Me, De}, {He, Ie, Se}}) ->
-    dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ys, Me, De}, {He, Ie, Se}});
-dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, undefined, De}, {He, Ie, Se}}) ->
-    dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Ms, De}, {He, Ie, Se}});
-dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, undefined}, {He, Ie, Se}}) ->
-    dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, Ds}, {He, Ie, Se}});
-dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {undefined, Ie, Se}}) ->
-    dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {23, Ie, Se}});
-dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, undefined, Se}}) ->
-    dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, 59, Se}});
-dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, Ie, undefined}}) ->
-    dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, Ie, 59}});
-dategroup_fill_parts({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, Ie, Se}}) ->
-    {{{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, Ie, Se}}}.
+dategroup_fill_parts( Name, {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{undefined,Me,De},{He,Ie,Se}} ) when is_integer(Ys) ->
+    dategroup_fill_parts( Name, {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ys,Me,De},{He,Ie,Se}} );
+dategroup_fill_parts( Name, {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ys,undefined,De},{He,Ie,Se}} ) when is_integer(Ms) ->
+    dategroup_fill_parts( Name, {{Ys,Ms,Ds},{Hs,Is,Ss}} ,{{Ys,Ms,De},{He,Ie,Se}} );
+dategroup_fill_parts( Name, {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ys,Ms,undefined},{He,Ie,Se}} ) when is_integer(Ds) ->
+    dategroup_fill_parts( Name, {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ys,Ms,Ds},{He,Ie,Se}} );
+dategroup_fill_parts( Name, S, {{undefined,Me,De},{He,Ie,Se}} ) ->
+    dategroup_fill_parts( Name, S, {{9999,Me,De},{He,Ie,Se}} );
+dategroup_fill_parts( Name, S, {{Ye,undefined,De},{He,Ie,Se}} ) ->
+    dategroup_fill_parts( Name, S ,{{Ye,12,De},{He,Ie,Se}} );
+dategroup_fill_parts( Name, S, {{Ye,Me,undefined},{He,Ie,Se}} ) ->
+    De = z_datetime:last_day_of_the_month(Ye,Me),
+    dategroup_fill_parts( Name, S, {{Ye,Me,De},{He,Ie,Se}} );
+dategroup_fill_parts( Name, S, {{Ye,Me,De},{undefined,Ie,Se}} ) ->
+    dategroup_fill_parts( Name, S, {{Ye,Me,De},{23,Ie,Se}} );
+dategroup_fill_parts( Name, S, {{Ye,Me,De},{He,undefined,Se}} ) ->
+    dategroup_fill_parts( Name, S, {{Ye,Me,De},{He,59,Se}} );
+dategroup_fill_parts( Name, S, {{Ye,Me,De},{He,Ie,undefined}} ) ->
+    dategroup_fill_parts( Name, S, {{Ye,Me,De},{He,Ie,59}} );
+dategroup_fill_parts( _Name, S, E ) ->
+    {S, E}.
 
 
 date_from_default(S, {{undefined, undefined, undefined}, {undefined, undefined, undefined}}) ->
     S;
-date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{undefined, Me, De}, {He, Ie, Se}}) ->
-    date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ys, Me, De}, {He, Ie, Se}});
-date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, undefined, De}, {He, Ie, Se}}) ->
-    date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Ms, De}, {He, Ie, Se}});
-date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, undefined}, {He, Ie, Se}}) ->
-    date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, Ds}, {He, Ie, Se}});
-date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {undefined, Ie, Se}}) ->
-    date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {0, Ie, Se}});
-date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, undefined, Se}}) ->
-    date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, 0, Se}});
-date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, Ie, undefined}}) ->
-    date_from_default({{Ys, Ms, Ds}, {Hs, Is, Ss}}, {{Ye, Me, De}, {He, Ie, 0}});
-date_from_default(_S, {{Ye, Me, De}, {He, Ie, Se}}) ->
-    {{Ye, Me, De}, {He, Ie, Se}}.
+date_from_default(S, {{undefined, undefined, undefined}, {0, 0, 0}}) ->
+    S;
+date_from_default( {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{undefined,Me,De},{He,Ie,Se}} ) when is_integer(Ys) ->
+    date_from_default( {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ys,Me,De},{He,Ie,Se}} );
+date_from_default( {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ye,undefined,De},{He,Ie,Se}} ) when is_integer(Ms) ->
+    date_from_default( {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ye,Ms,De},{He,Ie,Se}} );
+date_from_default( {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ye,Me,undefined},{He,Ie,Se}} ) when is_integer(Ds) ->
+    date_from_default( {{Ys,Ms,Ds},{Hs,Is,Ss}}, {{Ye,Me,Ds},{He,Ie,Se}} );
+date_from_default( S, {{undefined,Me,De},{He,Ie,Se}} ) ->
+    date_from_default( S, {{-4700,Me,De},{He,Ie,Se}} );
+date_from_default( S, {{Ye,undefined,De},{He,Ie,Se}} ) ->
+    date_from_default( S, {{Ye,1,De},{He,Ie,Se}} );
+date_from_default( S, {{Ye,Me,undefined},{He,Ie,Se}} ) ->
+    date_from_default( S, {{Ye,Me,1},{He,Ie,Se}} );
+date_from_default( S, {{Ye,Me,De},{undefined,Ie,Se}} ) ->
+    date_from_default( S, {{Ye,Me,De},{0,Ie,Se}} );
+date_from_default( S, {{Ye,Me,De},{He,undefined,Se}} ) ->
+    date_from_default( S, {{Ye,Me,De},{He,0,Se}} );
+date_from_default( S, {{Ye,Me,De},{He,Ie,undefined}} ) ->
+    date_from_default( S, {{Ye,Me,De},{He,Ie,0}} );
+date_from_default( _S, {{Ye,Me,De},{He,Ie,Se}} ) ->
+    {{Ye,Me,De},{He,Ie,Se}}.
 
 to_int("") ->
     undefined;

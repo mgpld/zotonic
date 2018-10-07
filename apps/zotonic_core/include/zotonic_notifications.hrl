@@ -53,7 +53,7 @@
 }).
 
 -record(dispatch_rules, {
-    rules :: #site_dispatch_list{} | undefined
+    rules :: z_sites_dispatcher:site_dispatch_list() | undefined
 }).
 
 
@@ -382,13 +382,18 @@
 
 %% @doc Resource is read, opportunity to add computed fields
 %% Used in a foldr with the read properties as accumulator.
--record(rsc_get, {id}).
+-record(rsc_get, {
+    id :: m_rsc:resource_id()
+}).
 
 %% @doc Resource will be deleted.
 %% This notification is part of the delete transaction, it's purpose is to clean up
 %% associated data.
 %% Type: notify
--record(rsc_delete, {id, is_a}).
+-record(rsc_delete, {
+    id :: m_rsc:resource_id(),
+    is_a :: list( atom() )
+}).
 
 %% @doc Foldr for an resource insert, these are the initial properties and will overrule
 %% the properties in the insert request. Use with care.  The props are the properties of
@@ -402,8 +407,9 @@
 %% @doc Map to signal merging two resources. Move any information from the loser to the
 %% winner. The loser will be deleted.
 -record(rsc_merge, {
-    winner_id :: integer(),
-    loser_id :: integer()
+    winner_id :: m_rsc:resource_id(),
+    loser_id :: m_rsc:resource_id(),
+    is_merge_trans :: boolean()
 }).
 
 %% @doc An updated resource is about to be persisted.
@@ -416,7 +422,7 @@
 %% Return: ``{true, ChangedProps}`` or ``{false, Props}``
 -record(rsc_update, {
     action :: insert | update,
-    id :: m_rsc:resource(),
+    id :: m_rsc:resource_id(),
     props :: list()
 }).
 
@@ -426,14 +432,14 @@
 %% Return: return value is ignored
 -record(rsc_update_done, {
     action :: insert | update | delete,
-    id :: m_rsc:resource(),
+    id :: m_rsc:resource_id(),
     pre_is_a :: list(),
     post_is_a :: list(),
     pre_props :: list(),
     post_props :: list()
 }).
 
-%% @doc Upload and replace the the resource with the given data. The data is in the given format.
+%% @doc Upload and replace the resource with the given data. The data is in the given format.
 %% Return {ok, Id} or {error, Reason}, return {error, badarg} when the data is corrupt.
 -record(rsc_upload, {id, format :: json|bert, data}).
 
@@ -443,7 +449,7 @@
 %% You must ensure that the table exists.
 %% Type: map
 -record(custom_pivot, {
-    id :: m_rsc:resource()
+    id :: m_rsc:resource_id()
 }).
 
 % 'pivot_rsc_data' - foldl over the resource props to extend/remove data to be pivoted
@@ -451,21 +457,21 @@
 %% @doc Pivot just before a m_rsc_update update. Used to pivot fields before the pivot itself.
 %% Type: foldr
 -record(pivot_update, {
-    id :: m_rsc:resource(),
+    id :: m_rsc:resource_id(),
     raw_props :: list()
 }).
 
 %% @doc Foldr to change or add pivot fields for the main pivot table.
 %%  The rsc contains all rsc properties for this resource, including pivot properties.
 -record(pivot_fields, {
-    id :: m_rsc:resource(),
+    id :: m_rsc:resource_id(),
     rsc :: list()
 }).
 
 %% @doc Signal that a resource pivot has been done.
 %% Type: notify
 -record(rsc_pivot_done, {
-    id :: m_rsc:resource(),
+    id :: m_rsc:resource_id(),
     is_a = [] :: list()
 }).
 
@@ -489,9 +495,9 @@
 %% Type: first
 %% Return: ``true``, ``false`` or ``undefined`` to let the next observer decide
 -record(acl_is_owner, {
-    id :: integer(),
-    creator_id :: integer(),
-    user_id :: integer()
+    id :: m_rsc:resource_id(),
+    creator_id :: m_rsc:resource_id(),
+    user_id :: m_rsc:resource_id()
 }).
 
 %% @doc Check if a user is authorized to perform an operation on a an object
@@ -525,7 +531,9 @@
 %% @doc Initialize context with the access policy for the user.
 %% Type: first
 %% Return: updated ``#context`` or ``undefined``
--record(acl_logon, {id}).
+-record(acl_logon, {
+    id :: m_rsc:resource_id()
+}).
 
 %% @doc Clear the associated access policy for the context.
 %% Type: first
@@ -631,7 +639,9 @@
     }
 }).
 
-%% @doc An edge has been inserted
+%% @doc An edge has been inserted.
+%% Note that the Context for this notification does not have the user who
+%% created the edge.
 %% Type: notify
 %% Return: return value is ignored
 -record(edge_insert, {
@@ -642,6 +652,8 @@
 }).
 
 %% @doc An edge has been deleted
+%% Note that the Context for this notification does not have the user who
+%% deleted the edge.
 %% Type: notify
 %% Return: return value is ignored
 -record(edge_delete, {
@@ -652,6 +664,8 @@
 }).
 
 %% @doc An edge has been updated
+%% Note that the Context for this notification does not have the user who
+%% updated the edge.
 %% Type: notify
 %% Return: return value is ignored
 -record(edge_update, {
@@ -876,6 +890,14 @@
 %% @doc Push some information to the debug page in the user-agent.
 %% Will be displayed with io_lib:format("~p: ~p~n", [What, Arg]), be careful with escaping information!
 -record(debug, {what, arg = []}).
+
+%% @doc Broadcast some file changed, used for livereload by mod_development
+-record(filewatcher, {
+    verb :: modify | create | delete,
+    file :: binary(),
+    basename :: binary(),
+    extension :: binary()
+}).
 
 %% @doc An external feed delivered a resource. First handler can import it.
 -record(import_resource, {

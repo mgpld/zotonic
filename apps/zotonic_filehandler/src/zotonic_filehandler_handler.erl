@@ -1,9 +1,9 @@
 %% @author Marc Worrell <marc@worrell.nl>
-%% @copyright 2017 Marc Worrell
+%% @copyright 2017-2018 Marc Worrell
 %%
 %% @doc Server process to handle file changes. Serializes build events.
 
-%% Copyright 2017 Marc Worrell
+%% Copyright 2017-2018 Marc Worrell
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -43,10 +43,11 @@
     terminate/2
 ]).
 
+-include_lib("zotonic_core/include/zotonic_notifications.hrl").
 -include_lib("zotonic_notifier/include/zotonic_notifier.hrl").
 -include_lib("zotonic_filewatcher/include/zotonic_filewatcher.hrl").
 
--record(state, {}).
+-record(state, { }).
 
 
 -spec handle_changes( map() ) -> ok.
@@ -81,7 +82,7 @@ init([]) ->
             ?SYSTEM_NOTIFIER, filewatcher_changes,
             {?MODULE, filewatcher_changes_observer},
             self(), 500),
-    {ok, #state{}}.
+    {ok, #state{ }}.
 
 handle_call({filewatcher_changes, Es}, _From, State) ->
     Actions = maps:fold(
@@ -98,6 +99,23 @@ handle_call({filewatcher_changes, Es}, _From, State) ->
         [],
         Es),
     Result = perform(Actions),
+    maps:fold(
+        fun(F, Verb, _) ->
+            FilenameB = z_convert:to_binary(F),
+            Basename = filename:extension(FilenameB),
+            Extension = filename:extension(FilenameB),
+            z_sites_manager:foreach(
+                fun(Context) ->
+                    z_notifier:first(#filewatcher{
+                        verb = Verb,
+                        file = FilenameB,
+                        basename = Basename,
+                        extension = Extension
+                        }, Context)
+                end)
+        end,
+        ok,
+        Es),
     {reply, Result, State};
 
 handle_call(compile_all, _From, State) ->
@@ -132,4 +150,3 @@ perform(Actions) ->
             erlang:apply(M, F, A)
         end,
         Actions).
-

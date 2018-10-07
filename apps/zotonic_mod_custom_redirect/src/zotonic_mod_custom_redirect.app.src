@@ -1,4 +1,4 @@
-{application, zotonic_mod_content_groups, [
+{application, zotonic_mod_custom_redirect, [
     {description, "Categorize content into a hierarchical structure of content groups."},
     {vsn, "git"},
     {registered, []},
