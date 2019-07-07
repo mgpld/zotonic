@@ -2,7 +2,6 @@
 -module(mod_acl_user_groups_tests).
 
 -include_lib("eunit/include/eunit.hrl").
--include_lib("emqtt/include/emqtt.hrl").
 -include_lib("zotonic_core/include/zotonic.hrl").
 
 -export([is_allowed_always_true/2]).
@@ -75,7 +74,7 @@ acl_is_allowed_override_test() ->
     %% Priority (10) must be before mod_acl_user_group's acl_is_allowed observer.
     z_notifier:observe(acl_is_allowed, {?MODULE, is_allowed_always_true}, 10, Context),
     {ok, Id} = m_rsc:insert([{category_id, text}], Context),
-    ?assertEqual(m_rsc:rid(default_content_group, Context), m_rsc:p(Id, content_group_id, Context)),
+    ?assertEqual(m_rsc:rid(default_content_group, Context), m_rsc:p_no_acl(Id, content_group_id, Context)),
     z_notifier:detach(acl_is_allowed, Context).
 
 publish_test() ->
@@ -113,7 +112,7 @@ is_allowed_always_true(#acl_is_allowed{}, _Context) ->
     true.
 
 replace_managed(Rules, Context) ->
-    z_mqtt:subscribe(<<"~site/acl-rules/publish-rebuild">>, z_acl:sudo(Context)),
+    z_mqtt:subscribe(<<"model/acl_user_groups/event/acl-rules/publish-rebuild">>, z_acl:sudo(Context)),
 
     m_acl_rule:replace_managed(
         Rules,
@@ -122,7 +121,7 @@ replace_managed(Rules, Context) ->
     ),
 
     receive
-        {route, #mqtt_msg{}} -> ok
+        {mqtt_msg, _Msg} -> ok
     end,
 
-    z_mqtt:unsubscribe(<<"~site/acl-rules/publish-rebuild">>, z_acl:sudo(Context)).
+    z_mqtt:unsubscribe(<<"model/acl_user_groups/event/acl-rules/publish-rebuild">>, z_acl:sudo(Context)).

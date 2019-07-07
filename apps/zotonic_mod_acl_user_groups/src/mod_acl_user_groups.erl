@@ -29,9 +29,11 @@
 -include_lib("zotonic_core/include/zotonic.hrl").
 -include("support/acl_user_groups.hrl").
 -include_lib("zotonic_mod_admin/include/admin_menu.hrl").
+-include_lib("zotonic_mod_wires/include/mod_wires.hrl").
 
 % API
 -export([
+    is_acl_admin/1,
     status/1,
     table/1,
     table/2,
@@ -45,6 +47,7 @@
     observe_rsc_update_done/2,
     observe_rsc_delete/2,
     observe_rsc_insert/3,
+    observe_rsc_update/3,
     observe_rsc_get/3,
     name/1,
     manage_schema/2,
@@ -61,6 +64,7 @@
     observe_acl_logon/2,
     observe_acl_logoff/2,
     observe_acl_context_authenticated/2,
+    observe_acl_user_groups/2,
     observe_acl_add_sql_check/2,
 
     observe_hierarchy_updated/2
@@ -81,6 +85,12 @@
             table_edit = [],
             table_publish = []
         }).
+
+
+%% @doc Check if the user is an administrator for the ACLs
+is_acl_admin(Context) ->
+    z_acl:is_allowed(use, mod_acl_user_groups, Context)
+    andalso z_acl:is_allowed(insert, acl_user_group, Context).
 
 
 event(#submit{message={delete_move, Args}}, Context) ->
@@ -122,11 +132,9 @@ event(#postback{message={delete_all, Args}}, Context) ->
             )
     end.
 
+%% @todo let the client subscribe to the resources to reflect the deletions
 -spec ug_delete(list(m_rsc:resource_id()), z:context()) -> any().
 ug_delete(Ids, Context) ->
-    z_session_page:add_script(
-        z_render:wire({mask, [{message, ?__("Deleting...", Context)}]}, Context)
-    ),
     UGUserIds = in_user_groups(Ids, Context),
     Total = lists:sum([length(UIds) || {_, UIds} <- UGUserIds]),
     case unlink_all(UGUserIds, 0, Total, Context) of
@@ -135,20 +143,18 @@ ug_delete(Ids, Context) ->
                              m_rsc:delete(Id, Context)
                           end,
                           Ids),
-            z_session_page:add_script(z_render:wire({unmask, []}, Context));
+            page_actions({ unmask, []}, Context);
         {error, _} ->
-            Context1 = z_render:wire([
-                    {unmask, []},
-                    {alert, [{message, ?__("Not all user groups could be deleted.", Context)}]}
-                ],
-                Context),
-            z_session_page:add_script(Context1)
-
+            Actions = [
+                {unmask, []},
+                {alert, [{message, ?__("Not all user groups could be deleted.", Context)}]}
+            ],
+            page_actions(Actions, Context)
     end.
 
 -spec ug_move_and_delete([pos_integer()], m_rsc:resource_id(), #context{}) -> ok.
 ug_move_and_delete(Ids, ToGroupId, Context) ->
-    z_session_page:add_script(z_render:wire({mask, [{message, ?__("Deleting...", Context)}]}, Context)),
+    page_actions({mask, [{message, ?__("Deleting...", Context)}]}, Context),
     UGUserIds = in_user_groups(Ids, Context),
     Total = lists:sum([length(UIds) || {_, UIds} <- UGUserIds]),
     ok = move_all(UGUserIds, ToGroupId, 0, Total+Total, Context),
@@ -156,7 +162,7 @@ ug_move_and_delete(Ids, ToGroupId, Context) ->
                      m_rsc:delete(Id, Context)
                   end,
                   Ids),
-    z_session_page:add_script(z_render:wire({unmask, []}, Context)),
+    page_actions({unmask, []}, Context ),
     ok.
 
 in_user_groups(Ids, Context) ->
@@ -218,7 +224,7 @@ maybe_progress(N1, N2, Total, Context) ->
     S2 = round(N2 / PerStep),
     case S1 of
         S2 -> ok;
-        _ -> z_session_page:add_script(z_render:wire({mask_progress, [{percent,S2}]}, Context))
+        _ -> page_actions({mask_progress, [{percent,S2}]}, Context )
     end.
 
 deletable(Ids, Context) ->
@@ -249,6 +255,9 @@ observe_acl_logoff(AclLogoff, Context) ->
 observe_acl_context_authenticated(_AclAuthenticated, Context) ->
     acl_user_groups_checks:acl_context_authenticated(Context).
 
+observe_acl_user_groups(_AclUserGroups, Context) ->
+    acl_user_groups_checks:user_groups_all(Context).
+
 observe_acl_add_sql_check(AclAddSQLCheck, Context) ->
     acl_user_groups_checks:acl_add_sql_check(AclAddSQLCheck, Context).
 
@@ -262,7 +271,7 @@ observe_hierarchy_updated(#hierarchy_updated{}, _Context) ->
     ok.
 
 %% @doc Add default content group when resource is inserted without one
--spec observe_rsc_insert(#rsc_insert{}, list(), #context{}) -> list().
+-spec observe_rsc_insert(#rsc_insert{}, m_rsc:props(), #context{}) -> m_rsc:props().
 observe_rsc_insert(#rsc_insert{props=RscProps}, InsertProps, Context) ->
     case proplists:get_value(content_group_id, RscProps,
             proplists:get_value(content_group_id, InsertProps))
@@ -274,6 +283,32 @@ observe_rsc_insert(#rsc_insert{props=RscProps}, InsertProps, Context) ->
         _ ->
             InsertProps
     end.
+
+-spec observe_rsc_update(#rsc_update{}, {boolean(), m_rsc:props()}, #context{}) -> m_rsc:props().
+observe_rsc_update(#rsc_update{ props = PrevProps }, {_IsChanged, NewProps} = Acc, Context) ->
+    case proplists:is_defined(acl_mime_allowed, NewProps)
+        orelse proplists:is_defined(acl_upload_size, NewProps)
+    of
+        true ->
+            case mod_acl_user_groups:is_acl_admin(Context) of
+                true ->
+                    Acc;
+                false ->
+                    P1 = force_copy_prop(acl_mime_allowed, PrevProps, NewProps),
+                    P2 = force_copy_prop(acl_upload_size, PrevProps, P1),
+                    {true, P2}
+            end;
+        false ->
+            Acc
+    end.
+
+force_copy_prop(P, PrevProps, NewProps) ->
+    Curr1 = proplists:delete(P, NewProps),
+    case proplists:lookup(P, PrevProps) of
+        none -> Curr1;
+        PV -> [ PV | NewProps ]
+    end.
+
 
 observe_rsc_update_done(#rsc_update_done{id=Id, pre_is_a=PreIsA, post_is_a=PostIsA}=M, Context) ->
     check_hasusergroup(Id, M#rsc_update_done.post_props, Context),
@@ -472,8 +507,8 @@ handle_info({'DOWN', MRef, process, _Pid, normal}, #state{rebuilder_mref = MRef,
     State2 = maybe_rebuild(State1),
     Context = z_context:new(Site),
     z_mqtt:publish(
-        <<"~site/acl-rules/", (z_convert:to_binary(State#state.rebuilding))/binary, "-rebuild">>,
-        [],
+        <<"model/acl_user_groups/event/acl-rules/", (z_convert:to_binary(State#state.rebuilding))/binary, "-rebuild">>,
+        true,
         z_acl:sudo(Context)
     ),
     {noreply, State2};
@@ -496,13 +531,13 @@ handle_info({'ETS-TRANSFER', TId, _FromPid, publish}, State) ->
     lager:debug("[mod_acl_user_groups] 'ETS-TRANSFER' for 'publish' (~p)", [TId]),
     gproc_new_ets(TId, publish, State#state.site),
     State1 = store_new_ets(TId, publish, State),
-    z_mqtt:publish(<<"~site/acl-rules/publish">>, [], z_context:new(State#state.site)),
+    z_mqtt:publish(<<"model/acl_user_groups/event/acl-rules/publish">>, true, z_context:new(State#state.site)),
     {noreply, State1};
 handle_info({'ETS-TRANSFER', TId, _FromPid, edit}, State) ->
     lager:debug("[mod_acl_user_groups] 'ETS-TRANSFER' for 'edit' (~p)", [TId]),
     gproc_new_ets(TId, edit, State#state.site),
     State1 = store_new_ets(TId, edit, State),
-    z_mqtt:publish(<<"~site/acl-rules/edit">>, [], z_context:new(State#state.site)),
+    z_mqtt:publish(<<"model/acl_user_groups/event/acl-rules/edit">>, true, z_context:new(State#state.site)),
     {noreply, State1};
 
 handle_info({'EXIT', _Pid, normal}, State) ->
@@ -653,6 +688,8 @@ manage_data(install, Context) ->
 manage_data(_Version, _Context) ->
     ok.
 
+page_actions(Actions, Context) ->
+    z_notifier:first(#page_actions{ actions = Actions }, Context).
 
 check_hasusergroup(UserId, P, Context) ->
     HasUserGroup = proplists:get_all_values(hasusergroup, P),

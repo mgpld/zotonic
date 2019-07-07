@@ -1,0 +1,13 @@
+{application, zotonic_mod_wires, [
+    {description, "Deprecated wires, actions, and other embedded JavaScript."},
+    {vsn, "git"},
+    {registered, []},
+    {applications, [
+        kernel, stdlib, lager, zotonic_core
+    ]},
+    {env, []},
+    {modules, []},
+    {maintainers, []},
+    {licenses, ["Apache 2.0"]},
+    {links, [{"GitHub", "https://github.com/zotonic/zotonic"}]}
+]}.

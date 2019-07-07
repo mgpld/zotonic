@@ -54,7 +54,7 @@ observe_signup(#signup{id=UserId, props=Props, signup_props=SignupProps, request
 %% @doc Check if a module wants to redirect to the signup form.  Returns either {ok, Location} or undefined.
 observe_signup_url(#signup_url{props=Props, signup_props=SignupProps}, Context) ->
     CheckId = binary_to_list(z_ids:id()),
-    z_session:set(signup_xs, {CheckId, Props, SignupProps}, Context),
+    % z_session:set(signup_xs, {CheckId, Props, SignupProps}, Context),
     {ok, z_dispatcher:url_for(signup, [{xs, CheckId}], Context)}.
 
 
@@ -120,7 +120,6 @@ check_signup(Props, SignupProps, Context) ->
             UserId = proplists:get_value(user_id, SignupProps),
             case check_identity(UserId, SignupProps1, Context) of
                 ok ->
-                    ok = check_props(Props1, Context),
                     {ok, Props1, SignupProps1};
                 {error, _} = Error ->
                     Error
@@ -128,12 +127,6 @@ check_signup(Props, SignupProps, Context) ->
         {error, _ContextOrReason} = Error ->
             Error
     end.
-
-
-%% @doc Preflight check if the props are ok.
-%% @todo Add some checks on name, title etc.
-check_props(_Props, _Context) ->
-    ok.
 
 %% @doc Preflight check on identities, prevent double identity keys.
 check_identity(_UserId, [], _Context) ->

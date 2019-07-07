@@ -79,17 +79,42 @@
    %% {port, 80},
 
 %%% Outside port that clients send HTTPS requests to.
-%%% Set to the atom 'none' to disable SSL for sites.
 %%% Always overridden by the ZOTONIC_SSL_PORT environment variable.
 %%% Defaults to ssl_listen_port.
    %% {ssl_port, 443},
 
-%%% Force sites to use SSL. Redirects http requests to https.
-   %% {ssl_only, false},
+%%% Maximum http connections, the ipv4 and ipv6 connections are counted separately
+%%% Use 'infinity' to disable the max connections
+   %% {max_connections, 20000},
+
+%%% Maximum https connections, the ipv4 and ipv6 connections are counted separately
+%%% Use 'infinity' to disable the max connections
+   %% {ssl_max_connections, 20000},
+
+%%% Maximum mqtt connections, the ipv4 and ipv6 connections are counted separately
+%%% Use 'infinity' to disable the max connections
+   %% {mqtt_max_connections, 10000},
+
+%%% Maximum mqtt ssl connections, the ipv4 and ipv6 connections are counted separately
+%%% Use 'infinity' to disable the max connections
+   %% {mqtt_ssl_max_connections, 10000},
+
+%%% IP address for MQTT connections - defaults to 'listen_ip'
+%%% Use 'none' to disable.
+   %% {mqtt_listen_ip, any},
+
+%%% IPv6 address for MQTT connections - defaults to 'listen_ip6'
+%%% Use 'none' to disable.
+   %% {mqtt_listen_ip6, any},
+
+%%% Port number for MQTT connections
+   %% {mqtt_listen_port, 1883},
+
+%%% Port number for MQTT ssl connections
+   %% {mqtt_listen_ssl_port, 8883},
 
 %%% If you are running Zotonic behind a proxy then set this to the proxy's internal ip addresses.
 %%% The proxy must terminate SSL.
-%%% If the proxy does not terminate SSL then set 'ssl_port' to 'none', this will disable SSL support.
 %%% Possible values: none, local, any, ip_whitelist, or string with netmasks: "127.0.0.0/8,10.0.0.0/8"
    %% {proxy_whitelist, local},
 
